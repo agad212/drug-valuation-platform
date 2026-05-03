@@ -203,10 +203,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    const currentYear = new Date().getFullYear();
+    const effectivelyApproved = (analysis.phase || "").toLowerCase().includes("approved");
+
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }) => ({
       id: cryptoId(),
       name: trial.conditions?.[0] || trial.nctId,
-      launchYear: trial.estimatedLaunchYear,
+      // For already-launched indications (estimatedLaunchYear undefined), use current year
+      // so the DCF model can still compute revenue. Mark them as approved.
+      launchYear: trial.estimatedLaunchYear ?? (effectivelyApproved ? currentYear : undefined),
+      alreadyLaunched: !trial.estimatedLaunchYear && effectivelyApproved,
       loeYear: loeYear ?? undefined,
       nctId: trial.nctId,
       phase: trial.phase,

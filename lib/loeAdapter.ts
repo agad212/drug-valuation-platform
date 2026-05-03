@@ -94,10 +94,17 @@ async function inferBiologicLOE(appLabel: string, appNo: string): Promise<{
     const submissions: any[] = data?.results?.[0]?.submissions || [];
 
     // Find the earliest "AP" (Approval) action date
+    // openFDA returns dates as "YYYYMMDD" (no hyphens) — must parse manually
+    const parseOpenFDADate = (raw: string): Date | null => {
+      const m8 = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+      if (m8) return new Date(Number(m8[1]), Number(m8[2]) - 1, Number(m8[3]));
+      const d = new Date(raw);
+      return isNaN(d.getTime()) ? null : d;
+    };
     const approvalDates = submissions
       .filter((s: any) => s.submission_status === "AP" && s.submission_status_date)
-      .map((s: any) => new Date(s.submission_status_date))
-      .filter((d: Date) => !isNaN(d.getTime()));
+      .map((s: any) => parseOpenFDADate(s.submission_status_date))
+      .filter((d): d is Date => d !== null);
 
     if (approvalDates.length === 0) throw new Error("No approval date found");
 
