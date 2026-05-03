@@ -78,9 +78,11 @@ function estimateLaunchYear(
     "Phase 2": 4,
     "Phase 1": 7,
   };
-  const estimate = Math.max(now + 1, endYear + (buffers[phase] ?? 4));
+  const rawEstimate = endYear + (buffers[phase] ?? 4);
+  // If the estimated launch is in the past, return undefined — indication likely already launched
+  if (rawEstimate <= now) return undefined;
   // Cap at current year + 15 to prevent absurd values from long follow-up dates
-  return Math.min(estimate, now + 15);
+  return Math.min(rawEstimate, now + 15);
 }
 
 // ─── Experimental arm filter ───────────────────────────────────────────────────

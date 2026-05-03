@@ -9,8 +9,39 @@
 async function fetchOpenFDAApp(
   drugName: string
 ): Promise<{ appType: string; appNo: string; appLabel: string; isBiologic: boolean } | null> {
-  const nameUpper = drugName.toUpperCase();
   const nameLower = drugName.toLowerCase();
+
+  // ── Primary: drugsfda API (reliable for BLA/NDA, works for biologics) ──────
+  for (const field of ["openfda.generic_name", "openfda.brand_name"]) {
+    try {
+      const url = `https://api.fda.gov/drug/drugsfda.json?search=${field}:"${encodeURIComponent(drugName)}"&limit=1`;
+      const res = await fetchWithTimeout(url, 6000);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const result = data?.results?.[0];
+      if (!result) continue;
+      const appNum: string = result.application_number || "";
+      if (!appNum) continue;
+      const match = appNum.match(/^(NDA|ANDA|BLA)(\d+)$/);
+      if (!match) continue;
+      // Validate name
+      const openfdaGeneric = ((result.openfda?.generic_name || [])[0] || "").toLowerCase();
+      const openfdaBrand  = ((result.openfda?.brand_name  || [])[0] || "").toLowerCase();
+      const nameMatch =
+        openfdaGeneric.includes(nameLower) || nameLower.includes(openfdaGeneric.split(" ")[0]) ||
+        openfdaBrand.includes(nameLower)   || nameLower.includes(openfdaBrand.split(" ")[0]);
+      if (!nameMatch) continue;
+      const prefix = match[1];
+      const rawNo  = match[2];
+      const isBiologic = prefix === "BLA";
+      const appType = prefix === "ANDA" ? "A" : "N";
+      const appNo = rawNo.replace(/^0+/, "");
+      return { appType, appNo, appLabel: `${prefix}${rawNo}`, isBiologic };
+    } catch { continue; }
+  }
+
+  // ── Fallback: NDC API ────────────────────────────────────────────────────────
+  const nameUpper = drugName.toUpperCase();
   for (const field of ["brand_name", "generic_name"]) {
     try {
       const url = `https://api.fda.gov/drug/ndc.json?search=${field}:${encodeURIComponent(nameUpper)}&limit=1`;
@@ -20,11 +51,10 @@ async function fetchOpenFDAApp(
       const result = data?.results?.[0];
       if (!result) continue;
 
-      // Validate: returned brand/generic name must contain the searched drug name (or vice versa)
-      const returnedBrand = (result.brand_name || "").toLowerCase();
+      const returnedBrand   = (result.brand_name   || "").toLowerCase();
       const returnedGeneric = (result.generic_name || "").toLowerCase();
       const nameMatch =
-        returnedBrand.includes(nameLower) || nameLower.includes(returnedBrand.split(" ")[0]) ||
+        returnedBrand.includes(nameLower)   || nameLower.includes(returnedBrand.split(" ")[0]) ||
         returnedGeneric.includes(nameLower) || nameLower.includes(returnedGeneric.split(" ")[0]);
       if (!nameMatch) continue;
 
@@ -33,13 +63,14 @@ async function fetchOpenFDAApp(
       const match = appNum.match(/^(NDA|ANDA|BLA)(\d+)$/);
       if (!match) continue;
       const prefix = match[1];
-      const rawNo = match[2];
+      const rawNo  = match[2];
       const isBiologic = prefix === "BLA";
       const appType = prefix === "ANDA" ? "A" : "N";
-      const appNo = rawNo.replace(/^0+/, ""); // Orange Book URL uses no leading zeros
+      const appNo = rawNo.replace(/^0+/, "");
       return { appType, appNo, appLabel: `${prefix}${rawNo}`, isBiologic };
     } catch { continue; }
   }
+
   return null;
 }
 
