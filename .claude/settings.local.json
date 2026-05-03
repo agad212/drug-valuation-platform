@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs -I {} basename {})",
+      "Bash(curl -s \"https://clinicaltrials.gov/api/v2/studies/NCT04662710?format=json\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); p=d.get\\(''''protocolSection'''',{}\\); print\\(json.dumps\\(p.get\\(''''sponsorsCollaboratorsModule'''',{}\\), indent=2\\)\\)\")",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); p=d.get\\(''''protocolSection'''',{}\\); keys=list\\(p.keys\\(\\)\\); print\\(keys\\)\")"
+    ]
+  }
+}
