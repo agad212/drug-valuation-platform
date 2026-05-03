@@ -74,3 +74,4 @@ components/
 - **Phase 2**: Real Orange Book LOE parsing, mechanism scorer, PTRS priors
 - **Phase 3**: Neon/Prisma persistence, user auth, consensus valuations
 - **Phase 4**: Embeddable widgets, Pro tier, API access
+# DrugValue v2
