@@ -65,7 +65,8 @@ async function analyzePatentsWithClaude(
   sponsor: string | undefined,
   patentResults: any[],
   webResults: any[],
-  orangeBookLoe: string | null
+  orangeBookLoe: string | null,
+  bpciaFloor: string | null = null
 ) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY not set");
@@ -82,6 +83,8 @@ async function analyzePatentsWithClaude(
 
   const obContext = orangeBookLoe
     ? `\n\nIMPORTANT: The FDA Orange Book has already confirmed LOE = ${orangeBookLoe}. Use the patents and market intelligence only for context.`
+    : bpciaFloor
+    ? `\n\nNOTE: This is a biologic. BPCIA grants 12-year data exclusivity expiring ${bpciaFloor} — this is a regulatory FLOOR, not the patent LOE. Biosimilar entry is typically gated by compound patents, not just BPCIA. Use the patent data and market intelligence to estimate when compound/formulation patent protection actually ends. Your bestEstimate should reflect the patent-based LOE, which is typically 2–4 years AFTER the BPCIA date.`
     : `\n\nNo Orange Book data found (likely a pipeline asset or biologic). Use patents and market intelligence to estimate the LOE range.`;
 
   const systemPrompt = `You are a pharmaceutical patent analyst.${obContext}
@@ -184,9 +187,18 @@ export async function runLoePipeline(
     obResult.reasons?.[0] &&
     !obResult.reasons[0].includes("not found in FDA database")
   );
-  // Confirmed = found + NOT a default estimate (i.e. real OB scrape or BPCIA with actual approval date)
+  // Confirmed = found + NOT a default estimate (real OB scrape or BPCIA with actual approval date)
   const obConfirmed = drugFoundInFDA && !obResult!.reasons.some((r) => r.includes("default estimate"));
+  const isBpcia = !!(obResult as any)?.isBpcia;
   const obYear = obConfirmed ? Number(obResult!.loeDate!.slice(0, 4)) : null;
+
+  // For BPCIA biologics: tell Claude the exclusivity floor but let it determine the patent-based LOE.
+  // For Orange Book confirmed (small molecules): treat OB date as definitive.
+  const claudeObContext = obConfirmed
+    ? (isBpcia
+        ? obResult!.loeDate!   // pass to Claude but with a different message (handled below)
+        : obResult!.loeDate!)
+    : null;
 
   // Always run Claude patent analysis — even with zero Tavily results Claude can
   // generate context from training knowledge. Tavily results improve quality if available.
@@ -194,7 +206,9 @@ export async function runLoePipeline(
   try {
     patentAnalysis = await analyzePatentsWithClaude(
       drugName, sponsor, patentResults, webResults,
-      obConfirmed ? obResult!.loeDate! : null
+      // For BPCIA: pass null so Claude estimates LOE from patents, not the exclusivity floor
+      isBpcia ? null : claudeObContext,
+      isBpcia ? obResult!.loeDate! : null   // separate BPCIA floor hint
     );
   } catch { /* proceed without */ }
 
@@ -207,15 +221,22 @@ export async function runLoePipeline(
     hintLoeYear = hints.launchYear + exclusivityYears;
   }
 
-  // For biologics: BPCIA exclusivity is the floor, but patent protection can extend beyond.
-  // Take the MAX of BPCIA year and patent analysis best estimate when both are available.
   const patentBest = patentAnalysis?.bestEstimate ?? null;
+  const patentMin  = patentAnalysis?.loeMin ?? null;
   const patentMax  = patentAnalysis?.loeMax ?? null;
-  const loeYear = (obYear && patentBest) ? Math.max(obYear, patentBest)
-                : (obYear ?? patentBest ?? fdaFallbackYear ?? hintLoeYear ?? null);
-  const loeMin = obYear ?? patentAnalysis?.loeMin ?? fdaFallbackYear ?? hintLoeYear ?? null;
-  const loeMax = (obYear && patentMax) ? Math.max(obYear, patentMax)
-               : (obYear ?? patentMax ?? fdaFallbackYear ?? hintLoeYear ?? null);
+
+  // For BPCIA biologics: patent-based LOE is the real market exclusivity end date.
+  // obYear is the BPCIA exclusivity floor — use patent estimate when available, fall back to obYear.
+  // For small molecules with OB confirmed: obYear is definitive.
+  const loeYear = isBpcia
+    ? (patentBest ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
+    : (obYear ?? patentBest ?? fdaFallbackYear ?? hintLoeYear ?? null);
+  const loeMin = isBpcia
+    ? (patentMin ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
+    : (obYear ?? patentMin ?? fdaFallbackYear ?? hintLoeYear ?? null);
+  const loeMax = isBpcia
+    ? (patentMax ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
+    : (obYear ?? patentMax ?? fdaFallbackYear ?? hintLoeYear ?? null);
 
   return {
     isDefinitive: obConfirmed,

@@ -182,8 +182,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
     const recommendedRaw = (analysis.recommendedIndex ?? 1) - 1;
 
+    // Normalize an indication name to a canonical key for deduplication
+    const normalizeInd = (s: string) =>
+      s.toLowerCase()
+        .replace(/carcinoma,?\s+non[- ]small[- ]cell\s+lung/i, "nsclc")
+        .replace(/non[- ]small[- ]?cell\s+lung\s+cancer/i, "nsclc")
+        .replace(/non[- ]small[- ]?cell\s+lung\s+carcinoma/i, "nsclc")
+        .replace(/\s+/g, " ").trim();
+
+    const seenIndications = new Set<string>();
     const selectedTrials = indices
       .filter((i: number) => i >= 0 && i < candidates.length)
+      .filter((i: number) => {
+        const key = normalizeInd(candidates[i].conditions?.[0] || candidates[i].nctId);
+        if (seenIndications.has(key)) return false;
+        seenIndications.add(key);
+        return true;
+      })
       .map((i: number, rank: number) => ({
         trial: candidates[i],
         reason: analysis.reasons?.[candidates[i].nctId] || "",

@@ -223,6 +223,7 @@ function fetchWithTimeout(url: string, ms: number): Promise<Response> {
 
 export async function inferLOE(drugName: string): Promise<{
   loeDate: string | null;
+  isBpcia?: boolean;
   reasons: string[];
   sources: { label: string; url?: string }[];
 }> {
@@ -240,7 +241,8 @@ export async function inferLOE(drugName: string): Promise<{
   }
 
   if (app.isBiologic) {
-    return await inferBiologicLOE(app.appLabel, app.appNo);
+    const result = await inferBiologicLOE(app.appLabel, app.appNo);
+    return { ...result, isBpcia: true };
   }
 
   const obUrl = `https://www.accessdata.fda.gov/scripts/cder/ob/results_product.cfm?Appl_Type=${app.appType}&Appl_No=${app.appNo}`;
