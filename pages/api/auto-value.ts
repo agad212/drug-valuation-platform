@@ -91,7 +91,7 @@ Respond ONLY with valid JSON:
   "reasons": { "NCT...": "one sentence why relevant for valuation" },
   "summary": "2-3 sentences on clinical landscape",
   "mechanism": "brief mechanism of action e.g. PD-1 inhibitor, EGFR inhibitor, ADC",
-  "phase": "most advanced development phase seen across selected trials e.g. Phase 3, Approved",
+  "phase": "MUST be exactly one of: Preclinical | Phase 1 | Phase 2 | Phase 3 | Filed | Approved",
   "peakSalesEstimates": [
     { "peakSalesM": 8000, "confidence": "high", "basis": "Goldman Sachs projects $8B peak NSCLC 1L", "devCostM": 500 },
     ...
@@ -125,7 +125,19 @@ REQUIRED: devCostM must ALWAYS be a positive number — never null, never 0. It 
   const text: string = data?.content?.[0]?.text || "{}";
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("No JSON in Claude response");
-  return JSON.parse(jsonMatch[0]);
+  const parsed = JSON.parse(jsonMatch[0]);
+
+  // Normalize phase to valid dropdown values regardless of what Claude returned
+  const VALID_PHASES = ["Preclinical", "Phase 1", "Phase 2", "Phase 3", "Filed", "Approved"];
+  const raw = (parsed.phase || "").toLowerCase();
+  if (raw.includes("approved")) parsed.phase = "Approved";
+  else if (raw.includes("filed") || raw.includes("nda") || raw.includes("bla")) parsed.phase = "Filed";
+  else if (raw.includes("phase 3") || raw.includes("phase3")) parsed.phase = "Phase 3";
+  else if (raw.includes("phase 2") || raw.includes("phase2")) parsed.phase = "Phase 2";
+  else if (raw.includes("phase 1") || raw.includes("phase1")) parsed.phase = "Phase 1";
+  else if (!VALID_PHASES.includes(parsed.phase)) parsed.phase = "Phase 2";
+
+  return parsed;
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────

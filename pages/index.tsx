@@ -28,6 +28,8 @@ function fmtMoney(n?: number | null) {
   if (n == null || Number.isNaN(n)) return "—";
   if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
   if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(0)}M`;
+  if (Math.abs(n) >= 1e3) return `$${(n / 1e6).toFixed(1)}M`;
+  if (Math.abs(n) > 0) return `~$0`;
   return `$${n.toLocaleString()}`;
 }
 function fmtPct(n?: number | null, dp = 1) {
@@ -980,7 +982,11 @@ export default function HomePage() {
                 }}>
                   <div>
                     <div style={{ fontSize: 10, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: "var(--font-display)", fontWeight: 600 }}>
-                      {patentResult.isDefinitive ? "LOE Confirmed — FDA Orange Book" : "Estimated LOE Range — Patent Analysis"}
+                      {patentResult.isDefinitive
+                        ? (patentResult.orangeBook?.sources?.some((s: any) => (s.label || "").includes("Purple Book"))
+                            ? "LOE Confirmed — FDA Purple Book (BPCIA)"
+                            : "LOE Confirmed — FDA Orange Book")
+                        : "Estimated LOE Range — Patent Analysis"}
                     </div>
                     <div style={{ fontSize: 28, fontWeight: 800, color: "#fff", fontFamily: "var(--font-display)", lineHeight: 1.1 }}>
                       {patentResult.isDefinitive

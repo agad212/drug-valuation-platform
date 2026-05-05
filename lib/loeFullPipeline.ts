@@ -207,9 +207,15 @@ export async function runLoePipeline(
     hintLoeYear = hints.launchYear + exclusivityYears;
   }
 
-  const loeYear = obYear ?? patentAnalysis?.bestEstimate ?? fdaFallbackYear ?? hintLoeYear ?? null;
+  // For biologics: BPCIA exclusivity is the floor, but patent protection can extend beyond.
+  // Take the MAX of BPCIA year and patent analysis best estimate when both are available.
+  const patentBest = patentAnalysis?.bestEstimate ?? null;
+  const patentMax  = patentAnalysis?.loeMax ?? null;
+  const loeYear = (obYear && patentBest) ? Math.max(obYear, patentBest)
+                : (obYear ?? patentBest ?? fdaFallbackYear ?? hintLoeYear ?? null);
   const loeMin = obYear ?? patentAnalysis?.loeMin ?? fdaFallbackYear ?? hintLoeYear ?? null;
-  const loeMax = obYear ?? patentAnalysis?.loeMax ?? fdaFallbackYear ?? hintLoeYear ?? null;
+  const loeMax = (obYear && patentMax) ? Math.max(obYear, patentMax)
+               : (obYear ?? patentMax ?? fdaFallbackYear ?? hintLoeYear ?? null);
 
   return {
     isDefinitive: obConfirmed,
