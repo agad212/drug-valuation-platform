@@ -1017,45 +1017,46 @@ export default function HomePage() {
                 </div>
               )}
 
-              {/* Orange Book / BPCIA reasoning + sources — always show if available */}
-              {patentResult.orangeBook?.reasons?.length > 0 && (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                    {patentResult.isDefinitive ? "FDA Orange Book" : "Exclusivity Basis"}
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    {patentResult.orangeBook.reasons.map((r: string, i: number) => (
-                      <div key={i} style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>• {r}</div>
-                    ))}
-                  </div>
-                  {patentResult.orangeBook.sources?.length > 0 && (
-                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
-                      {patentResult.orangeBook.sources.map((s: any, i: number) => (
-                        s.url
-                          ? <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none" }}>{s.label} ↗</a>
-                          : <div key={i} style={{ fontSize: 12, color: "var(--text-faint)" }}>{s.label}</div>
+              {/* ── Section 1: FDA Orange Book / BPCIA ── always shown ── */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                  {patentResult.orangeBook?.sources?.some((s: any) => (s.label || "").includes("Purple Book"))
+                    ? "FDA Purple Book / BPCIA Exclusivity"
+                    : "FDA Orange Book / Exclusivity"}
+                </div>
+                {patentResult.orangeBook?.reasons?.length > 0 ? (
+                  <>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      {patentResult.orangeBook.reasons.map((r: string, i: number) => (
+                        <div key={i} style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>• {r}</div>
                       ))}
                     </div>
-                  )}
-                </div>
-              )}
+                    {patentResult.orangeBook.sources?.length > 0 && (
+                      <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
+                        {patentResult.orangeBook.sources.map((s: any, i: number) => (
+                          s.url
+                            ? <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: "var(--accent)", textDecoration: "none" }}>{s.label} ↗</a>
+                            : <div key={i} style={{ fontSize: 12, color: "var(--text-faint)" }}>{s.label}</div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: "var(--text-faint)", fontStyle: "italic" }}>FDA database not queried or drug not found.</div>
+                )}
+              </div>
 
-              {/* Patent context */}
-              {patentResult.patents?.patentContext && (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
-                    {patentResult.isDefinitive ? "Patent Context" : "Patent Analysis"}
-                  </div>
-                  <p style={{ margin: 0, fontSize: 13, color: "var(--text)", lineHeight: 1.6 }}>{patentResult.patents.patentContext}</p>
+              {/* ── Section 2: Patent Analysis ── always shown ── */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                  Patent Analysis {patentResult.patents?.found != null ? `(${patentResult.patents.found} found)` : ""}
                 </div>
-              )}
-
-              {/* Key Patents */}
-              {patentResult.patents?.keyPatents?.length > 0 && (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-                    Key Patents ({patentResult.patents.found} found)
-                  </div>
+                {patentResult.patents?.patentContext ? (
+                  <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text)", lineHeight: 1.6 }}>{patentResult.patents.patentContext}</p>
+                ) : (
+                  <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--text-faint)", fontStyle: "italic" }}>No patent search results available.</p>
+                )}
+                {patentResult.patents?.keyPatents?.length > 0 && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {patentResult.patents.keyPatents.filter((p: any) => p.relevance === "high" || p.relevance === "medium").map((p: any, i: number) => (
                       <div key={i} style={{
@@ -1078,25 +1079,23 @@ export default function HomePage() {
                           <div>Filed: {p.filingYear || "—"}</div>
                           <div>Exp: ~{p.estimatedExpiry || "—"}</div>
                           {p.url ? (
-                            <a href={p.url} target="_blank" rel="noopener noreferrer"
-                              style={{ color: "#1d4ed8", textDecoration: "none", fontSize: 11 }}>{p.number} ↗</a>
+                            <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1d4ed8", textDecoration: "none", fontSize: 11 }}>{p.number} ↗</a>
                           ) : (
-                            <a href={`https://patents.google.com/patent/${(p.number || "").replace(/\s/g,"")}`} target="_blank" rel="noopener noreferrer"
-                              style={{ color: "#1d4ed8", textDecoration: "none", fontSize: 11 }}>{p.number} ↗</a>
+                            <a href={`https://patents.google.com/patent/${(p.number || "").replace(/\s/g,"")}`} target="_blank" rel="noopener noreferrer" style={{ color: "#1d4ed8", textDecoration: "none", fontSize: 11 }}>{p.number} ↗</a>
                           )}
                         </div>
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
-              {/* Market Intelligence */}
-              {patentResult.patents?.marketIntelligence?.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
-                    🌐 Market Intelligence ({patentResult.patents.marketIntelligence.length} sources)
-                  </div>
+              {/* ── Section 3: Market Intelligence ── always shown ── */}
+              <div style={{ marginBottom: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+                  Market Intelligence {patentResult.patents?.marketIntelligence?.length > 0 ? `(${patentResult.patents.marketIntelligence.length} sources)` : ""}
+                </div>
+                {patentResult.patents?.marketIntelligence?.length > 0 ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {patentResult.patents.marketIntelligence.map((m: any, i: number) => (
                       <div key={i} style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)", borderRadius: 8, padding: "8px 12px" }}>
@@ -1114,12 +1113,14 @@ export default function HomePage() {
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div style={{ fontSize: 12, color: "var(--text-faint)", fontStyle: "italic" }}>No market intelligence sources retrieved.</div>
+                )}
+              </div>
 
               {/* Caveats */}
               {patentResult.patents?.caveats?.length > 0 && (
-                <div style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 10, padding: "10px 14px" }}>
+                <div style={{ marginTop: 12, background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: 10, padding: "10px 14px" }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: "#92400e", marginBottom: 4 }}>⚠ Important caveats</div>
                   <ul style={{ margin: 0, paddingLeft: 16 }}>
                     {patentResult.patents.caveats.map((c: string, i: number) => (
@@ -1232,49 +1233,43 @@ export default function HomePage() {
                       </button>
                     </div>
 
-                    {/* Methodology — how the estimate was built */}
-                    {(active.reasoning || active.marketContext) && (
-                      <div style={{ marginBottom: 20 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
-                          How This Estimate Was Built
-                        </div>
-                        {/* Derivation badges */}
-                        {active.marketContext && (active.marketContext.tamM || active.marketContext.penetrationPct != null || active.marketContext.pricingPerYear) && (
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                            {active.marketContext.tamM && (
-                              <span style={{ fontSize: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-                                TAM {fmtMoney(active.marketContext.tamM * 1e6)}
-                              </span>
-                            )}
-                            {active.marketContext.penetrationPct != null && (
-                              <span style={{ fontSize: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-                                × {active.marketContext.penetrationPct}% penetration
-                              </span>
-                            )}
-                            {active.marketContext.pricingPerYear && (
-                              <span style={{ fontSize: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-                                @ {fmtMoney(active.marketContext.pricingPerYear)}/yr WAC
-                              </span>
-                            )}
-                            {active.analystEstimates?.length > 0 && (
-                              <span style={{ fontSize: 12, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-                                {active.analystEstimates.length} analyst estimate{active.analystEstimates.length > 1 ? "s" : ""}
-                              </span>
-                            )}
-                            {active.comps?.length > 0 && (
-                              <span style={{ fontSize: 12, background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-                                {active.comps.length} comparable drug{active.comps.length > 1 ? "s" : ""}
-                              </span>
-                            )}
-                          </div>
+                    {/* Methodology — how the estimate was built — always shown */}
+                    <div style={{ marginBottom: 20 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+                        How This Estimate Was Built
+                      </div>
+                      {/* Derivation badges */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                        {active.marketContext?.tamM != null && (
+                          <span style={{ fontSize: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                            TAM {fmtMoney(active.marketContext.tamM * 1e6)}
+                          </span>
                         )}
-                        {active.reasoning && (
-                          <div style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: 10, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7 }}>
-                            {active.reasoning}
-                          </div>
+                        {active.marketContext?.penetrationPct != null && (
+                          <span style={{ fontSize: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                            × {active.marketContext.penetrationPct}% penetration
+                          </span>
+                        )}
+                        {active.marketContext?.pricingPerYear != null && (
+                          <span style={{ fontSize: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                            @ {fmtMoney(active.marketContext.pricingPerYear)}/yr WAC
+                          </span>
+                        )}
+                        {(active.analystEstimates?.length ?? 0) > 0 && (
+                          <span style={{ fontSize: 12, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                            {active.analystEstimates.length} analyst estimate{active.analystEstimates.length > 1 ? "s" : ""}
+                          </span>
+                        )}
+                        {(active.comps?.length ?? 0) > 0 && (
+                          <span style={{ fontSize: 12, background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                            {active.comps.length} comparable drug{active.comps.length > 1 ? "s" : ""}
+                          </span>
                         )}
                       </div>
-                    )}
+                      <div style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: 10, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7 }}>
+                        {active.reasoning || "Reasoning not available for this indication."}
+                      </div>
+                    </div>
 
                     {/* Analyst Estimates */}
                     {active.analystEstimates?.length > 0 && (

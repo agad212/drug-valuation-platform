@@ -188,15 +188,15 @@ export async function runLoePipeline(
   const obConfirmed = drugFoundInFDA && !obResult!.reasons.some((r) => r.includes("default estimate"));
   const obYear = obConfirmed ? Number(obResult!.loeDate!.slice(0, 4)) : null;
 
+  // Always run Claude patent analysis — even with zero Tavily results Claude can
+  // generate context from training knowledge. Tavily results improve quality if available.
   let patentAnalysis: any = null;
-  if (patentResults.length > 0 || webResults.length > 0) {
-    try {
-      patentAnalysis = await analyzePatentsWithClaude(
-        drugName, sponsor, patentResults, webResults,
-        obConfirmed ? obResult!.loeDate! : null
-      );
-    } catch { /* proceed without */ }
-  }
+  try {
+    patentAnalysis = await analyzePatentsWithClaude(
+      drugName, sponsor, patentResults, webResults,
+      obConfirmed ? obResult!.loeDate! : null
+    );
+  } catch { /* proceed without */ }
 
   const fdaFallbackYear = drugFoundInFDA && obResult?.loeDate ? Number(obResult.loeDate.slice(0, 4)) : null;
 
