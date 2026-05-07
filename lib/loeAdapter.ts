@@ -12,31 +12,43 @@ async function fetchOpenFDAApp(
   const nameLower = drugName.toLowerCase();
 
   // ── Primary: drugsfda API (reliable for BLA/NDA, works for biologics) ──────
+  // Fetch up to 5 results and pick the one with the LOWEST application number —
+  // that is the original/reference product (e.g. BLA125514 for Keytruda IV,
+  // not BLA761467 for the newer subcutaneous formulation).
   for (const field of ["openfda.generic_name", "openfda.brand_name"]) {
     try {
-      const url = `https://api.fda.gov/drug/drugsfda.json?search=${field}:"${encodeURIComponent(drugName)}"&limit=1`;
+      const url = `https://api.fda.gov/drug/drugsfda.json?search=${field}:"${encodeURIComponent(drugName)}"&limit=5`;
       const res = await fetchWithTimeout(url, 6000);
       if (!res.ok) continue;
       const data = await res.json();
-      const result = data?.results?.[0];
-      if (!result) continue;
-      const appNum: string = result.application_number || "";
-      if (!appNum) continue;
-      const match = appNum.match(/^(NDA|ANDA|BLA)(\d+)$/);
-      if (!match) continue;
-      // Validate name
-      const openfdaGeneric = ((result.openfda?.generic_name || [])[0] || "").toLowerCase();
-      const openfdaBrand  = ((result.openfda?.brand_name  || [])[0] || "").toLowerCase();
-      const nameMatch =
-        openfdaGeneric.includes(nameLower) || nameLower.includes(openfdaGeneric.split(" ")[0]) ||
-        openfdaBrand.includes(nameLower)   || nameLower.includes(openfdaBrand.split(" ")[0]);
-      if (!nameMatch) continue;
-      const prefix = match[1];
-      const rawNo  = match[2];
-      const isBiologic = prefix === "BLA";
-      const appType = prefix === "ANDA" ? "A" : "N";
-      const appNo = rawNo.replace(/^0+/, "");
-      return { appType, appNo, appLabel: `${prefix}${rawNo}`, isBiologic };
+      const results: any[] = data?.results || [];
+      if (!results.length) continue;
+
+      // Filter to valid, name-matching results then pick lowest app number
+      const candidates = results
+        .map((result: any) => {
+          const appNum: string = result.application_number || "";
+          const match = appNum.match(/^(NDA|ANDA|BLA)(\d+)$/);
+          if (!match) return null;
+          const openfdaGeneric = ((result.openfda?.generic_name || [])[0] || "").toLowerCase();
+          const openfdaBrand  = ((result.openfda?.brand_name  || [])[0] || "").toLowerCase();
+          const nameMatch =
+            openfdaGeneric.includes(nameLower) || nameLower.includes(openfdaGeneric.split(" ")[0]) ||
+            openfdaBrand.includes(nameLower)   || nameLower.includes(openfdaBrand.split(" ")[0]);
+          if (!nameMatch) return null;
+          return { prefix: match[1], rawNo: match[2], appNum: parseInt(match[2], 10) };
+        })
+        .filter(Boolean) as { prefix: string; rawNo: string; appNum: number }[];
+
+      if (!candidates.length) continue;
+
+      // Pick the reference product = lowest application number
+      candidates.sort((a, b) => a.appNum - b.appNum);
+      const best = candidates[0];
+      const isBiologic = best.prefix === "BLA";
+      const appType = best.prefix === "ANDA" ? "A" : "N";
+      const appNo = best.rawNo.replace(/^0+/, "");
+      return { appType, appNo, appLabel: `${best.prefix}${best.rawNo}`, isBiologic };
     } catch { continue; }
   }
 
