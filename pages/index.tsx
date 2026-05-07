@@ -558,7 +558,7 @@ export default function HomePage() {
       // Auto-trigger deep revenue research
       const indNames = (data.indications || []).map((i: any) => i.name).filter(Boolean);
       if (indNames.length > 0) {
-        setTimeout(() => onResearchRevenue(indNames), 600);
+        setTimeout(() => onResearchRevenue(indNames, drug), 600);
       }
 
       // Return summary for chat
@@ -576,8 +576,8 @@ export default function HomePage() {
     }
   }
 
-  async function onResearchRevenue(indicationNames?: string[]) {
-    const drug = v.asset || (v as any).name;
+  async function onResearchRevenue(indicationNames?: string[], drugOverride?: string) {
+    const drug = drugOverride || v.asset || (v as any).name;
     const inds = indicationNames || (v.indications || []).map(i => i.name).filter(Boolean);
     if (!drug) return pushToast("Enter an Asset name first.", "error");
     if (inds.length === 0) return pushToast("Add at least one indication first (run Auto-Valuate or add manually).", "error");
