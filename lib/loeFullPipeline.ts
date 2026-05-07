@@ -148,6 +148,7 @@ Analyze all sources and provide your LOE assessment.`;
 
 export type LoePipelineResult = {
   isDefinitive: boolean;
+  isBpcia?: boolean;
   loeYear: number | null;
   loeMin: number | null;
   loeMax: number | null;
