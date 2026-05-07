@@ -976,6 +976,8 @@ export default function HomePage() {
                 <div style={{
                   background: patentResult.isDefinitive
                     ? "linear-gradient(135deg, #059669, #10b981)"
+                    : patentResult.isBpcia
+                    ? "linear-gradient(135deg, #7c3aed, #8b5cf6)"
                     : "linear-gradient(135deg, #1d4ed8, #3b82f6)",
                   borderRadius: 12, padding: "14px 20px", marginBottom: 16,
                   display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16,
@@ -983,9 +985,9 @@ export default function HomePage() {
                   <div>
                     <div style={{ fontSize: 10, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: "0.1em", fontFamily: "var(--font-display)", fontWeight: 600 }}>
                       {patentResult.isDefinitive
-                        ? (patentResult.orangeBook?.sources?.some((s: any) => (s.label || "").includes("Purple Book"))
-                            ? "LOE Confirmed — FDA Purple Book (BPCIA)"
-                            : "LOE Confirmed — FDA Orange Book")
+                        ? "LOE Confirmed — FDA Orange Book"
+                        : patentResult.isBpcia
+                        ? `LOE Estimated — Patent Analysis (BPCIA floor: ${patentResult.orangeBook?.loeDate?.slice(0,4) ?? "—"})`
                         : "Estimated LOE Range — Patent Analysis"}
                     </div>
                     <div style={{ fontSize: 28, fontWeight: 800, color: "#fff", fontFamily: "var(--font-display)", lineHeight: 1.1 }}>
@@ -1007,7 +1009,7 @@ export default function HomePage() {
                     )}
                   </div>
                   <button className="btn" onClick={() => setV(cur => ({ ...cur, loeYear: patentResult.loeYear }))}
-                    style={{ background: "rgba(255,255,255,0.9)", color: patentResult.isDefinitive ? "#059669" : "#1d4ed8", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+                    style={{ background: "rgba(255,255,255,0.9)", color: patentResult.isDefinitive ? "#059669" : patentResult.isBpcia ? "#7c3aed" : "#1d4ed8", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
                     Use {patentResult.loeYear} →
                   </button>
                 </div>

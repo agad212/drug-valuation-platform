@@ -238,8 +238,13 @@ export async function runLoePipeline(
     ? (patentMax ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
     : (obYear ?? patentMax ?? fdaFallbackYear ?? hintLoeYear ?? null);
 
+  // isDefinitive = true only when the displayed loeYear is FDA-confirmed (OB scrape for small molecules).
+  // For biologics, loeYear comes from patent analysis — mark as non-definitive so UI shows "Estimated".
+  const isDefinitive = obConfirmed && !isBpcia;
+
   return {
-    isDefinitive: obConfirmed,
+    isDefinitive,
+    isBpcia,
     loeYear,
     loeMin,
     loeMax,
