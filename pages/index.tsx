@@ -16,7 +16,7 @@ const DEFAULT_VALUATION: Valuation = {
   asset: "",
   indication: "",
   mechanism: "",
-  ownerType: "Owner",
+  phase: "",
   discountRate: 0.12,
   cogsPct: 0.2,
   taxRate: 0.21,
@@ -81,7 +81,7 @@ function FieldSelect({ label, value, onChange, options }: { label: string; value
     <label style={{ display: "block" }}>
       <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, fontFamily: "var(--font-mono)" }}>{label}</div>
       <select className="input-base" value={value} onChange={(e) => onChange(e.target.value)} style={{ cursor: "pointer" }}>
-        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        {options.map((o) => <option key={o} value={o}>{o === "" ? "—" : o}</option>)}
       </select>
     </label>
   );
@@ -605,7 +605,15 @@ export default function HomePage() {
   async function onSave(): Promise<Valuation> {
     const id = v.id || cryptoId();
     const slug = v.slug || `${(v.asset || "valuation").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${randomSlug()}`;
-    const next = { ...v, id, slug, updatedAt: new Date().toISOString() };
+    // Persist computed panels alongside the valuation so they restore on load
+    const next = {
+      ...v, id, slug, updatedAt: new Date().toISOString(),
+      _patentResult: patentResult ?? undefined,
+      _trialResults: trialResults ?? undefined,
+      _trialSummary: trialSummary || undefined,
+      _trialTotal: trialTotal || undefined,
+      _revenueAnalysis: revenueAnalysis ?? undefined,
+    };
     const all = { ...saved, [id]: next };
     setSaved(all); saveAll(all); setV(next);
     pushToast("Saved locally.", "success");
@@ -617,6 +625,10 @@ export default function HomePage() {
     const rec = saved[id];
     if (!rec) return;
     setV(rec);
+    // Restore panels if they were saved
+    if (rec._patentResult) setPatentResult(rec._patentResult);
+    if (rec._trialResults) { setTrialResults(rec._trialResults); setTrialSummary(rec._trialSummary || ""); setTrialTotal(rec._trialTotal || 0); }
+    if (rec._revenueAnalysis) setRevenueAnalysis(rec._revenueAnalysis);
     setShowSaved(false);
     pushToast(`Loaded: ${rec.asset || rec.name || id}`, "success");
   }
@@ -672,48 +684,91 @@ export default function HomePage() {
 
   function exportCSV() {
     const asset = v.asset || "valuation";
+    const disc = v.discountRate ?? 0.12;
+    const cogs = v.cogsPct ?? 0.2;
+    const tax = v.taxRate ?? 0.21;
+    const distPct = v.distributionPct ?? 0.05;
+    const opexPct = v.commercialOpexPct ?? 0.20;
     const ptrsVal = out.ptrs ?? 0;
-    const rows: string[][] = [];
+    const now = new Date().getFullYear();
 
-    // Summary header rows
+    const inds = (v.indications && v.indications.length > 0) ? v.indications : [{
+      id: "s", name: v.indication || asset,
+      peakSales: v.peakSales, launchYear: v.launchYear, loeYear: v.loeYear,
+      ptrs: v.ptrs, devCostPV: v.devCostPV,
+    }];
+    const minLaunch = Math.min(...inds.map(i => i.launchYear ?? v.launchYear ?? now + 3));
+    const maxLoe = Math.max(...inds.map(i => i.loeYear ?? v.loeYear ?? now + 13));
+    const devYears: number[] = [];
+    for (let y = now; y < minLaunch; y++) devYears.push(y);
+    if (devYears.length === 0) devYears.push(now);
+    const totalDevCostNominal = (v.devCostPV ?? 0) * (1 + disc);
+    const annualDevCost = totalDevCostNominal / Math.max(1, devYears.length);
+    const ramps: Record<number, number> = { 0: 0.2, 1: 0.5, 2: 0.8, 3: 1.0 };
+
+    const rows: string[][] = [];
+    // Summary
     rows.push(["Asset", asset]);
     rows.push(["Sponsor", v.sponsor || ""]);
     rows.push(["Phase", v.phase || ""]);
     rows.push(["Mechanism", v.mechanism || ""]);
-    rows.push(["Discount Rate", `${((v.discountRate ?? 0.12) * 100).toFixed(1)}%`]);
+    rows.push(["Discount Rate", `${(disc * 100).toFixed(1)}%`]);
     rows.push(["PTRS", `${(ptrsVal * 100).toFixed(1)}%`]);
-    rows.push(["LOE Year", String(v.loeYear ?? "")]);
-    rows.push(["Launch Year", String(v.launchYear ?? "")]);
     rows.push(["rNPV ($M)", String(Math.round((out.rnpv ?? 0) / 1e6))]);
     rows.push(["Revenue PV ($M)", String(Math.round((out.revenuePV ?? 0) / 1e6))]);
     rows.push(["Dev Cost PV ($M)", String(Math.round((out.devCostPV ?? 0) / 1e6))]);
     rows.push([]);
 
-    // Indications table
-    if (v.indications?.length) {
-      rows.push(["Indication", "Peak Sales ($M)", "Launch Year", "LOE Year", "PTRS (%)", "Dev Cost ($M)", "Revenue PV ($M)", "rNPV ($M)"]);
-      for (const ind of v.indications) {
-        const indPtrs = ind.ptrs ?? ptrsVal;
-        const indRevPV = computeRevenuePV({ ...v, peakSales: ind.peakSales ?? v.peakSales, launchYear: ind.launchYear ?? v.launchYear, loeYear: ind.loeYear ?? v.loeYear });
-        const indDevCost = ind.devCostPV ?? (out.devCostPV / (v.indications!.length));
-        const indRnpv = indPtrs * indRevPV - indDevCost;
-        rows.push([
-          ind.name,
-          String(Math.round((ind.peakSales ?? 0) / 1e6)),
-          String(ind.launchYear ?? ""),
-          String(ind.loeYear ?? v.loeYear ?? ""),
-          `${(indPtrs * 100).toFixed(1)}%`,
-          String(Math.round(indDevCost / 1e6)),
-          String(Math.round(indRevPV / 1e6)),
-          String(Math.round(indRnpv / 1e6)),
-        ]);
-      }
+    // DCF table
+    rows.push(["Year", "Phase", "PTRS", "Disc Factor", "PW R&D Cost ($M)", "Gross Revenue ($M)", "COGS ($M)", "Dist ($M)", "Opex ($M)", "Net Revenue ($M)", "Net Income ($M)", "PW Net Income ($M)", "DCF ($M)", "Cum eNPV ($M)", "PI"]);
+
+    let cumExpCosts = 0; let cumDcf = 0;
+    devYears.forEach(yr => {
+      const t = yr - now;
+      const df = 1 / Math.pow(1 + disc, Math.max(0, t));
+      const pwRdCost = annualDevCost * ptrsVal;
+      const dcf = -pwRdCost * df;
+      cumExpCosts += pwRdCost; cumDcf += dcf;
+      const m = (n: number) => (n / 1e6).toFixed(1);
+      rows.push([String(yr), "R&D", `${(ptrsVal*100).toFixed(1)}%`, df.toFixed(3),
+        `(${m(pwRdCost)})`, "—", "—", "—", "—", "—", "—", "—", m(dcf), m(cumDcf), cumExpCosts > 0 ? (cumDcf/cumExpCosts).toFixed(2)+"x" : "—"]);
+    });
+
+    for (let yr = minLaunch; yr <= maxLoe + 1; yr++) {
+      const t = yr - now;
+      const df = 1 / Math.pow(1 + disc, Math.max(0, t));
+      let grossRevenue = 0;
+      inds.forEach(ind => {
+        const ly = ind.launchYear ?? v.launchYear ?? minLaunch;
+        const loe = ind.loeYear ?? v.loeYear ?? maxLoe;
+        const ps = ind.peakSales ?? v.peakSales ?? 0;
+        if (yr < ly || yr > loe + 1) return;
+        const i = yr - ly;
+        const pct = i <= 3 ? (ramps[i] ?? 1) : (yr <= loe ? 1 : 0.5);
+        grossRevenue += ps * pct;
+      });
+      if (grossRevenue === 0) continue;
+      const cogsAmt = grossRevenue * cogs;
+      const distAmt = grossRevenue * distPct;
+      const opexAmt = grossRevenue * opexPct;
+      const netRevenue = grossRevenue - cogsAmt - distAmt - opexAmt;
+      const netIncome = netRevenue * (1 - tax);
+      const pwNetIncome = netIncome * ptrsVal;
+      const dcf = pwNetIncome * df;
+      cumDcf += dcf;
+      const m = (n: number) => (n / 1e6).toFixed(1);
+      rows.push([String(yr), yr === minLaunch ? "Launch" : "—", `${(ptrsVal*100).toFixed(1)}%`, df.toFixed(3),
+        "—", m(grossRevenue), `(${m(cogsAmt)})`, `(${m(distAmt)})`, `(${m(opexAmt)})`,
+        m(netRevenue), m(netIncome), m(pwNetIncome), m(dcf), m(cumDcf),
+        cumExpCosts > 0 ? (cumDcf/cumExpCosts).toFixed(2)+"x" : "—"]);
     }
+    rows.push([]);
+    rows.push(["eNPV (rNPV)", `$${(cumDcf/1e6).toFixed(1)}M`]);
 
     const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `${asset.replace(/\s+/g, "_")}.csv`; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = `${asset.replace(/\s+/g, "_")}_DCF.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -822,9 +877,8 @@ export default function HomePage() {
               <FieldInput label="Indication" value={v.indication || ""} onChange={(x) => update("indication", x)} />
               <FieldInput label="Mechanism of Action" value={v.mechanism || ""} onChange={(x) => update("mechanism", x)} />
             </div>
-            <div className="form-grid-2" style={{ marginBottom: 16 }}>
-              <FieldSelect label="Owner Type" value={v.ownerType || "Owner"} onChange={(x) => update("ownerType", x as any)} options={["Owner", "Licensor"]} />
-              <FieldSelect label="Development Phase" value={v.phase || "Phase 2"} onChange={(x) => update("phase", x as any)} options={["Preclinical", "Phase 1", "Phase 2", "Phase 3", "Filed", "Approved"]} />
+            <div style={{ marginBottom: 16 }}>
+              <FieldSelect label="Development Phase" value={v.phase || ""} onChange={(x) => update("phase", x as any)} options={["", "Preclinical", "Phase 1", "Phase 2", "Phase 3", "Filed", "Approved"]} />
             </div>
 
             <div style={{ borderTop: "1px solid var(--border)", margin: "16px 0" }} />
