@@ -424,7 +424,17 @@ export default function HomePage() {
   }
 
   function onFieldUpdate(updates: Record<string, any>) {
-    setV((cur) => ({ ...cur, ...updates }));
+    setV((cur) => {
+      const next = { ...cur, ...updates };
+      // If peakSales is being set and we have indications, apply it to the first indication
+      // (global peakSales is a legacy field; the indications table drives rNPV)
+      if ("peakSales" in updates && cur.indications?.length) {
+        next.indications = cur.indications.map((ind, i) =>
+          i === 0 ? { ...ind, peakSales: updates.peakSales } : ind
+        );
+      }
+      return next;
+    });
     const fieldCount = Object.keys(updates).length;
     pushToast(`Applied ${fieldCount} field update${fieldCount > 1 ? "s" : ""} from assistant.`, "success");
   }
@@ -661,11 +671,49 @@ export default function HomePage() {
   }
 
   function exportCSV() {
-    const rows = Object.entries(display).map(([k, val]) => [k, typeof val === "object" ? JSON.stringify(val) : String(val)]);
-    const body = rows.map(([k, val]) => `${JSON.stringify(k)},${JSON.stringify(val)}`).join("\n");
-    const blob = new Blob(["Field,Value\n" + body], { type: "text/csv" });
+    const asset = v.asset || "valuation";
+    const ptrsVal = out.ptrs ?? 0;
+    const rows: string[][] = [];
+
+    // Summary header rows
+    rows.push(["Asset", asset]);
+    rows.push(["Sponsor", v.sponsor || ""]);
+    rows.push(["Phase", v.phase || ""]);
+    rows.push(["Mechanism", v.mechanism || ""]);
+    rows.push(["Discount Rate", `${((v.discountRate ?? 0.12) * 100).toFixed(1)}%`]);
+    rows.push(["PTRS", `${(ptrsVal * 100).toFixed(1)}%`]);
+    rows.push(["LOE Year", String(v.loeYear ?? "")]);
+    rows.push(["Launch Year", String(v.launchYear ?? "")]);
+    rows.push(["rNPV ($M)", String(Math.round((out.rnpv ?? 0) / 1e6))]);
+    rows.push(["Revenue PV ($M)", String(Math.round((out.revenuePV ?? 0) / 1e6))]);
+    rows.push(["Dev Cost PV ($M)", String(Math.round((out.devCostPV ?? 0) / 1e6))]);
+    rows.push([]);
+
+    // Indications table
+    if (v.indications?.length) {
+      rows.push(["Indication", "Peak Sales ($M)", "Launch Year", "LOE Year", "PTRS (%)", "Dev Cost ($M)", "Revenue PV ($M)", "rNPV ($M)"]);
+      for (const ind of v.indications) {
+        const indPtrs = ind.ptrs ?? ptrsVal;
+        const indRevPV = computeRevenuePV({ ...v, peakSales: ind.peakSales ?? v.peakSales, launchYear: ind.launchYear ?? v.launchYear, loeYear: ind.loeYear ?? v.loeYear });
+        const indDevCost = ind.devCostPV ?? (out.devCostPV / (v.indications!.length));
+        const indRnpv = indPtrs * indRevPV - indDevCost;
+        rows.push([
+          ind.name,
+          String(Math.round((ind.peakSales ?? 0) / 1e6)),
+          String(ind.launchYear ?? ""),
+          String(ind.loeYear ?? v.loeYear ?? ""),
+          `${(indPtrs * 100).toFixed(1)}%`,
+          String(Math.round(indDevCost / 1e6)),
+          String(Math.round(indRevPV / 1e6)),
+          String(Math.round(indRnpv / 1e6)),
+        ]);
+      }
+    }
+
+    const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `${(v.asset || "valuation").replace(/\s+/g, "_")}.csv`; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = `${asset.replace(/\s+/g, "_")}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 

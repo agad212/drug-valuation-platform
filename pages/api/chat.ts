@@ -63,7 +63,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const hasAsset = !!(context?.payload?.asset || context?.payload?.name);
 
+  // Extract key computed outputs to surface explicitly to Claude
+  const payload = context?.payload || {};
+  const rnpv = payload.rnpv != null ? `$${(payload.rnpv / 1e9).toFixed(2)}B` : "—";
+  const revenuePV = payload.revenuePV != null ? `$${(payload.revenuePV / 1e9).toFixed(2)}B` : "—";
+  const ptrsVal = payload.ptrs != null ? `${(payload.ptrs * 100).toFixed(1)}%` : "—";
+  const devCostPV = payload.devCostPV != null ? `$${(payload.devCostPV / 1e6).toFixed(0)}M` : "—";
+  const discountRate = payload.discountRate != null ? `${(payload.discountRate * 100).toFixed(1)}%` : "—";
+  const indications = (payload.indications || []).map((ind: any) =>
+    `  - ${ind.name}: peak $${((ind.peakSales||0)/1e6).toFixed(0)}M, launch ${ind.launchYear||"—"}, LOE ${ind.loeYear||"—"}, PTRS ${((ind.ptrs ?? payload.ptrs ?? 0)*100).toFixed(0)}%, devCost $${((ind.devCostPV||0)/1e6).toFixed(0)}M`
+  ).join("\n");
+
   const systemPrompt = `You are the DrugValue assistant — an AI-powered pharmaceutical asset valuation tool. You build rNPV models, explain valuation drivers, and help refine assumptions through conversation.
+
+CRITICAL: The current valuation has already been computed. When the user asks for rNPV, PTRS, Revenue PV, or any other metric — READ IT FROM THE CONTEXT BELOW. Do NOT recalculate or estimate. Quote the exact number from context.
+
+CURRENT COMPUTED VALUES (read these exactly — do not recalculate):
+  rNPV: ${rnpv}
+  Revenue PV: ${revenuePV}
+  PTRS: ${ptrsVal}
+  Dev Cost PV: ${devCostPV}
+  Discount Rate: ${discountRate}
+  Asset: ${payload.asset || "—"}
+  Phase: ${payload.phase || "—"}
+  Sponsor: ${payload.sponsor || "—"}
+  Mechanism: ${payload.mechanism || "—"}
+  LOE Year: ${payload.loeYear || "—"}
+  Launch Year: ${payload.launchYear || "—"}
+
+INDICATIONS:
+${indications || "  None loaded"}
 
 AUTO-VALUATION TRIGGER: If the user's message is asking you to value, model, analyze, or research a specific drug — or if they just type a drug/compound name with no existing asset loaded — include this tag at the very end of your response:
 <auto-value drug="DRUG_NAME" sponsor="SPONSOR_IF_MENTIONED" phase="PHASE_IF_MENTIONED"/>
@@ -72,13 +101,10 @@ ${hasAsset ? "An asset is already loaded — do NOT trigger auto-value unless th
 
 FIELD UPDATE CAPABILITY: If the user asks you to set, update, or suggest a value for any model field, include a JSON block at the END of your response:
 <field-update>{"peakSales": 2000000000, "loeYear": 2031, "launchYear": 2027}</field-update>
-Available fields: peakSales (USD), discountRate (decimal), cogsPct (decimal), taxRate (decimal), workingCapitalPct (decimal), avgRoyalty (decimal), launchYear (integer), loeYear (integer), devCostPV (USD), phase ("Preclinical"/"Phase 1"/"Phase 2"/"Phase 3"/"Filed"/"Approved"), ptrs (decimal 0–1), asset (string), indication (string), mechanism (string), sponsor (string).
+Available fields: peakSales (USD — updates the first/active indication's peak sales when indications exist), discountRate (decimal e.g. 0.10 for 10%), cogsPct (decimal), taxRate (decimal), workingCapitalPct (decimal), avgRoyalty (decimal), launchYear (integer), loeYear (integer), devCostPV (USD), phase ("Preclinical"/"Phase 1"/"Phase 2"/"Phase 3"/"Filed"/"Approved"), ptrs (decimal 0–1), asset (string), indication (string), mechanism (string), sponsor (string).
 Only include <field-update> when the user explicitly asks to change values.
 
-Be concise and practical. Cite web search URLs when available.
-
-Current valuation context:
-${JSON.stringify(context?.payload || {}, null, 2)}${searchContext}`;
+Be concise and practical. Lead with the answer — one or two sentences max for factual questions. Cite web search URLs when available.${searchContext}`;
 
   const claudeMessages = (messages || []).map((m: Msg) => ({
     role: m.role === "assistant" ? "assistant" : "user",
