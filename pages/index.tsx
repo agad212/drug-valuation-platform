@@ -856,7 +856,15 @@ export default function HomePage() {
         </div>
       )}
 
-      <main className="main-grid" style={{ maxWidth: 1300, margin: "0 auto", padding: "24px" }}>
+      <div style={{ maxWidth: 1300, margin: "0 auto", padding: "24px 24px 0" }}>
+        <AssistantPanel
+          valuation={display}
+          onFieldUpdate={onFieldUpdate}
+          onAutoValue={onAutoValue}
+        />
+      </div>
+
+      <main style={{ maxWidth: 1300, margin: "0 auto", padding: "0 24px 24px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
           {/* Key Metrics */}
@@ -1497,15 +1505,6 @@ export default function HomePage() {
           </Card>
 
         </div>
-
-        {/* Assistant sidebar */}
-        <aside>
-          <AssistantPanel
-            valuation={display}
-            onFieldUpdate={onFieldUpdate}
-            onAutoValue={onAutoValue}
-          />
-        </aside>
       </main>
 
       <footer style={{ borderTop: "1px solid rgba(255,255,255,0.15)", marginTop: 40, background: "rgba(0,0,0,0.15)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" }}>

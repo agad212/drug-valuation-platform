@@ -47,6 +47,12 @@ const AssistantPanel: React.FC<Props> = ({ valuation, onFieldUpdate, onAutoValue
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-focus on mount
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -69,7 +75,6 @@ const AssistantPanel: React.FC<Props> = ({ valuation, onFieldUpdate, onAutoValue
       });
       const data = await res.json();
 
-      // Add Claude's text reply
       const replyMsg: Message = {
         role: "assistant",
         content: data?.message || "No reply.",
@@ -104,139 +109,159 @@ const AssistantPanel: React.FC<Props> = ({ valuation, onFieldUpdate, onAutoValue
     }
   }
 
-  // Quick prompts change based on whether an asset is loaded
   const quickPrompts = hasAsset
-    ? ["What drives rNPV most?", "Explain PTRS calculation", "Bull / base / bear scenarios", "Validate LOE assumptions"]
-    : ["Value NXC-201", "Value pembrolizumab", "Analyze a CAR-T asset", "Model an orphan drug"];
+    ? ["What drives rNPV most?", "Explain PTRS", "Bull / base / bear", "Validate LOE"]
+    : ["Value pembrolizumab", "Value NXC-201", "Model an orphan drug", "Analyze a CAR-T asset"];
+
+  // Show conversation area only once the user has sent at least one message
+  const showMessages = messages.length > 1 || loading;
 
   return (
     <div style={{
-      position: "sticky", top: 72,
-      background: "var(--bg-card)", border: "1px solid var(--border)",
-      borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-md)",
-      display: "flex", flexDirection: "column",
-      maxHeight: "calc(100vh - 96px)", overflow: "hidden",
+      background: "var(--bg-card)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius-lg)",
+      boxShadow: "var(--shadow-md)",
+      marginBottom: 20,
     }}>
-      {/* Header */}
+      {/* Input row — always visible */}
       <div style={{
-        padding: "14px 16px 10px", borderBottom: "1px solid var(--border)",
-        display: "flex", alignItems: "center", gap: 8,
+        display: "flex", alignItems: "center", gap: 10, padding: "12px 16px",
       }}>
-        <div style={{
-          width: 8, height: 8, borderRadius: "50%", background: "var(--accent)",
-          boxShadow: "0 0 6px var(--accent)",
-        }} />
-        <span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13, color: "var(--text)" }}>
-          DrugValue AI
-        </span>
-        <span style={{ fontSize: 10, color: "var(--text-faint)", marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
-          Claude Haiku
-        </span>
-      </div>
+        {/* Label */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <div style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: "var(--accent)", boxShadow: "0 0 6px var(--accent)",
+          }} />
+          <span style={{
+            fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13,
+            color: "var(--text)", whiteSpace: "nowrap",
+          }}>
+            DrugValue AI
+          </span>
+        </div>
 
-      {/* Quick prompts */}
-      <div style={{ padding: "10px 12px 0", display: "flex", flexWrap: "wrap", gap: 6 }}>
-        {quickPrompts.map((q) => (
-          <button key={q} onClick={() => send(q)} style={{
-            padding: "4px 10px", fontSize: 11, borderRadius: 20,
-            border: "1px solid var(--border)", background: "transparent",
-            color: "var(--text-muted)", cursor: "pointer", fontFamily: "var(--font-mono)",
-            transition: "all 0.15s",
-          }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-subtle)"; e.currentTarget.style.color = "var(--text)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-muted)"; }}
-          >
-            {q}
-          </button>
-        ))}
-      </div>
-
-      {/* Messages */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px", display: "flex", flexDirection: "column", gap: 10 }}>
-        {messages.map((m, i) => (
-          <div key={i}>
-            <div style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-              <div style={{
-                maxWidth: "88%", padding: "8px 12px",
-                borderRadius: m.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-                background: m.role === "user"
-                  ? "var(--accent)"
-                  : m.isStatus
-                  ? "rgba(30,80,60,0.35)"
-                  : "var(--bg-subtle)",
-                color: m.role === "user" ? "var(--accent-fg)" : "var(--text)",
-                fontSize: 13, lineHeight: 1.5, fontFamily: "var(--font-mono)",
-                border: m.role === "assistant" ? `1px solid ${m.isStatus ? "rgba(16,185,129,0.3)" : "var(--border)"}` : "none",
-                whiteSpace: "pre-wrap",
-              }}>
-                {m.content}
-              </div>
-            </div>
-
-            {/* Field update suggestion card */}
-            {m.role === "assistant" && m.fieldUpdates && Object.keys(m.fieldUpdates).length > 0 && onFieldUpdate && (
-              <div style={{
-                margin: "6px 0 0 0",
-                background: "rgba(5,150,105,0.08)",
-                border: "1px solid rgba(5,150,105,0.3)",
-                borderRadius: 10, padding: "10px 12px",
-              }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                  Suggested field updates
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 8 }}>
-                  {Object.entries(m.fieldUpdates).map(([key, val]) => (
-                    <div key={key} style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text)" }}>
-                      <span style={{ color: "var(--text-muted)" }}>{FIELD_LABELS[key] || key}</span>
-                      {" → "}
-                      <span style={{ fontWeight: 600, color: "#059669" }}>{formatFieldValue(key, val)}</span>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  onClick={() => onFieldUpdate(m.fieldUpdates!)}
-                  style={{
-                    padding: "5px 14px", fontSize: 12, fontWeight: 700,
-                    background: "#059669", color: "#fff",
-                    border: "none", borderRadius: 6, cursor: "pointer",
-                  }}
-                >
-                  Apply ✓
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-        {loading && (
-          <div style={{ display: "flex", justifyContent: "flex-start" }}>
-            <div style={{
-              padding: "10px 14px", borderRadius: "12px 12px 12px 2px",
-              background: "var(--bg-subtle)", border: "1px solid var(--border)",
-              display: "flex", gap: 4, alignItems: "center",
-            }}>
-              <span className="loading-dot" />
-              <span className="loading-dot" />
-              <span className="loading-dot" />
-            </div>
-          </div>
-        )}
-        <div ref={endRef} />
-      </div>
-
-      {/* Input */}
-      <div style={{ padding: "10px 12px 12px", borderTop: "1px solid var(--border)", display: "flex", gap: 8 }}>
+        {/* Input */}
         <input
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
           placeholder={hasAsset ? "Ask about this valuation…" : "Type a drug name to get started…"}
           className="input-base"
           style={{ flex: 1, fontSize: 13 }}
+          autoFocus
         />
-        <button onClick={() => send()} disabled={loading || !input.trim()} className="btn btn-primary" style={{ padding: "8px 14px" }}>
+
+        {/* Send */}
+        <button
+          onClick={() => send()}
+          disabled={loading || !input.trim()}
+          className="btn btn-primary"
+          style={{ padding: "8px 14px", flexShrink: 0 }}
+        >
           ↑
         </button>
+
+        {/* Quick prompts — shown inline when no conversation yet */}
+        {!showMessages && (
+          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            {quickPrompts.map((q) => (
+              <button key={q} onClick={() => send(q)} style={{
+                padding: "4px 10px", fontSize: 11, borderRadius: 20,
+                border: "1px solid var(--border)", background: "transparent",
+                color: "var(--text-muted)", cursor: "pointer", fontFamily: "var(--font-mono)",
+                transition: "all 0.15s", whiteSpace: "nowrap",
+              }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-subtle)"; e.currentTarget.style.color = "var(--text)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-muted)"; }}
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Messages — appear below once conversation starts */}
+      {showMessages && (
+        <div style={{
+          borderTop: "1px solid var(--border)",
+          maxHeight: 280, overflowY: "auto",
+          padding: "12px 16px",
+          display: "flex", flexDirection: "column", gap: 10,
+        }}>
+          {messages.map((m, i) => (
+            <div key={i}>
+              <div style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                <div style={{
+                  maxWidth: "80%", padding: "8px 12px",
+                  borderRadius: m.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+                  background: m.role === "user"
+                    ? "var(--accent)"
+                    : m.isStatus ? "rgba(30,80,60,0.35)" : "var(--bg-subtle)",
+                  color: m.role === "user" ? "var(--accent-fg)" : "var(--text)",
+                  fontSize: 13, lineHeight: 1.5, fontFamily: "var(--font-mono)",
+                  border: m.role === "assistant"
+                    ? `1px solid ${m.isStatus ? "rgba(16,185,129,0.3)" : "var(--border)"}` : "none",
+                  whiteSpace: "pre-wrap",
+                }}>
+                  {m.content}
+                </div>
+              </div>
+
+              {/* Field update suggestion card */}
+              {m.role === "assistant" && m.fieldUpdates && Object.keys(m.fieldUpdates).length > 0 && onFieldUpdate && (
+                <div style={{
+                  margin: "6px 0 0 0",
+                  background: "rgba(5,150,105,0.08)",
+                  border: "1px solid rgba(5,150,105,0.3)",
+                  borderRadius: 10, padding: "10px 12px",
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                    Suggested field updates
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 8 }}>
+                    {Object.entries(m.fieldUpdates).map(([key, val]) => (
+                      <div key={key} style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text)" }}>
+                        <span style={{ color: "var(--text-muted)" }}>{FIELD_LABELS[key] || key}</span>
+                        {" → "}
+                        <span style={{ fontWeight: 600, color: "#059669" }}>{formatFieldValue(key, val)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => onFieldUpdate(m.fieldUpdates!)}
+                    style={{
+                      padding: "5px 14px", fontSize: 12, fontWeight: 700,
+                      background: "#059669", color: "#fff",
+                      border: "none", borderRadius: 6, cursor: "pointer",
+                    }}
+                  >
+                    Apply ✓
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div style={{ display: "flex", justifyContent: "flex-start" }}>
+              <div style={{
+                padding: "10px 14px", borderRadius: "12px 12px 12px 2px",
+                background: "var(--bg-subtle)", border: "1px solid var(--border)",
+                display: "flex", gap: 4, alignItems: "center",
+              }}>
+                <span className="loading-dot" />
+                <span className="loading-dot" />
+                <span className="loading-dot" />
+              </div>
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+      )}
     </div>
   );
 };
