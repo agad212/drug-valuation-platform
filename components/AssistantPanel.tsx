@@ -151,7 +151,6 @@ const AssistantPanel: React.FC<Props> = ({ valuation, onFieldUpdate, onAutoValue
           placeholder={hasAsset ? "Ask about this valuation…" : "Type a drug name to get started…"}
           className="input-base"
           style={{ flex: 1, fontSize: 13 }}
-          autoFocus
         />
 
         {/* Send */}
