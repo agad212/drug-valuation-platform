@@ -2,29 +2,6 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { searchTrialsByDrug, type CtgovTrial } from "../../lib/ctgov";
 import { runLoePipeline } from "../../lib/loeFullPipeline";
 
-// ─── Revenue search via Tavily ────────────────────────────────────────────────
-
-async function searchIndicationRevenue(drug: string, indication: string): Promise<any[]> {
-  const tavilyKey = process.env.TAVILY_API_KEY;
-  if (!tavilyKey || !indication) return [];
-  const query = `"${drug}" "${indication}" peak annual sales revenue forecast analyst billion`;
-  try {
-    const res = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: tavilyKey,
-        query,
-        search_depth: "basic",
-        max_results: 5,
-      }),
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.results || [];
-  } catch { return []; }
-}
-
 // ─── Claude: rank trials + extract peak sales in one call ────────────────────
 
 async function analyzeWithClaude(
@@ -171,12 +148,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const candidates = trials.slice(0, 40);
 
-    // ── Round 2: Revenue searches per indication (parallel) ─────────────────
-    const revenueSearches = await Promise.all(
-      candidates.map((t) => searchIndicationRevenue(drug, t.conditions?.[0] || ""))
-    );
+    // Skip per-indication Tavily revenue searches here — they add 10-20s and the
+    // deep revenue analysis (onResearchRevenue / revenue-assumptions API) runs right
+    // after auto-value completes. Claude uses training knowledge for initial estimates.
+    const revenueSearches = candidates.map(() => [] as any[]);
 
-    // ── Round 3: Claude ranks + estimates peak sales ─────────────────────────
+    // ── Round 2: Claude ranks trials + estimates peak sales from training knowledge ──
     const analysis = await analyzeWithClaude(drug, phase, candidates, revenueSearches);
 
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
