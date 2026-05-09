@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "pages/api/auto-value.ts": { "maxDuration": 60 },
+    "pages/api/loe-full/[drugName].ts": { "maxDuration": 30 },
+    "pages/api/revenue-assumptions.ts": { "maxDuration": 60 },
+    "pages/api/chat.ts": { "maxDuration": 30 }
+  }
+}
