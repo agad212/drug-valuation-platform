@@ -227,10 +227,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
-      // For synthetic stub, use Claude's indication from reasons/summary, fallback to drug name
+      // For synthetic stub, extract indication from Claude's summary or basis text
       name: (usingSyntheticStub
-        ? (Object.values(analysis.reasons || {})[rank] as string | undefined)?.match(/for\s+([^.;,]+)/i)?.[1]?.trim()
-          || analysis.summary?.match(/for\s+([^.;,]+)/i)?.[1]?.trim()
+        ? analysis.summary?.match(/(?:indicated for|approved for|treats?|used for)\s+([^.,;]+)/i)?.[1]?.trim()
+          || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating)\s+([^.,;(]+)/i)?.[1]?.trim()
           || drug
         : trial.conditions?.[0]) || trial.nctId,
       // For already-launched indications (estimatedLaunchYear undefined), use current year
