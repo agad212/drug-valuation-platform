@@ -32,6 +32,13 @@ function fmtMoney(n?: number | null) {
   if (Math.abs(n) > 0) return `~$0`;
   return `$${n.toLocaleString()}`;
 }
+// Per-patient annual price (e.g. 150000 = $150K/yr, not $0.0M)
+function fmtPrice(n?: number | null) {
+  if (n == null || Number.isNaN(n) || n === 0) return "—";
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1000) return `$${Math.round(n / 1000)}K`;
+  return `$${Math.round(n).toLocaleString()}`;
+}
 function fmtPct(n?: number | null, dp = 1) {
   if (n == null || Number.isNaN(n)) return "—";
   return (n * 100).toFixed(dp) + "%";
@@ -1364,7 +1371,7 @@ export default function HomePage() {
                         )}
                         {active.marketContext?.pricingPerYear != null && (
                           <span style={{ fontSize: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 20, padding: "3px 10px", color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-                            @ {fmtMoney(active.marketContext.pricingPerYear)}/yr WAC
+                            @ {fmtPrice(active.marketContext.pricingPerYear)}/yr WAC
                           </span>
                         )}
                         {(active.analystEstimates?.length ?? 0) > 0 && (
@@ -1433,7 +1440,7 @@ export default function HomePage() {
                           {active.marketContext.pricingPerYear && (
                             <div>
                               <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 3 }}>Annual Price (WAC)</div>
-                              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-display)" }}>{fmtMoney(active.marketContext.pricingPerYear)}/yr</div>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-display)" }}>{fmtPrice(active.marketContext.pricingPerYear)}/yr</div>
                             </div>
                           )}
                           {active.marketContext.patientPopDesc && (

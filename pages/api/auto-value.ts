@@ -227,9 +227,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
-      // For synthetic stub, use Claude's summary-derived indication name
+      // For synthetic stub, use Claude's indication from reasons/summary, fallback to drug name
       name: (usingSyntheticStub
-        ? (analysis.peakSalesEstimates?.[rank]?.basis?.match(/\b(?:anxiety|depression|Alzheimer|epilepsy|NSCLC|cancer|\w+ disease)\b/i)?.[0] || drug)
+        ? (Object.values(analysis.reasons || {})[rank] as string | undefined)?.match(/for\s+([^.;,]+)/i)?.[1]?.trim()
+          || analysis.summary?.match(/for\s+([^.;,]+)/i)?.[1]?.trim()
+          || drug
         : trial.conditions?.[0]) || trial.nctId,
       // For already-launched indications (estimatedLaunchYear undefined), use current year
       // so the DCF model can still compute revenue. Mark them as approved.

@@ -183,8 +183,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Attach raw sources for each indication
     const withSources = aligned.map((ind: any, i: number) => {
       const allRaw = [...(indicationsWithResults[i]?.analyst || []), ...(indicationsWithResults[i]?.epidemiology || []), ...(indicationsWithResults[i]?.comps || [])];
+      const IRRELEVANT_DOMAINS = ["wsj.com", "reuters.com/markets", "bloomberg.com/news/articles", "loreal", "l-oreal", "cosmetics", "beauty", "fashion"];
       const extraSources = allRaw
-        .filter((r: any) => r.url)
+        .filter((r: any) => r.url && !IRRELEVANT_DOMAINS.some(d => r.url.toLowerCase().includes(d)))
         .slice(0, 4)
         .map((r: any) => ({ label: r.title || r.url, url: r.url }));
       return {
