@@ -139,14 +139,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       runLoePipeline(drug, sponsor || undefined).catch(() => null),
     ]);
 
-    if (trials.length === 0) {
-      return res.status(200).json({
-        indications: [], loeYear: null, loeSource: loeResult, summary: "",
-        message: `No experimental trials found for "${drug}". Try the generic name.`,
-      });
-    }
+    // If no CT.gov trials found, use a synthetic stub so Claude can still build
+    // a model from training knowledge (common for approved drugs with no ongoing trials)
+    const syntheticStub: CtgovTrial[] = trials.length === 0 ? [{
+      nctId: "N/A",
+      title: `${drug} — approved product, no active trials`,
+      phase: "Approved",
+      statusLabel: "Approved",
+      conditions: [drug],
+      sponsor: sponsor || undefined,
+      sources: [],
+    } as any] : [];
 
-    const candidates = trials.slice(0, 40);
+    const candidates = trials.length > 0 ? trials.slice(0, 40) : syntheticStub;
+    const usingSyntheticStub = trials.length === 0;
 
     // Skip per-indication Tavily revenue searches here — they add 10-20s and the
     // deep revenue analysis (onResearchRevenue / revenue-assumptions API) runs right
@@ -154,7 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const revenueSearches = candidates.map(() => [] as any[]);
 
     // ── Round 2: Claude ranks trials + estimates peak sales from training knowledge ──
-    const analysis = await analyzeWithClaude(drug, phase, candidates, revenueSearches);
+    const analysis = await analyzeWithClaude(drug, usingSyntheticStub ? "Approved" : phase, candidates, revenueSearches);
 
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
     const recommendedRaw = (analysis.recommendedIndex ?? 1) - 1;
@@ -168,7 +174,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .replace(/\s+/g, " ").trim();
 
     const seenIndications = new Set<string>();
-    const selectedTrials = indices
+    let selectedTrials = indices
       .filter((i: number) => i >= 0 && i < candidates.length)
       .filter((i: number) => {
         const key = normalizeInd(candidates[i].conditions?.[0] || candidates[i].nctId);
@@ -181,6 +187,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         reason: analysis.reasons?.[candidates[i].nctId] || "",
         salesEstimate: analysis.peakSalesEstimates?.[rank] || null,
       }));
+
+    // If Claude returned no selections (e.g. synthetic stub path), use all candidates
+    if (selectedTrials.length === 0 && candidates.length > 0) {
+      selectedTrials = candidates.slice(0, 5).map((trial, rank) => ({
+        trial,
+        reason: analysis.summary || "",
+        salesEstimate: analysis.peakSalesEstimates?.[rank] || null,
+      }));
+    }
 
     const recommendedNctId = (recommendedRaw >= 0 && recommendedRaw < candidates.length)
       ? candidates[recommendedRaw].nctId
@@ -210,9 +225,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const currentYear = new Date().getFullYear();
     const effectivelyApproved = (analysis.phase || "").toLowerCase().includes("approved");
 
-    const indications = selectedTrials.map(({ trial, reason, salesEstimate }) => ({
+    const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
-      name: trial.conditions?.[0] || trial.nctId,
+      // For synthetic stub, use Claude's summary-derived indication name
+      name: (usingSyntheticStub
+        ? (analysis.peakSalesEstimates?.[rank]?.basis?.match(/\b(?:anxiety|depression|Alzheimer|epilepsy|NSCLC|cancer|\w+ disease)\b/i)?.[0] || drug)
+        : trial.conditions?.[0]) || trial.nctId,
       // For already-launched indications (estimatedLaunchYear undefined), use current year
       // so the DCF model can still compute revenue. Mark them as approved.
       launchYear: trial.estimatedLaunchYear ?? (effectivelyApproved ? currentYear : undefined),
