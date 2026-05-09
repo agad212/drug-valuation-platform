@@ -42,11 +42,12 @@ async function analyzeWithClaude(
 ${isApproved ? "This drug is already approved. Identify pivotal approved indications and label expansions." : "This is a pipeline drug. Focus on Phase 3 registration trials."}
 
 Your job:
-1. Select 5-7 most relevant trials for valuation
-2. Identify one recommended trial to start with
+1. Select 5-7 most relevant trials for valuation. If strategy/investor docs mention additional indications not in CT.gov, create synthetic entries for them (nctId = "PIPELINE-{n}").
+2. Identify one recommended trial/indication to start with
 3. Estimate peak annual sales per selected indication using web data and your training knowledge
 4. For approved drugs: peak sales = total revenue in that indication at peak (use analyst breakdowns by tumor type if available)
 5. For pipeline: estimate addressable market × realistic penetration
+6. Extract precise mechanism of action from MOA web context — never use vague disclaimers
 
 Peak sales guidelines:
 - Major oncology indication (NSCLC, CRC, breast): $1B–$15B range typical for blockbusters
@@ -60,7 +61,7 @@ TRIALS (${candidates.length} experimental-arm matches):
 ${trialList}
 
 REVENUE SEARCH RESULTS (per indication):
-${revenueContext}${webContext ? `\n\nWEB CONTEXT (from patent/market search):\n${webContext}` : ""}
+${revenueContext}${webContext ? `\n\nWEB CONTEXT — use this to:\n1. Extract mechanism: identify the specific MOA (e.g. "PD-1 inhibitor", "GABA-A modulator", "molecular photoswitch") — be precise, not generic\n2. Identify ALL indications from strategy docs/investor filings, not just what's in CT.gov\n3. Inform peak sales estimates\n\n${webContext}` : ""}
 
 Respond ONLY with valid JSON:
 {
@@ -68,7 +69,7 @@ Respond ONLY with valid JSON:
   "recommendedIndex": 2,
   "reasons": { "NCT...": "one sentence why relevant for valuation" },
   "summary": "2-3 sentences on clinical landscape",
-  "mechanism": "brief mechanism of action e.g. PD-1 inhibitor, EGFR inhibitor, ADC",
+  "mechanism": "precise MOA from web context — e.g. 'molecular photoswitch / retinal photoactivation', 'PD-1 inhibitor', 'GABA-A modulator / benzodiazepine'. Never use vague disclaimers. Use web context above.",
   "phase": "MUST be exactly one of: Preclinical | Phase 1 | Phase 2 | Phase 3 | Filed | Approved",
   "peakSalesEstimates": [
     { "peakSalesM": 8000, "confidence": "high", "basis": "Goldman Sachs projects $8B peak NSCLC 1L", "devCostM": 500 },
@@ -134,10 +135,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const isApproved = phase === "Approved";
 
   try {
-    // ── Round 1: CT.gov + full LOE pipeline in parallel ────────────────────
-    const [trials, loeResult] = await Promise.all([
+    // ── Round 1: CT.gov + LOE pipeline + drug intelligence searches in parallel ──
+    const tavilyKey = process.env.TAVILY_API_KEY;
+    async function tavilySearch(query: string, domains?: string[]): Promise<any[]> {
+      if (!tavilyKey) return [];
+      try {
+        const body: any = { api_key: tavilyKey, query, search_depth: "basic", max_results: 5 };
+        if (domains?.length) body.include_domains = domains;
+        const r = await fetch("https://api.tavily.com/search", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        if (!r.ok) return [];
+        const d = await r.json();
+        return d.results || [];
+      } catch { return []; }
+    }
+
+    const [trials, loeResult, mechResults, strategyResults] = await Promise.all([
       searchTrialsByDrug(drug, { isApproved }).catch(() => [] as CtgovTrial[]),
       runLoePipeline(drug, sponsor || undefined).catch(() => null),
+      // Mechanism of action: scientific + prescribing info sources
+      tavilySearch(
+        `"${drug}" mechanism of action pharmacology target pathway${sponsor ? ` "${sponsor}"` : ""}`,
+        ["pubmed.ncbi.nlm.nih.gov", "drugs.com", "accessdata.fda.gov", "ema.europa.eu", "nature.com", "nejm.org", "clinicaltrials.gov"]
+      ).catch(() => [] as any[]),
+      // Pipeline strategy: investor decks, SEC filings, press releases
+      tavilySearch(
+        `"${drug}" pipeline indications strategy development${sponsor ? ` "${sponsor}"` : ""} investor SEC 10-K annual report`,
+        ["sec.gov", "ir.kiorapharma.com", "investors.kiorapharma.com", "seekingalpha.com", "businesswire.com", "prnewswire.com", "globenewswire.com"]
+      ).catch(() => [] as any[]),
     ]);
 
     // If no CT.gov trials found, use a synthetic stub so Claude can still build
@@ -155,19 +181,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const candidates = trials.length > 0 ? trials.slice(0, 40) : syntheticStub;
     const usingSyntheticStub = trials.length === 0;
 
-    // Skip per-indication Tavily revenue searches here — they add 10-20s and the
-    // deep revenue analysis (onResearchRevenue / revenue-assumptions API) runs right
-    // after auto-value completes. Claude uses training knowledge for initial estimates.
     const revenueSearches = candidates.map(() => [] as any[]);
 
-    // For stub path, extract market intelligence from LOE pipeline to give Claude drug context
-    const webContext = usingSyntheticStub && loeResult?.patents?.marketIntelligence?.length
-      ? loeResult.patents.marketIntelligence
-          .map((m: any) => `- ${m.source}: ${m.snippet}`)
-          .join("\n")
-      : undefined;
+    // Assemble web context: mechanism + strategy + LOE market intel
+    const mechSnippets = mechResults.map((r: any) =>
+      `[MOA] ${r.title || ""}: ${(r.content || "").slice(0, 300)}`
+    ).join("\n");
+    const strategySnippets = strategyResults.map((r: any) =>
+      `[STRATEGY] ${r.title || ""}: ${(r.content || "").slice(0, 400)}`
+    ).join("\n");
+    const loeSnippets = loeResult?.patents?.marketIntelligence?.length
+      ? loeResult.patents.marketIntelligence.map((m: any) => `[MARKET] ${m.source}: ${m.snippet}`).join("\n")
+      : "";
+    const webContext = [mechSnippets, strategySnippets, loeSnippets].filter(Boolean).join("\n") || undefined;
 
-    // ── Round 2: Claude ranks trials + estimates peak sales from training knowledge ──
+    // ── Round 2: Claude ranks trials + estimates peak sales ────────────────
     const analysis = await analyzeWithClaude(drug, usingSyntheticStub ? "Approved" : phase, candidates, revenueSearches, webContext);
 
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
@@ -195,6 +223,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         reason: analysis.reasons?.[candidates[i].nctId] || "",
         salesEstimate: analysis.peakSalesEstimates?.[rank] || null,
       }));
+
+    // Claude may reference synthetic PIPELINE-{n} indices beyond candidates array.
+    // Build those as stub trials using indication names from reasons/peakSalesBasis.
+    const extraPipelineTrials: typeof selectedTrials = (analysis.selectedIndices || [])
+      .map((i: number) => i - 1)
+      .filter((i: number) => i >= candidates.length)
+      .map((i: number, rank: number) => {
+        const basis = analysis.peakSalesEstimates?.[rank]?.basis || "";
+        const indName = basis.match(/(?:for|treating)\s+([^.,;(]+)/i)?.[1]?.trim() || `Pipeline indication ${rank + 1}`;
+        const key = normalizeInd(indName);
+        if (seenIndications.has(key)) return null;
+        seenIndications.add(key);
+        return {
+          trial: {
+            nctId: `PIPELINE-${rank + 1}`, title: indName, phase: phase,
+            statusLabel: "Pipeline", conditions: [indName], sponsor: sponsor || undefined, sources: [],
+          } as any,
+          reason: analysis.reasons?.[`PIPELINE-${rank + 1}`] || "",
+          salesEstimate: analysis.peakSalesEstimates?.[rank] || null,
+        };
+      })
+      .filter(Boolean) as typeof selectedTrials;
+    selectedTrials = [...selectedTrials, ...extraPipelineTrials];
 
     // If Claude returned no selections (e.g. synthetic stub path), use all candidates
     if (selectedTrials.length === 0 && candidates.length > 0) {
