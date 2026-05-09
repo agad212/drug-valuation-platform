@@ -94,10 +94,10 @@ CURRENT COMPUTED VALUES (read these exactly — do not recalculate):
 INDICATIONS:
 ${indications || "  None loaded"}
 
-AUTO-VALUATION TRIGGER: If the user's message is asking you to value, model, analyze, or research a specific drug — or if they just type a drug/compound name with no existing asset loaded — include this tag at the very end of your response:
+AUTO-VALUATION TRIGGER: If the user's message looks like a drug or compound name — even if you don't recognize it — trigger auto-value immediately. Do NOT ask for clarification. The pipeline will look it up. Include this tag at the very end of your response:
 <auto-value drug="DRUG_NAME" sponsor="SPONSOR_IF_MENTIONED" phase="PHASE_IF_MENTIONED"/>
-Use this when: user types a drug name, says "value X", "model X", "what's X worth", "analyze X", "run X for Y indication", or similar. Omit sponsor/phase attributes if not mentioned.
-${hasAsset ? "An asset is already loaded — do NOT trigger auto-value unless the user is explicitly asking to switch to a different drug." : "No asset is loaded yet — if the user mentions any drug name or asks to value something, trigger auto-value."}
+Trigger when: user types 1–4 words with no question mark and no existing asset loaded, says "value X", "model X", "what's X worth", "analyze X", "run X", or anything that looks like a drug/compound name. When in doubt, trigger it — the pipeline handles unknown names gracefully.
+${hasAsset ? "An asset is already loaded — do NOT trigger auto-value unless the user is explicitly asking to switch to a different drug." : "No asset is loaded yet — treat any short message (1–4 words, no question mark) as a drug name and trigger auto-value immediately without asking questions."}
 
 FIELD UPDATE CAPABILITY: If the user asks you to set, update, or suggest a value for any model field, include a JSON block at the END of your response:
 <field-update>{"peakSales": 2000000000, "loeYear": 2031, "launchYear": 2027}</field-update>
