@@ -8,7 +8,8 @@ async function analyzeWithClaude(
   drug: string,
   phase: string,
   trials: CtgovTrial[],
-  revenueSearches: any[][]
+  revenueSearches: any[][],
+  webContext?: string
 ): Promise<{
   selectedIndices: number[];
   recommendedIndex: number;
@@ -59,7 +60,7 @@ TRIALS (${candidates.length} experimental-arm matches):
 ${trialList}
 
 REVENUE SEARCH RESULTS (per indication):
-${revenueContext}
+${revenueContext}${webContext ? `\n\nWEB CONTEXT (from patent/market search):\n${webContext}` : ""}
 
 Respond ONLY with valid JSON:
 {
@@ -159,8 +160,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // after auto-value completes. Claude uses training knowledge for initial estimates.
     const revenueSearches = candidates.map(() => [] as any[]);
 
+    // For stub path, extract market intelligence from LOE pipeline to give Claude drug context
+    const webContext = usingSyntheticStub && loeResult?.patents?.marketIntelligence?.length
+      ? loeResult.patents.marketIntelligence
+          .map((m: any) => `- ${m.source}: ${m.snippet}`)
+          .join("\n")
+      : undefined;
+
     // ── Round 2: Claude ranks trials + estimates peak sales from training knowledge ──
-    const analysis = await analyzeWithClaude(drug, usingSyntheticStub ? "Approved" : phase, candidates, revenueSearches);
+    const analysis = await analyzeWithClaude(drug, usingSyntheticStub ? "Approved" : phase, candidates, revenueSearches, webContext);
 
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
     const recommendedRaw = (analysis.recommendedIndex ?? 1) - 1;

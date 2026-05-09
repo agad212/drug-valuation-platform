@@ -602,13 +602,10 @@ export default function HomePage() {
       setRevenueAnalysis(data);
       const withEstimates = data.indications.filter(i => i.peakSalesM > 0).length;
 
-      // Auto-apply peak sales to indications that have $0 (e.g. stub path where Claude had no data)
+      // Auto-apply peak sales from revenue analysis — it's more researched than auto-value estimates
       setV((cur) => {
         if (!cur.indications?.length) return cur;
-        const anyMissing = cur.indications.some(ind => !ind.peakSales || ind.peakSales === 0);
-        if (!anyMissing) return cur;
         const updated = cur.indications.map((ind, i) => {
-          if (ind.peakSales && ind.peakSales > 0) return ind;
           const estimate = data.indications[i]?.peakSalesM;
           return estimate && estimate > 0 ? { ...ind, peakSales: Math.round(estimate * 1e6) } : ind;
         });
