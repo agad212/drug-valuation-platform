@@ -178,7 +178,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sources: [],
     } as any] : [];
 
-    const candidates = trials.length > 0 ? trials.slice(0, 40) : syntheticStub;
+    // Extract additional indications mentioned in strategy/IR docs that aren't in CT.gov
+    const strategyText = strategyResults.map((r: any) => (r.content || "").slice(0, 600)).join("\n");
+    let pipelineIndications: string[] = [];
+    if (strategyText && process.env.ANTHROPIC_API_KEY) {
+      try {
+        const extractRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+          body: JSON.stringify({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 300,
+            messages: [{ role: "user", content: `Extract all disease indications or therapeutic areas mentioned for "${drug}" in the text below. Return ONLY a JSON array of strings, e.g. ["Retinitis Pigmentosa","Choroideremia","Stargardt disease"]. Include only medical indications, not trial names or company names.\n\nText:\n${strategyText}` }],
+          }),
+        });
+        if (extractRes.ok) {
+          const extractData = await extractRes.json();
+          const extractText = extractData?.content?.[0]?.text || "[]";
+          const match = extractText.match(/\[[\s\S]*\]/);
+          if (match) pipelineIndications = JSON.parse(match[0]);
+        }
+      } catch { /* ignore */ }
+    }
+
+    // Build synthetic trial stubs for pipeline indications not already in CT.gov
+    const ctgovConditions = new Set(trials.flatMap((t: CtgovTrial) => (t.conditions || []).map((c: string) => c.toLowerCase())));
+    const pipelineStubs: CtgovTrial[] = pipelineIndications
+      .filter(ind => !ctgovConditions.has(ind.toLowerCase()))
+      .slice(0, 4)
+      .map((ind, i) => ({
+        nctId: `PIPELINE-${i + 1}`,
+        title: `${drug} — ${ind} (pipeline indication from investor/strategy docs)`,
+        phase, statusLabel: "Pipeline",
+        conditions: [ind],
+        sponsor: sponsor || undefined,
+        sources: [],
+      } as any));
+
+    const baseCandidates = trials.length > 0 ? trials.slice(0, 35) : syntheticStub;
+    const candidates = [...baseCandidates, ...pipelineStubs];
     const usingSyntheticStub = trials.length === 0;
 
     const revenueSearches = candidates.map(() => [] as any[]);
@@ -223,29 +261,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         reason: analysis.reasons?.[candidates[i].nctId] || "",
         salesEstimate: analysis.peakSalesEstimates?.[rank] || null,
       }));
-
-    // Claude may reference synthetic PIPELINE-{n} indices beyond candidates array.
-    // Build those as stub trials using indication names from reasons/peakSalesBasis.
-    const extraPipelineTrials: typeof selectedTrials = (analysis.selectedIndices || [])
-      .map((i: number) => i - 1)
-      .filter((i: number) => i >= candidates.length)
-      .map((i: number, rank: number) => {
-        const basis = analysis.peakSalesEstimates?.[rank]?.basis || "";
-        const indName = basis.match(/(?:for|treating)\s+([^.,;(]+)/i)?.[1]?.trim() || `Pipeline indication ${rank + 1}`;
-        const key = normalizeInd(indName);
-        if (seenIndications.has(key)) return null;
-        seenIndications.add(key);
-        return {
-          trial: {
-            nctId: `PIPELINE-${rank + 1}`, title: indName, phase: phase,
-            statusLabel: "Pipeline", conditions: [indName], sponsor: sponsor || undefined, sources: [],
-          } as any,
-          reason: analysis.reasons?.[`PIPELINE-${rank + 1}`] || "",
-          salesEstimate: analysis.peakSalesEstimates?.[rank] || null,
-        };
-      })
-      .filter(Boolean) as typeof selectedTrials;
-    selectedTrials = [...selectedTrials, ...extraPipelineTrials];
 
     // If Claude returned no selections (e.g. synthetic stub path), use all candidates
     if (selectedTrials.length === 0 && candidates.length > 0) {
