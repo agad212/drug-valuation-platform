@@ -178,28 +178,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sources: [],
     } as any] : [];
 
-    // Extract additional indications mentioned in strategy/IR docs that aren't in CT.gov
-    const strategyText = strategyResults.map((r: any) => (r.content || "").slice(0, 600)).join("\n");
-    let pipelineIndications: string[] = [];
-    if (strategyText && process.env.ANTHROPIC_API_KEY) {
-      try {
-        const extractRes = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-          body: JSON.stringify({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 300,
-            messages: [{ role: "user", content: `Extract all disease indications or therapeutic areas mentioned for "${drug}" in the text below. Return ONLY a JSON array of strings, e.g. ["Retinitis Pigmentosa","Choroideremia","Stargardt disease"]. Include only medical indications, not trial names or company names.\n\nText:\n${strategyText}` }],
-          }),
-        });
-        if (extractRes.ok) {
-          const extractData = await extractRes.json();
-          const extractText = extractData?.content?.[0]?.text || "[]";
-          const match = extractText.match(/\[[\s\S]*\]/);
-          if (match) pipelineIndications = JSON.parse(match[0]);
-        }
-      } catch { /* ignore */ }
+    // Extract additional indications from strategy text via regex — no extra API call
+    const strategyText = [...strategyResults, ...mechResults]
+      .map((r: any) => `${r.title || ""} ${r.content || ""}`.slice(0, 800))
+      .join(" ");
+
+    // Scan for known disease/indication patterns in strategy text
+    const INDICATION_PATTERNS = [
+      /retinitis pigmentosa/gi, /choroideremia/gi, /stargardt(?:\s+disease)?/gi,
+      /macular degeneration/gi, /leber(?:\s+congenital\s+amaurosis)?/gi,
+      /usher syndrome/gi, /inherited retinal dystrophy/gi, /inherited retinal disease/gi,
+      /cone[- ]rod dystrophy/gi, /achromatopsia/gi,
+      // Oncology
+      /non[- ]small[- ]cell lung/gi, /small[- ]cell lung/gi, /colorectal cancer/gi,
+      /breast cancer/gi, /melanoma/gi, /hepatocellular/gi, /ovarian cancer/gi,
+      /multiple myeloma/gi, /diffuse large b[- ]cell/gi, /follicular lymphoma/gi,
+      /aml|acute myeloid/gi, /cll|chronic lymphocytic/gi,
+      // Neuro/CNS
+      /alzheimer(?:'s)?(?: disease)?/gi, /parkinson(?:'s)?(?: disease)?/gi,
+      /multiple sclerosis/gi, /amyotrophic lateral sclerosis|als\b/gi,
+      // Immunology
+      /rheumatoid arthritis/gi, /psoriasis/gi, /crohn(?:'s)?(?: disease)?/gi,
+      /ulcerative colitis/gi, /atopic dermatitis/gi,
+      // Rare disease
+      /duchenne muscular dystrophy/gi, /spinal muscular atrophy/gi,
+      /phenylketonuria/gi, /gaucher(?:'s)?(?: disease)?/gi,
+      // Cardio/metabolic
+      /heart failure/gi, /type 2 diabetes/gi, /obesity/gi, /nash|mash/gi,
+    ];
+    const foundIndications = new Set<string>();
+    for (const pattern of INDICATION_PATTERNS) {
+      const matches = strategyText.match(pattern);
+      if (matches) {
+        // Normalize to title case
+        const normalized = matches[0].replace(/\b\w/g, c => c.toUpperCase()).trim();
+        foundIndications.add(normalized);
+      }
     }
+    const pipelineIndications = [...foundIndications];
 
     // Build synthetic trial stubs for pipeline indications not already in CT.gov
     const ctgovConditions = new Set(trials.flatMap((t: CtgovTrial) => (t.conditions || []).map((c: string) => c.toLowerCase())));
