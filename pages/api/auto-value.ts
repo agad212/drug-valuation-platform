@@ -193,10 +193,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       /non[- ]small[- ]cell lung/gi, /small[- ]cell lung/gi, /colorectal cancer/gi,
       /breast cancer/gi, /melanoma/gi, /hepatocellular/gi, /ovarian cancer/gi,
       /multiple myeloma/gi, /diffuse large b[- ]cell/gi, /follicular lymphoma/gi,
-      /aml|acute myeloid/gi, /cll|chronic lymphocytic/gi,
+      /\baml\b|acute myeloid/gi, /\bcll\b|chronic lymphocytic/gi,
       // Neuro/CNS
       /alzheimer(?:'s)?(?: disease)?/gi, /parkinson(?:'s)?(?: disease)?/gi,
-      /multiple sclerosis/gi, /amyotrophic lateral sclerosis|als\b/gi,
+      /multiple sclerosis/gi, /amyotrophic lateral sclerosis|\bals\b/gi,
       // Immunology
       /rheumatoid arthritis/gi, /psoriasis/gi, /crohn(?:'s)?(?: disease)?/gi,
       /ulcerative colitis/gi, /atopic dermatitis/gi,
@@ -218,9 +218,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const pipelineIndications = [...foundIndications];
 
     // Build synthetic trial stubs for pipeline indications not already in CT.gov
-    const ctgovConditions = new Set(trials.flatMap((t: CtgovTrial) => (t.conditions || []).map((c: string) => c.toLowerCase())));
+    const ctgovConditionText = trials.flatMap((t: CtgovTrial) => (t.conditions || [])).join(" ").toLowerCase();
     const pipelineStubs: CtgovTrial[] = pipelineIndications
-      .filter(ind => !ctgovConditions.has(ind.toLowerCase()))
+      .filter(ind => !ctgovConditionText.includes(ind.toLowerCase().split(" ")[0]))
       .slice(0, 4)
       .map((ind, i) => ({
         nctId: `PIPELINE-${i + 1}`,
