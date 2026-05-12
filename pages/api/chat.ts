@@ -129,7 +129,19 @@ Be concise and practical. Lead with the answer — one or two sentences max for 
 
     if (!r.ok) {
       const txt = await r.text();
-      return res.status(200).json({ message: `Claude error: ${txt}` });
+      let friendlyMsg = "Claude is temporarily unavailable. Please try again in a moment.";
+      try {
+        const errJson = JSON.parse(txt);
+        const errType = errJson?.error?.type;
+        if (errType === "overloaded_error") {
+          friendlyMsg = "Claude is overloaded right now. Please try again in a few seconds.";
+        } else if (errType === "rate_limit_error") {
+          friendlyMsg = "Rate limit reached. Please wait a moment and try again.";
+        } else if (errType === "authentication_error") {
+          friendlyMsg = "API key error — check ANTHROPIC_API_KEY in Vercel env vars.";
+        }
+      } catch { /* use default friendlyMsg */ }
+      return res.status(200).json({ message: friendlyMsg });
     }
 
     const data = await r.json();
