@@ -91,7 +91,7 @@ async function analyzeRevenueWithClaude(
       "confidence": "high" | "medium" | "low",
       "reasoning": string,
       "analystEstimates": [{ "source": string, "url": string|null, "estimateM": number, "year": number|null, "quote": string }],
-      "marketContext": { "tamM": number|null, "penetrationPct": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null /* full USD e.g. 150000 for $150K/yr, 450000 for $450K/yr */, "competitive": string|null },
+      "marketContext": { "tamM": number|null /* drug-specific addressable market in $M — eligible patients × annual price. MUST satisfy: tamM × penetrationPct / 100 ≈ peakSalesM. Do NOT use total disease category market. */, "penetrationPct": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null /* full USD e.g. 150000 for $150K/yr, 450000 for $450K/yr */, "competitive": string|null },
       "comps": [{ "drug": string, "indication": string, "peakSalesM": number, "rationale": string }],
       "sources": [{ "label": string, "url": string|null }]
     }
