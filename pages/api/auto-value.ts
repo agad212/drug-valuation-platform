@@ -161,8 +161,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ).catch(() => [] as any[]),
       // Pipeline strategy: corporate presentations, investor decks, SEC filings, press releases
       // No domain restriction — lets Tavily find small biotech IR sites, slide decks, etc.
+      // If sponsor looks like a ticker (all caps, ≤5 chars), also include it as a keyword so
+      // Tavily can find the company's full name and associated pages (e.g. "KRSA" → Korsana)
       tavilySearch(
-        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} pipeline indications strategy "corporate presentation" OR "investor presentation" OR "R&D day" OR "pipeline day" OR "10-K" OR "annual report" OR "press release"`
+        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} pipeline indications strategy "corporate presentation" OR "investor presentation" OR "R&D day" OR "pipeline day" OR "10-K" OR "annual report" OR "press release" OR "announced" OR "IND filing"`
       ).catch(() => [] as any[]),
     ]);
 
@@ -250,7 +252,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const webContext = [mechSnippets, strategySnippets, loeSnippets].filter(Boolean).join("\n") || undefined;
 
     // ── Round 2: Claude ranks trials + estimates peak sales ────────────────
-    const analysis = await analyzeWithClaude(drug, usingSyntheticStub ? "Approved" : phase, candidates, revenueSearches, webContext);
+    // Only treat as Approved if explicitly passed — don't assume Approved just because CT.gov returned nothing
+    // (newly announced pipeline drugs also have no trials yet)
+    const analysis = await analyzeWithClaude(drug, phase, candidates, revenueSearches, webContext);
 
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
     const recommendedRaw = (analysis.recommendedIndex ?? 1) - 1;
