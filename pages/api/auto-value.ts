@@ -162,7 +162,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Pipeline strategy: investor decks, SEC filings, press releases
       tavilySearch(
         `"${drug}" pipeline indications strategy development${sponsor ? ` "${sponsor}"` : ""} investor SEC 10-K annual report`,
-        ["sec.gov", "ir.kiorapharma.com", "investors.kiorapharma.com", "seekingalpha.com", "businesswire.com", "prnewswire.com", "globenewswire.com"]
+        ["sec.gov", "seekingalpha.com", "businesswire.com", "prnewswire.com", "globenewswire.com", "fiercepharma.com", "evaluate.com", "biopharmadive.com"]
       ).catch(() => [] as any[]),
     ]);
 
