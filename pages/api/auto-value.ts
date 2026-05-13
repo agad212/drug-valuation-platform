@@ -159,10 +159,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         `"${drug}" mechanism of action pharmacology target pathway${sponsor ? ` "${sponsor}"` : ""}`,
         ["pubmed.ncbi.nlm.nih.gov", "drugs.com", "accessdata.fda.gov", "ema.europa.eu", "nature.com", "nejm.org", "clinicaltrials.gov"]
       ).catch(() => [] as any[]),
-      // Pipeline strategy: investor decks, SEC filings, press releases
+      // Pipeline strategy: corporate presentations, investor decks, SEC filings, press releases
+      // No domain restriction — lets Tavily find small biotech IR sites, slide decks, etc.
       tavilySearch(
-        `"${drug}" pipeline indications strategy development${sponsor ? ` "${sponsor}"` : ""} investor SEC 10-K annual report`,
-        ["sec.gov", "seekingalpha.com", "businesswire.com", "prnewswire.com", "globenewswire.com", "fiercepharma.com", "evaluate.com", "biopharmadive.com"]
+        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} pipeline indications strategy "corporate presentation" OR "investor presentation" OR "R&D day" OR "pipeline day" OR "10-K" OR "annual report" OR "press release"`
       ).catch(() => [] as any[]),
     ]);
 
