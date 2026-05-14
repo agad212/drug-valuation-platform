@@ -47,7 +47,9 @@ Your job:
 3. Estimate peak annual sales per selected indication using web data and your training knowledge
 4. For approved drugs: peak sales = total revenue in that indication at peak (use analyst breakdowns by tumor type if available)
 5. For pipeline: estimate addressable market × realistic penetration
-6. Extract precise mechanism of action from MOA web context — never use vague disclaimers
+6. Extract precise mechanism of action — CRITICAL: use your training knowledge if web context is missing or vague. Never say "unknown" or "insufficient context". Make your best inference from the drug name, sponsor, and any available signals. If truly nothing is known, write "Unknown — pre-IND asset with no public disclosure".
+
+TRAINING KNOWLEDGE FALLBACK: If web search results are empty or unhelpful, use everything you know from training about this drug and sponsor. Many recently announced drugs are in your training data. Reason from drug name conventions, company pipeline history, and therapeutic area focus to make educated estimates. Always provide a best-effort answer — never refuse to estimate just because search results are empty.
 
 Peak sales guidelines:
 - Major oncology indication (NSCLC, CRC, breast): $1B–$15B range typical for blockbusters

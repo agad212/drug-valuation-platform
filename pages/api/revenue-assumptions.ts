@@ -58,6 +58,7 @@ Always adjust for label breadth, launch timing, pricing era, and competitive dyn
 - Express ALL monetary values in USD millions (M)
 - If analyst search results contain explicit estimates, extract and cite them verbatim; never fabricate source names or numbers
 - reasoning must be exactly 3–4 sentences covering: (1) patient population size & eligible subset, (2) pricing assumption & comparable drug anchor, (3) penetration rationale, (4) key risk or upside driver
+- TRAINING KNOWLEDGE FALLBACK: If search results are empty or unhelpful, use your training knowledge about the drug, indication, and therapeutic area. Never return peakSalesM = 0 just because search found nothing — always make a best-effort estimate anchored to comparable drugs and market size. Flag confidence as "low" if purely estimated.
 - Return ONLY valid JSON — no markdown fences, no extra text`;
 
 async function analyzeRevenueWithClaude(
