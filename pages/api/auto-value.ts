@@ -151,17 +151,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch { return []; }
     }
 
+    // Build search variants: hyphenated (KRSA-028), spaced (KRSA 028), and no-separator (KRSA028)
+    const drugVariants = Array.from(new Set([
+      drug,
+      drug.replace(/-/g, " "),
+      drug.replace(/-/g, ""),
+    ]));
+    const drugQuery = drugVariants.map(v => `"${v}"`).join(" OR ");
+    const sponsorClause = sponsor ? ` "${sponsor}"` : "";
+
     const [trials, loeResult, mechResults, strategyResults] = await Promise.all([
       searchTrialsByDrug(drug, { isApproved }).catch(() => [] as CtgovTrial[]),
       runLoePipeline(drug, sponsor || undefined).catch(() => null),
-      // Mechanism of action: broad search first (no domain restriction) so news/press releases
-      // about newly announced drugs surface, then scientific sources as fallback context
+      // Mechanism + indication: search all name variants, no domain restriction
       tavilySearch(
-        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} mechanism indication treats disease target`
+        `(${drugQuery})${sponsorClause} mechanism indication treats disease target`
       ).catch(() => [] as any[]),
-      // Pipeline strategy: plain search — no required phrases so Google-style results surface
+      // Pipeline/news: search all name variants + sponsor company name for small biotechs
       tavilySearch(
-        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} pipeline indication clinical development`
+        `(${drugQuery})${sponsorClause} pipeline indication clinical development announced`
       ).catch(() => [] as any[]),
     ]);
 
