@@ -154,17 +154,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const [trials, loeResult, mechResults, strategyResults] = await Promise.all([
       searchTrialsByDrug(drug, { isApproved }).catch(() => [] as CtgovTrial[]),
       runLoePipeline(drug, sponsor || undefined).catch(() => null),
-      // Mechanism of action: scientific + prescribing info sources
+      // Mechanism of action: broad search first (no domain restriction) so news/press releases
+      // about newly announced drugs surface, then scientific sources as fallback context
       tavilySearch(
-        `"${drug}" mechanism of action pharmacology target pathway${sponsor ? ` "${sponsor}"` : ""}`,
-        ["pubmed.ncbi.nlm.nih.gov", "drugs.com", "accessdata.fda.gov", "ema.europa.eu", "nature.com", "nejm.org", "clinicaltrials.gov"]
+        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} mechanism indication treats disease target`
       ).catch(() => [] as any[]),
-      // Pipeline strategy: corporate presentations, investor decks, SEC filings, press releases
-      // No domain restriction — lets Tavily find small biotech IR sites, slide decks, etc.
-      // If sponsor looks like a ticker (all caps, ≤5 chars), also include it as a keyword so
-      // Tavily can find the company's full name and associated pages (e.g. "KRSA" → Korsana)
+      // Pipeline strategy: plain search — no required phrases so Google-style results surface
       tavilySearch(
-        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} pipeline indications strategy "corporate presentation" OR "investor presentation" OR "R&D day" OR "pipeline day" OR "10-K" OR "annual report" OR "press release" OR "announced" OR "IND filing"`
+        `"${drug}"${sponsor ? ` "${sponsor}"` : ""} pipeline indication clinical development`
       ).catch(() => [] as any[]),
     ]);
 
