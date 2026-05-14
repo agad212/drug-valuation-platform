@@ -519,7 +519,8 @@ export default function HomePage() {
     const drug = drugOverride || v.asset || (v as any).name;
     if (!drug) { pushToast("Enter an Asset name first.", "error"); return null; }
     const sponsor = sponsorOverride || v.sponsor;
-    const phase = phaseOverride || v.phase || "Phase 2";
+    // If triggered from chat with a new drug name, don't inherit stale phase from previous valuation
+    const phase = phaseOverride || (drugOverride ? "Phase 2" : v.phase) || "Phase 2";
 
     setAutoLoading(true);
     setTrialResults(null);
