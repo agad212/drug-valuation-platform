@@ -169,12 +169,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ]);
 
     // If no CT.gov trials found, use a synthetic stub so Claude can still build
-    // a model from training knowledge (common for approved drugs with no ongoing trials)
+    // a model from training knowledge. Use the actual phase — don't assume Approved
+    // (newly announced pipeline drugs also have no CT.gov entries yet).
     const syntheticStub: CtgovTrial[] = trials.length === 0 ? [{
       nctId: "N/A",
-      title: `${drug} — approved product, no active trials`,
-      phase: "Approved",
-      statusLabel: "Approved",
+      title: isApproved
+        ? `${drug} — approved product, no active trials`
+        : `${drug} — pipeline asset, not yet in CT.gov (recently announced or pre-IND)`,
+      phase: isApproved ? "Approved" : phase,
+      statusLabel: isApproved ? "Approved" : "Pipeline",
       conditions: [drug],
       sponsor: sponsor || undefined,
       sources: [],
