@@ -2,39 +2,6 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 type Msg = { role: "user" | "assistant" | "system"; content: string };
 
-async function searchWeb(query: string, tavilyKey: string): Promise<string> {
-  try {
-    const r = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: tavilyKey,
-        query,
-        search_depth: "basic",
-        max_results: 5,
-      }),
-    });
-    if (!r.ok) return "";
-    const data = await r.json();
-    const results = (data.results || [])
-      .map((r: any) => `- ${r.title}: ${r.content} (${r.url})`)
-      .join("\n");
-    return results;
-  } catch {
-    return "";
-  }
-}
-
-function needsWebSearch(message: string): boolean {
-  const triggers = [
-    "latest", "recent", "current", "news", "approved", "approval", "fda",
-    "trial", "phase", "study", "result", "data", "price", "market", "stock",
-    "pipeline", "competitor", "deal", "acquisition", "partnership", "label",
-    "indication", "who", "when", "what happened",
-  ];
-  const lower = message.toLowerCase();
-  return triggers.some((t) => lower.includes(t));
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -46,19 +13,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       message: "ANTHROPIC_API_KEY is not set. Add it to Vercel env vars then redeploy.",
     });
-  }
-
-  const tavilyKey = process.env.TAVILY_API_KEY;
-  const lastUserMessage = [...(messages || [])].reverse().find((m) => m.role === "user")?.content || "";
-
-  let searchContext = "";
-  if (tavilyKey && needsWebSearch(lastUserMessage)) {
-    const asset = context?.payload?.asset || context?.payload?.name || "";
-    const query = asset ? `${asset} ${lastUserMessage}` : lastUserMessage;
-    const results = await searchWeb(query, tavilyKey);
-    if (results) {
-      searchContext = `\n\nWeb search results for "${query}":\n${results}\n\nUse these results to inform your answer and cite the URLs.`;
-    }
   }
 
   const hasAsset = !!(context?.payload?.asset || context?.payload?.name);
@@ -104,48 +58,66 @@ FIELD UPDATE CAPABILITY: If the user asks you to set, update, or suggest a value
 Available fields: peakSales (USD — updates the first/active indication's peak sales when indications exist), discountRate (decimal e.g. 0.10 for 10%), cogsPct (decimal), taxRate (decimal), workingCapitalPct (decimal), avgRoyalty (decimal), launchYear (integer), loeYear (integer), devCostPV (USD), phase ("Preclinical"/"Phase 1"/"Phase 2"/"Phase 3"/"Filed"/"Approved"), ptrs (decimal 0–1), asset (string), indication (string), mechanism (string), sponsor (string).
 Only include <field-update> when the user explicitly asks to change values.
 
-Be concise and practical. Lead with the answer — one or two sentences max for factual questions. Cite web search URLs when available.${searchContext}`;
+Be concise and practical. Lead with the answer — one or two sentences max for factual questions. Use web_search when you need current data. Cite URLs when available.`;
 
-  const claudeMessages = (messages || []).map((m: Msg) => ({
+  const claudeMessages: any[] = (messages || []).map((m: Msg) => ({
     role: m.role === "assistant" ? "assistant" : "user",
     content: m.content,
   }));
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: claudeMessages,
-      }),
-    });
+    // Agentic loop: Claude may use web_search before producing its final response
+    let raw = "No response.";
+    for (let i = 0; i < 8; i++) {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1024,
+          system: systemPrompt,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+          messages: claudeMessages,
+        }),
+      });
 
-    if (!r.ok) {
-      const txt = await r.text();
-      let friendlyMsg = "Claude is temporarily unavailable. Please try again in a moment.";
-      try {
-        const errJson = JSON.parse(txt);
-        const errType = errJson?.error?.type;
-        if (errType === "overloaded_error") {
-          friendlyMsg = "Claude is overloaded right now. Please try again in a few seconds.";
-        } else if (errType === "rate_limit_error") {
-          friendlyMsg = "Rate limit reached. Please wait a moment and try again.";
-        } else if (errType === "authentication_error") {
-          friendlyMsg = "API key error — check ANTHROPIC_API_KEY in Vercel env vars.";
-        }
-      } catch { /* use default friendlyMsg */ }
-      return res.status(200).json({ message: friendlyMsg });
+      if (!r.ok) {
+        const txt = await r.text();
+        let friendlyMsg = "Claude is temporarily unavailable. Please try again in a moment.";
+        try {
+          const errJson = JSON.parse(txt);
+          const errType = errJson?.error?.type;
+          if (errType === "overloaded_error") friendlyMsg = "Claude is overloaded right now. Please try again in a few seconds.";
+          else if (errType === "rate_limit_error") friendlyMsg = "Rate limit reached. Please wait a moment and try again.";
+          else if (errType === "authentication_error") friendlyMsg = "API key error — check ANTHROPIC_API_KEY in Vercel env vars.";
+        } catch { /* use default */ }
+        return res.status(200).json({ message: friendlyMsg });
+      }
+
+      const data = await r.json();
+      const content: any[] = data.content || [];
+
+      if (data.stop_reason === "end_turn") {
+        raw = content.filter((c) => c.type === "text").map((c) => c.text).join("") || "No response.";
+        break;
+      }
+
+      if (data.stop_reason === "tool_use") {
+        claudeMessages.push({ role: "assistant", content });
+        const toolResults = content
+          .filter((c) => c.type === "tool_use")
+          .map((c) => ({ type: "tool_result", tool_use_id: c.id, content: "" }));
+        if (toolResults.length > 0) claudeMessages.push({ role: "user", content: toolResults });
+        continue;
+      }
+
+      raw = content.filter((c) => c.type === "text").map((c) => c.text).join("") || "No response.";
+      break;
     }
-
-    const data = await r.json();
-    const raw = data?.content?.[0]?.text || "No response.";
 
     // Parse field-update block
     const fieldUpdateMatch = raw.match(/<field-update>([\s\S]*?)<\/field-update>/);

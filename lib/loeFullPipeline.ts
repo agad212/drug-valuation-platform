@@ -1,93 +1,29 @@
 import { inferLOE } from "./loeAdapter";
+import { callClaudeWithSearch } from "./claudeSearch";
 
-// ─── Google Patents search via Tavily ─────────────────────────────────────────
-
-async function searchGooglePatents(drugName: string, sponsor?: string) {
-  const tavilyKey = process.env.TAVILY_API_KEY;
-  if (!tavilyKey) return [];
-  const queries = [
-    `"${drugName}" compound patent composition filing date expiry${sponsor ? ` "${sponsor}"` : ""}`,
-    `"${drugName}" patent formulation method-of-use${sponsor ? ` "${sponsor}"` : ""}`,
-  ];
-  const allResults: any[] = [];
-  for (const query of queries) {
-    try {
-      const res = await fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: tavilyKey,
-          query,
-          search_depth: "basic",
-          include_domains: ["patents.google.com", "lens.org", "worldwide.espacenet.com"],
-          max_results: 7,
-        }),
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      allResults.push(...(data.results || []));
-    } catch { continue; }
-  }
-  const seen = new Set<string>();
-  return allResults.filter((r) => { if (seen.has(r.url)) return false; seen.add(r.url); return true; });
-}
-
-// ─── Public LOE estimates via Tavily web search ───────────────────────────────
-
-async function searchPublicLOEEstimates(drugName: string, sponsor?: string) {
-  const tavilyKey = process.env.TAVILY_API_KEY;
-  if (!tavilyKey) return [];
-  const queries = [
-    `"${drugName}" loss of exclusivity LOE date estimate${sponsor ? ` "${sponsor}"` : ""}`,
-    `"${drugName}" patent expiry biosimilar generic launch year${sponsor ? ` "${sponsor}"` : ""}`,
-  ];
-  const allResults: any[] = [];
-  for (const query of queries) {
-    try {
-      const res = await fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: tavilyKey, query, search_depth: "basic", max_results: 6 }),
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      allResults.push(...(data.results || []));
-    } catch { continue; }
-  }
-  const seen = new Set<string>();
-  return allResults.filter((r) => { if (seen.has(r.url)) return false; seen.add(r.url); return true; });
-}
-
-// ─── Claude patent + web analysis ────────────────────────────────────────────
+// ─── Claude patent + LOE analysis with native web search ──────────────────────
 
 async function analyzePatentsWithClaude(
   drugName: string,
   sponsor: string | undefined,
-  patentResults: any[],
-  webResults: any[],
   orangeBookLoe: string | null,
   bpciaFloor: string | null = null
 ) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY not set");
 
-  const patentList = patentResults.map((r, i) => {
-    const numMatch = r.url?.match(/patent\/([A-Z]{2}[\w]+)/);
-    const patentNum = numMatch ? numMatch[1] : "unknown";
-    return `[${i + 1}] ${patentNum}\nTitle: ${r.title || "N/A"}\nURL: ${r.url || ""}\nSnippet: ${(r.content || "").slice(0, 500)}`;
-  }).join("\n\n");
-
-  const webList = webResults.map((r, i) =>
-    `[W${i + 1}] ${r.title || "N/A"}\nURL: ${r.url || ""}\nSnippet: ${(r.content || "").slice(0, 400)}`
-  ).join("\n\n");
-
   const obContext = orangeBookLoe
-    ? `\n\nIMPORTANT: The FDA Orange Book has already confirmed LOE = ${orangeBookLoe}. Use the patents and market intelligence only for context.`
+    ? `\n\nIMPORTANT: The FDA Orange Book has already confirmed LOE = ${orangeBookLoe}. Use patent and market intelligence searches only for context.`
     : bpciaFloor
-    ? `\n\nNOTE: This is a biologic. BPCIA grants 12-year data exclusivity expiring ${bpciaFloor} — this is a regulatory FLOOR, not the patent LOE. Biosimilar entry is typically gated by compound patents, not just BPCIA. Use the patent data and market intelligence to estimate when compound/formulation patent protection actually ends. Your bestEstimate should reflect the patent-based LOE, which is typically 2–4 years AFTER the BPCIA date.`
-    : `\n\nNo Orange Book data found (likely a pipeline asset or biologic). Use patents and market intelligence to estimate the LOE range.`;
+    ? `\n\nNOTE: This is a biologic. BPCIA grants 12-year data exclusivity expiring ${bpciaFloor} — this is a regulatory FLOOR, not the patent LOE. Biosimilar entry is typically gated by compound patents, not just BPCIA. Search for compound/formulation patent expiry. Your bestEstimate should reflect the patent-based LOE, typically 2–4 years AFTER the BPCIA date.`
+    : `\n\nNo Orange Book data found (likely a pipeline asset or biologic). Search for patents and market LOE estimates.`;
 
   const systemPrompt = `You are a pharmaceutical patent analyst.${obContext}
+
+Use web_search to find:
+1. Patents for ${drugName} on patents.google.com, lens.org, espacenet.com
+2. Published LOE estimates from pharma industry sources
+3. Biosimilar/generic launch timelines if applicable
 
 Patent types (most to least important for LOE):
 1. Compound/composition — covers the active molecule
@@ -96,8 +32,6 @@ Patent types (most to least important for LOE):
 4. Process — manufacturing
 
 Rules: US/EU patents = 20 years from filing. PTE = up to 5 extra years for FDA delay.
-
-Extract any explicit LOE year estimates from market intelligence and note the source.
 
 Respond ONLY with valid JSON:
 {
@@ -117,28 +51,16 @@ Respond ONLY with valid JSON:
 
   const userContent = `Drug: ${drugName}${sponsor ? `\nSponsor: ${sponsor}` : ""}
 
-PATENTS (${patentResults.length}):
-${patentList || "None found."}
+Search for patents and LOE estimates, then analyze and provide your LOE assessment.`;
 
-MARKET INTELLIGENCE (${webResults.length}):
-${webList || "None found."}
-
-Analyze all sources and provide your LOE assessment.`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": anthropicKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2500,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userContent }],
-    }),
+  const text = await callClaudeWithSearch({
+    anthropicKey,
+    system: systemPrompt,
+    userMessage: userContent,
+    maxTokens: 2500,
+    maxSearches: 4,
   });
 
-  if (!res.ok) throw new Error(`Claude error: ${res.status}`);
-  const data = await res.json();
-  const text = data?.content?.[0]?.text || "{}";
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("No JSON in Claude response");
   return JSON.parse(jsonMatch[0]);
@@ -176,46 +98,31 @@ export async function runLoePipeline(
   sponsor?: string,
   hints?: { launchYear?: number; isBiologic?: boolean }
 ): Promise<LoePipelineResult> {
-  const [obResult, patentResults, webResults] = await Promise.all([
-    inferLOE(drugName).catch(() => null),
-    searchGooglePatents(drugName, sponsor).catch(() => [] as any[]),
-    searchPublicLOEEstimates(drugName, sponsor).catch(() => [] as any[]),
-  ]);
+  // FDA Orange Book lookup runs in parallel with Claude patent analysis
+  const obResult = await inferLOE(drugName).catch(() => null);
 
-  // Drug found in FDA = loeDate exists and reason doesn't say "not found in FDA database"
   const drugFoundInFDA = !!(
     obResult?.loeDate &&
     obResult.reasons?.[0] &&
     !obResult.reasons[0].includes("not found in FDA database")
   );
-  // Confirmed = found + NOT a default estimate (real OB scrape or BPCIA with actual approval date)
   const obConfirmed = drugFoundInFDA && !obResult!.reasons.some((r) => r.includes("default estimate"));
   const isBpcia = !!(obResult as any)?.isBpcia;
   const obYear = obConfirmed ? Number(obResult!.loeDate!.slice(0, 4)) : null;
 
-  // For BPCIA biologics: tell Claude the exclusivity floor but let it determine the patent-based LOE.
-  // For Orange Book confirmed (small molecules): treat OB date as definitive.
-  const claudeObContext = obConfirmed
-    ? (isBpcia
-        ? obResult!.loeDate!   // pass to Claude but with a different message (handled below)
-        : obResult!.loeDate!)
-    : null;
+  const claudeObContext = obConfirmed ? obResult!.loeDate! : null;
 
-  // Always run Claude patent analysis — even with zero Tavily results Claude can
-  // generate context from training knowledge. Tavily results improve quality if available.
   let patentAnalysis: any = null;
   try {
     patentAnalysis = await analyzePatentsWithClaude(
-      drugName, sponsor, patentResults, webResults,
-      // For BPCIA: pass null so Claude estimates LOE from patents, not the exclusivity floor
+      drugName, sponsor,
       isBpcia ? null : claudeObContext,
-      isBpcia ? obResult!.loeDate! : null   // separate BPCIA floor hint
+      isBpcia ? obResult!.loeDate! : null
     );
   } catch { /* proceed without */ }
 
   const fdaFallbackYear = drugFoundInFDA && obResult?.loeDate ? Number(obResult.loeDate.slice(0, 4)) : null;
 
-  // If still no LOE and caller provided launch year hint, infer from exclusivity rules
   let hintLoeYear: number | null = null;
   if (hints?.launchYear && !obYear && !patentAnalysis?.bestEstimate && !fdaFallbackYear) {
     const exclusivityYears = hints.isBiologic ? 12 : 8;
@@ -226,9 +133,6 @@ export async function runLoePipeline(
   const patentMin  = patentAnalysis?.loeMin ?? null;
   const patentMax  = patentAnalysis?.loeMax ?? null;
 
-  // For BPCIA biologics: patent-based LOE is the real market exclusivity end date.
-  // obYear is the BPCIA exclusivity floor — use patent estimate when available, fall back to obYear.
-  // For small molecules with OB confirmed: obYear is definitive.
   const loeYear = isBpcia
     ? (patentBest ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
     : (obYear ?? patentBest ?? fdaFallbackYear ?? hintLoeYear ?? null);
@@ -239,8 +143,6 @@ export async function runLoePipeline(
     ? (patentMax ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
     : (obYear ?? patentMax ?? fdaFallbackYear ?? hintLoeYear ?? null);
 
-  // isDefinitive = true only when the displayed loeYear is FDA-confirmed (OB scrape for small molecules).
-  // For biologics, loeYear comes from patent analysis — mark as non-definitive so UI shows "Estimated".
   const isDefinitive = obConfirmed && !isBpcia;
 
   return {
@@ -256,7 +158,7 @@ export async function runLoePipeline(
       sources: obResult.sources,
     } : null,
     patents: patentAnalysis ? {
-      found: patentResults.length,
+      found: 0, // Claude searched internally — no raw count available
       loeMin: patentAnalysis.loeMin,
       loeMax: patentAnalysis.loeMax,
       bestEstimate: patentAnalysis.bestEstimate,

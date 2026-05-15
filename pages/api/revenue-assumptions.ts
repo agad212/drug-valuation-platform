@@ -1,27 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { callClaudeWithSearch } from "../../lib/claudeSearch";
 
-// ─── Tavily search helpers ────────────────────────────────────────────────────
+// ─── Claude revenue analysis with native web search ───────────────────────────
 
-async function tavilySearch(query: string, domains?: string[]): Promise<any[]> {
-  const key = process.env.TAVILY_API_KEY;
-  if (!key) return [];
-  try {
-    const body: any = { api_key: key, query, search_depth: "basic", max_results: 4 };
-    if (domains?.length) body.include_domains = domains;
-    const res = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.results || [];
-  } catch { return []; }
-}
+const SYSTEM_PROMPT = `You are a senior sell-side pharmaceutical analyst at a top-tier investment bank. You specialize in drug asset revenue modeling with 15+ years of experience covering biopharmaceuticals.
 
-// ─── Claude revenue analysis ──────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `You are a senior sell-side pharmaceutical analyst at a top-tier investment bank. You specialize in drug asset revenue modeling with 15+ years of experience covering biopharmaceuticals. You write equity research initiation reports.
+Use web_search to research each indication BEFORE estimating revenue. Search for:
+- Analyst peak sales estimates (Goldman Sachs, Morgan Stanley, Jefferies, SVB, Leerink, etc.)
+- Patient population / epidemiology data
+- Comparable approved drugs and their peak sales
+- Pricing benchmarks (WAC)
+- Competitive landscape
 
 ## PRICING BENCHMARKS (WAC per patient per year, US market)
 - PD-1/PD-L1 checkpoint inhibitors (oncology): $150,000–$200,000/yr
@@ -32,6 +21,7 @@ const SYSTEM_PROMPT = `You are a senior sell-side pharmaceutical analyst at a to
 - Hematology (AML, MDS, multiple myeloma): $150,000–$300,000/yr
 - Immunology / autoimmune (RA, IBD, psoriasis): $30,000–$80,000/yr
 - Neurology / CNS: $20,000–$80,000/yr (rare CNS: $200,000–$500,000/yr)
+- Alzheimer's disease (anti-amyloid mAb): $20,000–$50,000/yr (access-constrained)
 - Cardiovascular: $5,000–$25,000/yr
 - Metabolic / diabetes: $5,000–$15,000/yr (GLP-1: $12,000–$20,000/yr)
 
@@ -56,31 +46,20 @@ Always adjust for label breadth, launch timing, pricing era, and competitive dyn
 
 ## RULES
 - Express ALL monetary values in USD millions (M)
+- tamM = drug-specific addressable market in $M (eligible patients × annual price). MUST satisfy: tamM × penetrationPct / 100 ≈ peakSalesM. Do NOT use total disease category market.
 - If analyst search results contain explicit estimates, extract and cite them verbatim; never fabricate source names or numbers
 - reasoning must be exactly 3–4 sentences covering: (1) patient population size & eligible subset, (2) pricing assumption & comparable drug anchor, (3) penetration rationale, (4) key risk or upside driver
-- TRAINING KNOWLEDGE FALLBACK: If search results are empty or unhelpful, use your training knowledge about the drug, indication, and therapeutic area. Never return peakSalesM = 0 just because search found nothing — always make a best-effort estimate anchored to comparable drugs and market size. Flag confidence as "low" if purely estimated.
+- Never return peakSalesM = 0 — always provide a best-effort estimate. Flag confidence as "low" if purely estimated.
 - Return ONLY valid JSON — no markdown fences, no extra text`;
 
 async function analyzeRevenueWithClaude(
   drug: string,
   phase: string,
   sponsor: string | undefined,
-  indicationsWithResults: { indication: string; analyst: any[]; epidemiology: any[]; comps: any[] }[]
+  indications: string[]
 ): Promise<any> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY not set");
-
-  const snippetLen = Math.max(200, Math.floor(5000 / Math.max(1, indicationsWithResults.length)));
-
-  const context = indicationsWithResults.map(({ indication, analyst, epidemiology, comps }) => {
-    const fmt = (results: any[], label: string) => {
-      if (!results.length) return `  ${label}: No results found.`;
-      return `  ${label}:\n` + results.map((r, i) =>
-        `  [${i + 1}] ${r.title || "?"}\n      ${(r.content || "").slice(0, snippetLen)}\n      URL: ${r.url || "?"}`
-      ).join("\n");
-    };
-    return `=== INDICATION: ${indication} ===\n${fmt(analyst, "ANALYST ESTIMATES / CONSENSUS")}\n\n${fmt(epidemiology, "MARKET SIZE / EPIDEMIOLOGY")}\n\n${fmt(comps, "COMPETITIVE LANDSCAPE / COMPS")}`;
-  }).join("\n\n");
 
   const schema = `{
   "indications": [
@@ -92,7 +71,7 @@ async function analyzeRevenueWithClaude(
       "confidence": "high" | "medium" | "low",
       "reasoning": string,
       "analystEstimates": [{ "source": string, "url": string|null, "estimateM": number, "year": number|null, "quote": string }],
-      "marketContext": { "tamM": number|null /* drug-specific addressable market in $M — eligible patients × annual price. MUST satisfy: tamM × penetrationPct / 100 ≈ peakSalesM. Do NOT use total disease category market. */, "penetrationPct": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null /* full USD e.g. 150000 for $150K/yr, 450000 for $450K/yr */, "competitive": string|null },
+      "marketContext": { "tamM": number|null, "penetrationPct": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null, "competitive": string|null },
       "comps": [{ "drug": string, "indication": string, "peakSalesM": number, "rationale": string }],
       "sources": [{ "label": string, "url": string|null }]
     }
@@ -101,33 +80,19 @@ async function analyzeRevenueWithClaude(
 
   const userContent = `Drug: ${drug}
 Development Phase: ${phase}${sponsor ? `\nSponsor: ${sponsor}` : ""}
-Number of indications: ${indicationsWithResults.length}
-Required indication order: ${indicationsWithResults.map(i => i.indication).join(" | ")}
+Indications to model (${indications.length}): ${indications.join(" | ")}
 
-SEARCH RESULTS BY INDICATION:
-${context}
-
-Return JSON exactly matching this schema. The indications array MUST have exactly ${indicationsWithResults.length} entries in the same order as listed above:
+Search the web for analyst estimates, epidemiology, pricing, and comparable drugs for each indication listed above. Then return JSON exactly matching this schema with ${indications.length} entries in the same order:
 ${schema}`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 8000,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userContent }],
-    }),
+  const text = await callClaudeWithSearch({
+    anthropicKey: key,
+    system: SYSTEM_PROMPT,
+    userMessage: userContent,
+    maxTokens: 8000,
+    maxSearches: Math.min(indications.length * 3, 10),
   });
 
-  if (!res.ok) throw new Error(`Claude error: ${res.status}`);
-  const data = await res.json();
-  const text: string = data?.content?.[0]?.text || "{}";
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("No JSON in Claude response");
   return JSON.parse(jsonMatch[0]);
@@ -144,29 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Fan out all Tavily searches in parallel — batch into groups of 6 to avoid rate limiting
-    const searchFns = indications.flatMap((ind: string) => [
-      () => tavilySearch(`"${drug}" "${ind}" peak sales analyst estimate forecast consensus billion`),
-      () => tavilySearch(`"${ind}" patient population prevalence incidence treatment market size`),
-      () => tavilySearch(`"${drug}" comparable drug peak revenue market share competition "${ind}"`),
-    ]);
-
-    const BATCH = 6;
-    const allResults: any[][] = [];
-    for (let i = 0; i < searchFns.length; i += BATCH) {
-      const batch = searchFns.slice(i, i + BATCH);
-      const batchResults = await Promise.all(batch.map(fn => fn()));
-      allResults.push(...batchResults);
-    }
-
-    const indicationsWithResults = indications.map((ind: string, i: number) => ({
-      indication: ind,
-      analyst:      allResults[i * 3 + 0] || [],
-      epidemiology: allResults[i * 3 + 1] || [],
-      comps:        allResults[i * 3 + 2] || [],
-    }));
-
-    const analysis = await analyzeRevenueWithClaude(drug, phase, sponsor, indicationsWithResults);
+    const analysis = await analyzeRevenueWithClaude(drug, phase, sponsor, indications);
 
     // Realign by index, fill gaps if Claude returns wrong count
     const rawInds: any[] = analysis.indications || [];
@@ -181,21 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
     });
 
-    // Attach raw sources for each indication
-    const withSources = aligned.map((ind: any, i: number) => {
-      const allRaw = [...(indicationsWithResults[i]?.analyst || []), ...(indicationsWithResults[i]?.epidemiology || []), ...(indicationsWithResults[i]?.comps || [])];
-      const IRRELEVANT_DOMAINS = ["wsj.com", "reuters.com/markets", "bloomberg.com/news/articles", "loreal", "l-oreal", "cosmetics", "beauty", "fashion"];
-      const extraSources = allRaw
-        .filter((r: any) => r.url && !IRRELEVANT_DOMAINS.some(d => r.url.toLowerCase().includes(d)))
-        .slice(0, 4)
-        .map((r: any) => ({ label: r.title || r.url, url: r.url }));
-      return {
-        ...ind,
-        sources: [...(ind.sources || []), ...extraSources].slice(0, 8),
-      };
-    });
-
-    return res.status(200).json({ drug, phase, indications: withSources });
+    return res.status(200).json({ drug, phase, indications: aligned });
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || "Revenue analysis failed" });
   }
