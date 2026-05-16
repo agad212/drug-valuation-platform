@@ -103,7 +103,13 @@ REQUIRED: peakSalesEstimates must have exactly the same length and order as sele
   else if (rawPhase.includes("phase 3") || rawPhase.includes("phase3")) parsed.phase = "Phase 3";
   else if (rawPhase.includes("phase 2") || rawPhase.includes("phase2")) parsed.phase = "Phase 2";
   else if (rawPhase.includes("phase 1") || rawPhase.includes("phase1")) parsed.phase = "Phase 1";
-  else if (!VALID_PHASES.includes(parsed.phase)) parsed.phase = "Phase 2";
+  else if (!VALID_PHASES.includes(parsed.phase)) parsed.phase = phase; // fall back to input phase
+
+  // Hard guard: if the input phase is not Approved, Claude cannot promote to Approved
+  // (happens when search finds nothing and Claude assumes synthetic stub = approved drug)
+  if (parsed.phase === "Approved" && phase !== "Approved") {
+    parsed.phase = phase || "Phase 2";
+  }
 
   return parsed;
 }
