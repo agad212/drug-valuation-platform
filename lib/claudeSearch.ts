@@ -41,6 +41,10 @@ export async function callClaudeWithSearch({
   const data = await res.json();
   const content: any[] = data.content || [];
 
+  // Debug: log stop_reason and content block types to diagnose search issues
+  console.log("[claudeSearch] stop_reason:", data.stop_reason, "| content block types:", content.map((c) => c.type).join(", ") || "none");
+  if (data.error) console.log("[claudeSearch] API error:", JSON.stringify(data.error));
+
   // Extract all text blocks from the response
   const text = content
     .filter((c) => c.type === "text")
