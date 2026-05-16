@@ -4,7 +4,7 @@
 
 export async function callClaudeWithSearch({
   anthropicKey,
-  model = "claude-haiku-4-5-20251001",
+  model = "claude-sonnet-4-6",
   system,
   userMessage,
   maxTokens = 2000,
