@@ -31,11 +31,16 @@ async function analyzeWithClaude(
   const systemPrompt = `You are a senior pharmaceutical BD analyst performing a drug asset valuation.
 ${isApproved ? "This drug is already approved. Identify pivotal approved indications and label expansions." : "This is a pipeline drug. Focus on Phase 3 registration trials and pipeline indications."}
 
+IMPORTANT: The drug name is a PHARMACEUTICAL COMPOUND CODE, not a stock ticker or company name. Search specifically for it as a drug/compound. Ignore any stock market, restaurant, consumer goods, or non-pharma results.
+
 Use web_search to research this drug BEFORE answering. Search for:
-1. Mechanism of action (be specific — drug target, pathway, modality)
-2. All pipeline indications — check press releases, SEC filings, corporate presentations, company IR pages
-3. Development phase and clinical status
-4. Peak sales estimates or market size per indication
+1. The drug name + "pharma" OR "biotech" OR "clinical trial" OR "drug" to find pharmaceutical results
+2. Mechanism of action (be specific — drug target, pathway, modality)
+3. All pipeline indications — check press releases, SEC filings, corporate presentations, company IR pages
+4. Development phase and clinical status
+5. Peak sales estimates or market size per indication
+
+PHASE RULE: Only set "phase" in your JSON to "Approved" if you find clear evidence the drug is FDA/EMA approved. If web search returns no pharma results or you find only a pipeline drug, use the input stage: ${phase}.${phase !== "Approved" ? ` DO NOT return "Approved" unless you found explicit approval evidence.` : ""}
 
 Your job:
 1. Select 5-7 most relevant trials/indications for valuation. If web search reveals additional indications not in CT.gov, create synthetic entries (nctId = "PIPELINE-{n}").
@@ -59,12 +64,12 @@ REQUIRED: devCostM must ALWAYS be a positive number. Estimated total R&D cost in
 - Preclinical: $50–100M
 - Approved (label expansion): $100–300M`;
 
-  const userContent = `Drug: ${drug} | Stage: ${phase}
+  const userContent = `Pharmaceutical compound: ${drug}${sponsor ? ` | Sponsor: ${sponsor}` : ""} | Stage: ${phase}
 
 CT.gov trials found (${candidates.length}):
 ${trialList || "No trials found — search web to identify indications and development status"}
 
-Search the web for mechanism, pipeline indications, and peak sales estimates. Then respond ONLY with valid JSON:
+Search the web for "${drug} drug" or "${drug} pharmaceutical" or "${drug} clinical trial" to find pharma-specific results. Ignore any non-pharmaceutical companies or stock tickers with similar names. Then respond ONLY with valid JSON:
 {
   "selectedIndices": [1, 3, 5, ...],
   "recommendedIndex": 2,
