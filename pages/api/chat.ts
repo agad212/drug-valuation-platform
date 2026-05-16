@@ -67,58 +67,40 @@ Be concise and practical. Lead with the answer — one or two sentences max for 
   }));
 
   try {
-    // Agentic loop: Claude may use web_search before producing its final response
-    let raw = "No response.";
-    for (let i = 0; i < 8; i++) {
-      const r = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": anthropicKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1024,
-          system: systemPrompt,
-          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
-          messages: claudeMessages,
-        }),
-      });
+    // web_search_20250305 is server-side — Anthropic executes searches automatically
+    // within a single API call. No manual loop needed.
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": anthropicKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: systemPrompt,
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+        messages: claudeMessages,
+      }),
+    });
 
-      if (!r.ok) {
-        const txt = await r.text();
-        let friendlyMsg = "Claude is temporarily unavailable. Please try again in a moment.";
-        try {
-          const errJson = JSON.parse(txt);
-          const errType = errJson?.error?.type;
-          if (errType === "overloaded_error") friendlyMsg = "Claude is overloaded right now. Please try again in a few seconds.";
-          else if (errType === "rate_limit_error") friendlyMsg = "Rate limit reached. Please wait a moment and try again.";
-          else if (errType === "authentication_error") friendlyMsg = "API key error — check ANTHROPIC_API_KEY in Vercel env vars.";
-        } catch { /* use default */ }
-        return res.status(200).json({ message: friendlyMsg });
-      }
-
-      const data = await r.json();
-      const content: any[] = data.content || [];
-
-      if (data.stop_reason === "end_turn") {
-        raw = content.filter((c) => c.type === "text").map((c) => c.text).join("") || "No response.";
-        break;
-      }
-
-      if (data.stop_reason === "tool_use") {
-        claudeMessages.push({ role: "assistant", content });
-        const toolResults = content
-          .filter((c) => c.type === "tool_use")
-          .map((c) => ({ type: "tool_result", tool_use_id: c.id, content: "" }));
-        if (toolResults.length > 0) claudeMessages.push({ role: "user", content: toolResults });
-        continue;
-      }
-
-      raw = content.filter((c) => c.type === "text").map((c) => c.text).join("") || "No response.";
-      break;
+    if (!r.ok) {
+      const txt = await r.text();
+      let friendlyMsg = "Claude is temporarily unavailable. Please try again in a moment.";
+      try {
+        const errJson = JSON.parse(txt);
+        const errType = errJson?.error?.type;
+        if (errType === "overloaded_error") friendlyMsg = "Claude is overloaded right now. Please try again in a few seconds.";
+        else if (errType === "rate_limit_error") friendlyMsg = "Rate limit reached. Please wait a moment and try again.";
+        else if (errType === "authentication_error") friendlyMsg = "API key error — check ANTHROPIC_API_KEY in Vercel env vars.";
+      } catch { /* use default */ }
+      return res.status(200).json({ message: friendlyMsg });
     }
+
+    const data = await r.json();
+    const content: any[] = data.content || [];
+    const raw = content.filter((c) => c.type === "text").map((c) => c.text).join("") || "No response.";
 
     // Parse field-update block
     const fieldUpdateMatch = raw.match(/<field-update>([\s\S]*?)<\/field-update>/);
