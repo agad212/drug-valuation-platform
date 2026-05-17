@@ -9,6 +9,7 @@ async function analyzeWithClaude(
   drug: string,
   phase: string,
   trials: CtgovTrial[],
+  sponsor?: string,
 ): Promise<{
   selectedIndices: number[];
   recommendedIndex: number;
@@ -154,7 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const usingSyntheticStub = trials.length === 0;
 
     // ── Round 2: Claude searches web + ranks trials + estimates peak sales ────
-    const analysis = await analyzeWithClaude(drug, phase, candidates);
+    const analysis = await analyzeWithClaude(drug, phase, candidates, sponsor || undefined);
 
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
     const recommendedRaw = (analysis.recommendedIndex ?? 1) - 1;
