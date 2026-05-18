@@ -98,6 +98,11 @@ REQUIRED: peakSalesEstimates must have exactly the same length and order as sele
     userMessage: userContent,
     maxTokens: 2000,
     maxSearches: 5,
+    serperQueries: [
+      `${drug} drug pharmaceutical`,
+      `${drug} clinical trial mechanism of action`,
+      `${drug}${sponsor ? ` ${sponsor}` : ""} peak sales analyst estimate`,
+    ],
   });
 
   const jsonMatch = raw.match(/\{[\s\S]*\}/);

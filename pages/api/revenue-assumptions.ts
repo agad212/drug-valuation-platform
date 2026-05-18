@@ -91,6 +91,10 @@ ${schema}`;
     userMessage: userContent,
     maxTokens: 8000,
     maxSearches: Math.min(indications.length * 3, 10),
+    serperQueries: indications.flatMap((ind) => [
+      `${drug} ${ind} peak sales analyst estimate`,
+      `${drug} ${ind} market size`,
+    ]).slice(0, 6),
   });
 
   const jsonMatch = text.match(/\{[\s\S]*\}/);

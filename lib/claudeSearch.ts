@@ -1,6 +1,12 @@
 // Shared helper: Claude API call with native web search tool (server-side)
 // web_search_20250305 is a server-side tool — Anthropic executes searches
 // automatically within a single API call. No manual loop needed.
+//
+// Optionally pass serperQueries — these are run against Google via Serper.dev
+// first, and the results are injected into the prompt before Claude's own search.
+// This gives Claude real Google coverage for obscure/newly-announced compounds.
+
+import { serperSearchContext } from "./serperSearch";
 
 export async function callClaudeWithSearch({
   anthropicKey,
@@ -9,6 +15,7 @@ export async function callClaudeWithSearch({
   userMessage,
   maxTokens = 2000,
   maxSearches = 5,
+  serperQueries,
 }: {
   anthropicKey: string;
   model?: string;
@@ -16,7 +23,22 @@ export async function callClaudeWithSearch({
   userMessage: string;
   maxTokens?: number;
   maxSearches?: number;
+  serperQueries?: string[];
 }): Promise<string> {
+  // Pre-fetch Google results via Serper if queries provided and key is set
+  let googleContext = "";
+  const serperKey = process.env.SERPER_API_KEY;
+  if (serperQueries && serperQueries.length > 0 && serperKey) {
+    googleContext = await serperSearchContext(serperQueries, serperKey).catch(() => "");
+    if (googleContext) {
+      console.log("[claudeSearch] Serper returned context for", serperQueries.length, "queries");
+    }
+  }
+
+  const finalUserMessage = googleContext
+    ? `${googleContext}\n\n${userMessage}`
+    : userMessage;
+
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -29,7 +51,7 @@ export async function callClaudeWithSearch({
       max_tokens: maxTokens,
       system,
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }],
-      messages: [{ role: "user", content: userMessage }],
+      messages: [{ role: "user", content: finalUserMessage }],
     }),
   });
 

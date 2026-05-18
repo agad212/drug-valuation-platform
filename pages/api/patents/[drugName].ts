@@ -55,6 +55,10 @@ Search for patents on patents.google.com, lens.org, and espacenet.com, then anal
     userMessage,
     maxTokens: 2000,
     maxSearches: 4,
+    serperQueries: [
+      `${drugName} patent expiry loss of exclusivity`,
+      `${drugName} compound patent site:patents.google.com`,
+    ],
   });
 
   const jsonMatch = text.match(/\{[\s\S]*\}/);

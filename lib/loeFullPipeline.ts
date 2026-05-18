@@ -59,6 +59,10 @@ Search for patents and LOE estimates, then analyze and provide your LOE assessme
     userMessage: userContent,
     maxTokens: 2500,
     maxSearches: 4,
+    serperQueries: [
+      `${drugName} patent expiry loss of exclusivity`,
+      `${drugName} compound patent site:patents.google.com`,
+    ],
   });
 
   const jsonMatch = text.match(/\{[\s\S]*\}/);
