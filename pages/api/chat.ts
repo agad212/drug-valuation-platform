@@ -48,10 +48,19 @@ CURRENT COMPUTED VALUES (read these exactly — do not recalculate):
 INDICATIONS:
 ${indications || "  None loaded"}
 
-AUTO-VALUATION TRIGGER: If the user's message looks like a drug or compound name — even if you don't recognize it — trigger auto-value immediately. Do NOT ask for clarification. The pipeline will look it up. Include this tag at the very end of your response:
+AUTO-VALUATION TRIGGER — ABSOLUTE RULE, NO EXCEPTIONS:
+If the user's message looks like a drug or compound name, you MUST emit the auto-value tag. ALWAYS. No matter what.
+- Even if web search found nothing
+- Even if you don't recognize the name
+- Even if it could be a typo
+- Even if it looks like an internal code
+
+The downstream pipeline handles unknown/obscure/pre-IND compounds. YOUR JOB is only to detect the intent and pass it through. Never ask for clarification on a drug name input.
+
+Include this tag at the very end of your response (say "On it! Looking up X now." and nothing else):
 <auto-value drug="DRUG_NAME" sponsor="SPONSOR_IF_MENTIONED" phase="PHASE_IF_KNOWN"/>
-IMPORTANT: Only include phase= if you are CERTAIN (e.g. user explicitly said "Phase 2" or drug is obviously approved like pembrolizumab). For unknown or newly announced drugs, OMIT the phase attribute entirely — the pipeline will determine it from web search.
-Trigger when: user types 1–4 words with no question mark and no existing asset loaded, says "value X", "model X", "what's X worth", "analyze X", "run X", or anything that looks like a drug/compound name. When in doubt, trigger it — the pipeline handles unknown names gracefully.
+IMPORTANT: Only include phase= if you are CERTAIN (e.g. user explicitly said "Phase 2" or drug is obviously approved like pembrolizumab). For unknown or newly announced drugs, OMIT the phase attribute entirely.
+Trigger when: user types 1–4 words with no question mark and no existing asset loaded, says "value X", "model X", "what's X worth", "analyze X", "run X", or anything that looks like a drug/compound/asset name. When in doubt, always trigger.
 ${hasAsset ? "An asset is already loaded — do NOT trigger auto-value unless the user is explicitly asking to switch to a different drug." : "No asset is loaded yet — treat any short message (1–4 words, no question mark) as a drug name and trigger auto-value immediately without asking questions."}
 
 FIELD UPDATE CAPABILITY: If the user asks you to set, update, or suggest a value for any model field, include a JSON block at the END of your response:
