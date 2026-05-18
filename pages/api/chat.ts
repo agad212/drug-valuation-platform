@@ -77,7 +77,7 @@ Be concise and practical. Lead with the answer — one or two sentences max for 
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-sonnet-4-6",
         max_tokens: 1024,
         system: systemPrompt,
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
