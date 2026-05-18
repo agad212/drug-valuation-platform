@@ -51,6 +51,14 @@ Your job:
 5. For pipeline: estimate addressable market × realistic penetration
 6. Extract precise mechanism of action — never say "unknown" or "insufficient context". Use your training knowledge if search returns nothing. If truly nothing is known, write "Unknown — pre-IND asset with no public disclosure".
 
+CRITICAL FALLBACK — IF SEARCH RETURNS NOTHING:
+Do NOT return zeros. Do NOT say you couldn't find anything. Build the best model you can using:
+- Drug naming conventions (e.g. "KRSA" → likely KRAS-targeting; "-mab" → monoclonal antibody; "-nib" → kinase inhibitor)
+- The input development phase to pick comparable assets
+- Standard comp-based estimates for the therapeutic area you infer
+- Your training knowledge about the sponsor company if given
+You are a senior analyst — make your best professional estimate and flag confidence as "low (inferred from name/class)".
+
 Peak sales guidelines:
 - Major oncology indication (NSCLC, CRC, breast): $1B–$15B range typical for blockbusters
 - Rare/niche indication: $200M–$2B
@@ -58,7 +66,7 @@ Peak sales guidelines:
 - If drug is already generating revenue: anchor on actual sales + growth trajectory
 - Flag confidence: "high" (analyst data found), "medium" (extrapolated), "low" (estimated from market size)
 
-REQUIRED: devCostM must ALWAYS be a positive number. Estimated total R&D cost in $M to reach approval:
+REQUIRED: devCostM must ALWAYS be a positive number — even if you found nothing in search, use the phase-based estimate below. Never return 0 or null. Estimated total R&D cost in $M to reach approval:
 - Phase 3 ongoing: $400–800M
 - Phase 2 ongoing: $150–350M
 - Phase 1 ongoing: $80–200M
