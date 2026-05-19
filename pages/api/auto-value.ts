@@ -86,6 +86,7 @@ Search the web for "${drug} drug" or "${drug} pharmaceutical" or "${drug} clinic
   "summary": "2-3 sentences on clinical landscape",
   "mechanism": "precise MOA — e.g. 'PD-1 inhibitor', 'GABA-A modulator', 'anti-amyloid monoclonal antibody'. Never use vague disclaimers.",
   "phase": "MUST be exactly one of: Preclinical | Phase 1 | Phase 2 | Phase 3 | Filed | Approved",
+  "primaryIndication": "plain English disease name e.g. 'Alzheimer's disease', 'NSCLC', 'AML' — NEVER a drug code or compound name",
   "peakSalesEstimates": [
     { "indication": "Alzheimer's disease", "peakSalesM": 8000, "confidence": "high", "basis": "Goldman Sachs projects $8B peak NSCLC 1L", "devCostM": 500 }
   ]
@@ -253,11 +254,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
       name: (usingSyntheticStub
-        ? analysis.peakSalesEstimates?.[rank]?.indication?.trim()
+        ? analysis.primaryIndication?.trim()
+          || analysis.peakSalesEstimates?.[rank]?.indication?.trim()
           || analysis.summary?.match(/targeting\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim()
           || analysis.summary?.match(/(?:indicated for|approved for|treats?|used for)\s+([^.,;]+)/i)?.[1]?.trim()
           || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating|in)\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim()
-          || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating)\s+([^.,;(]+)/i)?.[1]?.trim()
         : trial.conditions?.[0]) || trial.nctId,
       launchYear: trial.estimatedLaunchYear ?? inferredLaunchYear,
       alreadyLaunched: !trial.estimatedLaunchYear && effectivelyApproved,

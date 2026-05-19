@@ -615,7 +615,14 @@ export default function HomePage() {
 
       pushToast(`Revenue research complete: ${withEstimates}/${data.indications.length} indications with estimates.`, "success", 8000);
     } catch (e: any) {
+      console.error("[revenue] failed:", e?.message);
       pushToast(`Revenue research failed: ${e?.message || "error"}`, "error");
+      // Set a minimal result so the panel stays visible with an error message
+      setRevenueAnalysis({ drug, phase: v.phase || "", indications: (inds as string[]).map(ind => ({
+        indication: ind, peakSalesM: 0, bullM: 0, bearM: 0,
+        confidence: "low" as const, reasoning: `Revenue analysis failed: ${e?.message || "error"}. Click ↻ Refresh to retry.`,
+        analystEstimates: [], marketContext: {}, comps: [], sources: [],
+      }))});
     } finally {
       setRevenueLoading(false);
     }
