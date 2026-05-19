@@ -240,6 +240,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const currentYear = new Date().getFullYear();
     const effectivelyApproved = (analysis.phase || "").toLowerCase().includes("approved");
 
+    // Infer launch year from phase when CT.gov has no data (pre-IND / synthetic stub)
+    const phaseLower = (analysis.phase || phase || "").toLowerCase();
+    const inferredLaunchYear = effectivelyApproved ? currentYear
+      : phaseLower.includes("preclinical") ? currentYear + 9
+      : phaseLower.includes("phase 1") ? currentYear + 7
+      : phaseLower.includes("phase 2") ? currentYear + 5
+      : phaseLower.includes("phase 3") ? currentYear + 3
+      : phaseLower.includes("filed") ? currentYear + 1
+      : currentYear + 7; // default for unknown
+
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
       name: (usingSyntheticStub
@@ -247,7 +257,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating)\s+([^.,;(]+)/i)?.[1]?.trim()
           || drug
         : trial.conditions?.[0]) || trial.nctId,
-      launchYear: trial.estimatedLaunchYear ?? (effectivelyApproved ? currentYear : undefined),
+      launchYear: trial.estimatedLaunchYear ?? inferredLaunchYear,
       alreadyLaunched: !trial.estimatedLaunchYear && effectivelyApproved,
       loeYear: loeYear ?? undefined,
       nctId: trial.nctId,
