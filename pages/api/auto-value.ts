@@ -217,27 +217,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? candidates[recommendedRaw].nctId
       : selectedTrials[0]?.trial.nctId || "";
 
-    // ── Infer LOE from mechanism if pipeline returned nothing ─────────────────
-    let loeYear = loeResult?.loeYear ?? null;
-    let biologicLoeNote: string | null = null;
-    if (loeYear === null) {
-      const mechLower = (analysis.mechanism || "").toLowerCase();
-      const isBiologic =
-        mechLower.includes("car-t") || mechLower.includes("car t") ||
-        mechLower.includes("cell therapy") || mechLower.includes("antibody") ||
-        mechLower.includes("mab") || mechLower.includes("adc") ||
-        mechLower.includes("bispecific") || mechLower.includes("fusion protein") ||
-        mechLower.includes("biologic");
-      const refLaunchYear = selectedTrials[0]?.trial.estimatedLaunchYear;
-      if (refLaunchYear) {
-        const exclusivityYears = isBiologic ? 12 : 8;
-        loeYear = refLaunchYear + exclusivityYears;
-        biologicLoeNote = isBiologic
-          ? `BPCIA 12-year biologic exclusivity estimated from launch year ${refLaunchYear}`
-          : `Default ${exclusivityYears}-year exclusivity estimated from launch year ${refLaunchYear}`;
-      }
-    }
-
     const currentYear = new Date().getFullYear();
     const effectivelyApproved = (analysis.phase || "").toLowerCase().includes("approved");
 
@@ -251,13 +230,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : phaseLower.includes("filed") ? currentYear + 1
       : currentYear + 7; // default for unknown
 
+    // ── Infer LOE from mechanism if pipeline returned nothing ─────────────────
+    let loeYear = loeResult?.loeYear ?? null;
+    let biologicLoeNote: string | null = null;
+    if (loeYear === null) {
+      const mechLower = (analysis.mechanism || "").toLowerCase();
+      const isBiologic =
+        mechLower.includes("car-t") || mechLower.includes("car t") ||
+        mechLower.includes("cell therapy") || mechLower.includes("antibody") ||
+        mechLower.includes("mab") || mechLower.includes("adc") ||
+        mechLower.includes("bispecific") || mechLower.includes("fusion protein") ||
+        mechLower.includes("biologic");
+      // Use inferredLaunchYear as fallback so stubs also get an LOE
+      const refLaunchYear = selectedTrials[0]?.trial.estimatedLaunchYear ?? inferredLaunchYear;
+      const exclusivityYears = isBiologic ? 12 : 8;
+      loeYear = refLaunchYear + exclusivityYears;
+      biologicLoeNote = isBiologic
+        ? `BPCIA 12-year biologic exclusivity estimated from launch year ${refLaunchYear}`
+        : `Default ${exclusivityYears}-year exclusivity estimated from launch year ${refLaunchYear}`;
+    }
+
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
       name: (usingSyntheticStub
         ? analysis.peakSalesEstimates?.[rank]?.indication?.trim()
+          || analysis.summary?.match(/targeting\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim()
           || analysis.summary?.match(/(?:indicated for|approved for|treats?|used for)\s+([^.,;]+)/i)?.[1]?.trim()
+          || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating|in)\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim()
           || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating)\s+([^.,;(]+)/i)?.[1]?.trim()
-          || drug
         : trial.conditions?.[0]) || trial.nctId,
       launchYear: trial.estimatedLaunchYear ?? inferredLaunchYear,
       alreadyLaunched: !trial.estimatedLaunchYear && effectivelyApproved,
