@@ -100,10 +100,11 @@ Be concise and practical. Lead with the answer — one or two sentences max for 
       try {
         const errJson = JSON.parse(txt);
         const errType = errJson?.error?.type;
+        console.error("[chat] Anthropic API error:", r.status, errType, txt.slice(0, 300));
         if (errType === "overloaded_error") friendlyMsg = "Claude is overloaded right now. Please try again in a few seconds.";
         else if (errType === "rate_limit_error") friendlyMsg = "Rate limit reached. Please wait a moment and try again.";
         else if (errType === "authentication_error") friendlyMsg = "API key error — check ANTHROPIC_API_KEY in Vercel env vars.";
-      } catch { /* use default */ }
+      } catch { console.error("[chat] Anthropic API error (unparseable):", r.status, txt.slice(0, 300)); }
       return res.status(200).json({ message: friendlyMsg });
     }
 
