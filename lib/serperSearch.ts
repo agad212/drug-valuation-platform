@@ -40,7 +40,7 @@ export async function serperSearch(
 export async function serperSearchContext(
   queries: string[],
   apiKey: string,
-  numPerQuery = 6
+  numPerQuery = 4
 ): Promise<string> {
   const allResults = await Promise.all(
     queries.map((q) => serperSearch(q, apiKey, numPerQuery).catch(() => [] as SerperResult[]))

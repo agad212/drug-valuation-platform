@@ -96,12 +96,11 @@ REQUIRED: peakSalesEstimates must have exactly the same length and order as sele
     anthropicKey,
     system: systemPrompt,
     userMessage: userContent,
-    maxTokens: 2000,
-    maxSearches: 5,
+    maxTokens: 1500,
+    maxSearches: 2,
     serperQueries: [
-      `${drug} drug pharmaceutical`,
-      `${drug} clinical trial mechanism of action`,
-      `${drug}${sponsor ? ` ${sponsor}` : ""} peak sales analyst estimate`,
+      `${drug} drug pharmaceutical clinical trial`,
+      `${drug}${sponsor ? ` ${sponsor}` : ""} mechanism indication`,
     ],
   });
 
