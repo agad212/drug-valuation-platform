@@ -87,10 +87,11 @@ Search the web for "${drug} drug" or "${drug} pharmaceutical" or "${drug} clinic
   "mechanism": "precise MOA — e.g. 'PD-1 inhibitor', 'GABA-A modulator', 'anti-amyloid monoclonal antibody'. Never use vague disclaimers.",
   "phase": "MUST be exactly one of: Preclinical | Phase 1 | Phase 2 | Phase 3 | Filed | Approved",
   "peakSalesEstimates": [
-    { "peakSalesM": 8000, "confidence": "high", "basis": "Goldman Sachs projects $8B peak NSCLC 1L", "devCostM": 500 }
+    { "indication": "Alzheimer's disease", "peakSalesM": 8000, "confidence": "high", "basis": "Goldman Sachs projects $8B peak NSCLC 1L", "devCostM": 500 }
   ]
 }
-REQUIRED: peakSalesEstimates must have exactly the same length and order as selectedIndices.`;
+REQUIRED: peakSalesEstimates must have exactly the same length and order as selectedIndices.
+REQUIRED: each peakSalesEstimates entry must include "indication" — the plain English disease name (e.g. "Alzheimer's disease", "NSCLC", "AML"). Never use compound codes or "pre-IND stage risk".`;
 
   const raw = await callClaudeWithSearch({
     anthropicKey,
@@ -253,7 +254,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
       name: (usingSyntheticStub
-        ? analysis.summary?.match(/(?:indicated for|approved for|treats?|used for)\s+([^.,;]+)/i)?.[1]?.trim()
+        ? analysis.peakSalesEstimates?.[rank]?.indication?.trim()
+          || analysis.summary?.match(/(?:indicated for|approved for|treats?|used for)\s+([^.,;]+)/i)?.[1]?.trim()
           || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating)\s+([^.,;(]+)/i)?.[1]?.trim()
           || drug
         : trial.conditions?.[0]) || trial.nctId,
