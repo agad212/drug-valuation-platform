@@ -144,11 +144,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const isApproved = phase === "Approved";
 
   try {
-    // ── Round 1: CT.gov + LOE pipeline in parallel ────────────────────────────
-    const [trials, loeResult] = await Promise.all([
-      searchTrialsByDrug(drug, { isApproved }).catch(() => [] as CtgovTrial[]),
-      runLoePipeline(drug, sponsor || undefined).catch(() => null),
-    ]);
+    // ── Step 1: CT.gov trials (fast, ~100ms) ──────────────────────────────────
+    const trials = await searchTrialsByDrug(drug, { isApproved }).catch(() => [] as CtgovTrial[]);
 
     // If no CT.gov trials found, use a synthetic stub so Claude can still build
     // a model from training knowledge + web search.
@@ -167,8 +164,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const candidates = trials.length > 0 ? trials.slice(0, 40) : syntheticStub;
     const usingSyntheticStub = trials.length === 0;
 
-    // ── Round 2: Claude searches web + ranks trials + estimates peak sales ────
-    const analysis = await analyzeWithClaude(drug, phase, candidates, sponsor || undefined);
+    // ── Step 2: LOE pipeline + Claude analysis in parallel (~30s each) ────────
+    const [loeResult, analysis] = await Promise.all([
+      runLoePipeline(drug, sponsor || undefined).catch(() => null),
+      analyzeWithClaude(drug, phase, candidates, sponsor || undefined),
+    ]);
 
     const indices = (analysis.selectedIndices || []).map((i: number) => i - 1);
     const recommendedRaw = (analysis.recommendedIndex ?? 1) - 1;
