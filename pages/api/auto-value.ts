@@ -96,7 +96,7 @@ REQUIRED: peakSalesEstimates must have exactly the same length and order as sele
     anthropicKey,
     system: systemPrompt,
     userMessage: userContent,
-    maxTokens: 1500,
+    maxTokens: 2500,
     maxSearches: 2,
     serperQueries: [
       `${drug} drug pharmaceutical clinical trial`,
@@ -105,8 +105,17 @@ REQUIRED: peakSalesEstimates must have exactly the same length and order as sele
   });
 
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("No JSON in Claude response");
-  const parsed = JSON.parse(jsonMatch[0]);
+  if (!jsonMatch) {
+    console.error("[auto-value] No JSON in Claude response. Raw:", raw.slice(0, 500));
+    throw new Error("No JSON in Claude response");
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    console.error("[auto-value] JSON parse failed. Match:", jsonMatch[0].slice(0, 500));
+    throw new Error("Claude returned malformed JSON");
+  }
 
   // Normalize phase to valid dropdown values
   const VALID_PHASES = ["Preclinical", "Phase 1", "Phase 2", "Phase 3", "Filed", "Approved"];
