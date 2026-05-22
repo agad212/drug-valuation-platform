@@ -118,6 +118,7 @@ REQUIRED: each peakSalesEstimates entry must include "indication" — the plain 
     console.error("[auto-value] JSON parse failed. Match:", jsonMatch[0].slice(0, 500));
     throw new Error("Claude returned malformed JSON");
   }
+  console.log("[auto-value] primaryIndication:", parsed.primaryIndication, "| peakSalesEstimates[0].indication:", parsed.peakSalesEstimates?.[0]?.indication, "| phase:", parsed.phase, "| loeYear from pipeline:", "TBD");
 
   // Normalize phase to valid dropdown values
   const VALID_PHASES = ["Preclinical", "Phase 1", "Phase 2", "Phase 3", "Filed", "Approved"];
@@ -250,6 +251,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? `BPCIA 12-year biologic exclusivity estimated from launch year ${refLaunchYear}`
         : `Default ${exclusivityYears}-year exclusivity estimated from launch year ${refLaunchYear}`;
     }
+    console.log("[auto-value] loeYear:", loeYear, "| inferredLaunchYear:", inferredLaunchYear, "| loeResult?.loeYear:", loeResult?.loeYear);
 
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
