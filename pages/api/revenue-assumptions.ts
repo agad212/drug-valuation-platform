@@ -89,7 +89,6 @@ ${schema}`;
   // which uses 2 Claude calls, so rate limits (429) are common on first attempt
   let text = "";
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 8000));
     try {
       text = await callClaudeWithSearch({
         anthropicKey: key,
@@ -104,8 +103,11 @@ ${schema}`;
       });
       break; // success — exit retry loop
     } catch (e: any) {
+      const is429 = e?.message?.includes("429");
       if (attempt === 2) throw e; // rethrow on final attempt
-      console.warn(`[revenue] attempt ${attempt + 1} failed (${e?.message}), retrying...`);
+      const wait = is429 ? 20000 : attempt * 8000; // 429 = wait 20s, others = 8/16s
+      console.warn(`[revenue] attempt ${attempt + 1} failed (${e?.message}), waiting ${wait}ms...`);
+      await new Promise(r => setTimeout(r, wait));
     }
   }
 
