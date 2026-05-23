@@ -566,7 +566,7 @@ export default function HomePage() {
       // Auto-trigger deep revenue research
       const indNames = (data.indications || []).map((i: any) => i.name).filter(Boolean);
       if (indNames.length > 0) {
-        setTimeout(() => onResearchRevenue(indNames, drug), 600);
+        setTimeout(() => onResearchRevenue(indNames, drug), 5000);
       }
 
       // Return summary for chat

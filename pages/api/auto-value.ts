@@ -253,14 +253,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     console.log("[auto-value] loeYear:", loeYear, "| inferredLaunchYear:", inferredLaunchYear, "| loeResult?.loeYear:", loeResult?.loeYear);
 
+    // Reject any "indication" that looks like a basis/rationale sentence rather than a disease name
+    const BAD_IND_WORDS = /risk|stage|competitive|crowding|assumption|earlier|later|market|entrant|penetration|pipeline|approval|pre-|post-|versus|compared|relative|outlook/i;
+    const isValidIndName = (s: string | undefined): s is string =>
+      !!s && s.length < 60 && !BAD_IND_WORDS.test(s);
+
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
       name: (usingSyntheticStub
-        ? analysis.primaryIndication?.trim()
-          || analysis.peakSalesEstimates?.[rank]?.indication?.trim()
-          || analysis.summary?.match(/targeting\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim()
-          || analysis.summary?.match(/(?:indicated for|approved for|treats?|used for)\s+([^.,;]+)/i)?.[1]?.trim()
-          || analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating|in)\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim()
+        ? [
+            analysis.primaryIndication?.trim(),
+            analysis.peakSalesEstimates?.[rank]?.indication?.trim(),
+            analysis.summary?.match(/targeting\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim(),
+            analysis.summary?.match(/(?:indicated for|approved for|treats?|used for)\s+([^.,;]+)/i)?.[1]?.trim(),
+            analysis.peakSalesEstimates?.[rank]?.basis?.match(/(?:for|treating|in)\s+([^.,;(]+(?:disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis)[^.,;(]*)/i)?.[1]?.trim(),
+          ].find(isValidIndName)
         : trial.conditions?.[0]) || trial.nctId,
       launchYear: trial.estimatedLaunchYear ?? inferredLaunchYear,
       alreadyLaunched: !trial.estimatedLaunchYear && effectivelyApproved,

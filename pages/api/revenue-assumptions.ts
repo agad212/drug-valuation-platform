@@ -85,17 +85,29 @@ Indications to model (${indications.length}): ${indications.join(" | ")}
 Search the web for analyst estimates, epidemiology, pricing, and comparable drugs for each indication listed above. Then return JSON exactly matching this schema with ${indications.length} entries in the same order:
 ${schema}`;
 
-  const text = await callClaudeWithSearch({
-    anthropicKey: key,
-    system: SYSTEM_PROMPT,
-    userMessage: userContent,
-    maxTokens: 8000,
-    maxSearches: Math.min(indications.length * 3, 10),
-    serperQueries: indications.flatMap((ind) => [
-      `${drug} ${ind} peak sales analyst estimate`,
-      `${drug} ${ind} market size`,
-    ]).slice(0, 6),
-  });
+  // Retry up to 3 times with backoff — revenue call fires right after auto-value
+  // which uses 2 Claude calls, so rate limits (429) are common on first attempt
+  let text = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 8000));
+    try {
+      text = await callClaudeWithSearch({
+        anthropicKey: key,
+        system: SYSTEM_PROMPT,
+        userMessage: userContent,
+        maxTokens: 8000,
+        maxSearches: Math.min(indications.length * 3, 10),
+        serperQueries: indications.flatMap((ind) => [
+          `${drug} ${ind} peak sales analyst estimate`,
+          `${drug} ${ind} market size`,
+        ]).slice(0, 6),
+      });
+      break; // success — exit retry loop
+    } catch (e: any) {
+      if (attempt === 2) throw e; // rethrow on final attempt
+      console.warn(`[revenue] attempt ${attempt + 1} failed (${e?.message}), retrying...`);
+    }
+  }
 
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("No JSON in Claude response");
