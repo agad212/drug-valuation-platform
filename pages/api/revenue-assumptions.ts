@@ -85,10 +85,10 @@ Indications to model (${indications.length}): ${indications.join(" | ")}
 Search the web for analyst estimates, epidemiology, pricing, and comparable drugs for each indication listed above. Then return JSON exactly matching this schema with ${indications.length} entries in the same order:
 ${schema}`;
 
-  // Retry up to 3 times with backoff — revenue call fires right after auto-value
-  // which uses 2 Claude calls, so rate limits (429) are common on first attempt
+  // Retry up to 5 times with aggressive backoff on 429 rate limits.
+  // Revenue fires right after auto-value's 2 Claude calls, so 429s are common.
   let text = "";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       text = await callClaudeWithSearch({
         anthropicKey: key,
@@ -104,9 +104,10 @@ ${schema}`;
       break; // success — exit retry loop
     } catch (e: any) {
       const is429 = e?.message?.includes("429");
-      if (attempt === 2) throw e; // rethrow on final attempt
-      const wait = is429 ? 20000 : attempt * 8000; // 429 = wait 20s, others = 8/16s
-      console.warn(`[revenue] attempt ${attempt + 1} failed (${e?.message}), waiting ${wait}ms...`);
+      if (attempt === 4) throw e; // rethrow on final attempt
+      // 429: wait 30s, 60s, 90s, 120s. Other errors: 5s.
+      const wait = is429 ? (attempt + 1) * 30000 : 5000;
+      console.warn(`[revenue] attempt ${attempt + 1} failed (${e?.message}), waiting ${wait / 1000}s...`);
       await new Promise(r => setTimeout(r, wait));
     }
   }
