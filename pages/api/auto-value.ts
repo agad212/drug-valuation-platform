@@ -17,7 +17,8 @@ async function analyzeWithClaude(
   summary: string;
   mechanism?: string;
   phase?: string;
-  peakSalesEstimates: { peakSalesM: number; confidence: string; basis: string; devCostM?: number }[];
+  peakSalesEstimates: { indication?: string; peakSalesM: number; confidence: string; basis: string; devCostM?: number }[];
+  primaryIndication?: string;
 }> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY not set");
