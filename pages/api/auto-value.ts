@@ -253,10 +253,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     console.log("[auto-value] loeYear:", loeYear, "| inferredLaunchYear:", inferredLaunchYear, "| loeResult?.loeYear:", loeResult?.loeYear);
 
-    // Reject any "indication" that looks like a basis/rationale sentence rather than a disease name
-    const BAD_IND_WORDS = /risk|stage|competitive|crowding|assumption|earlier|later|market|entrant|penetration|pipeline|approval|pre-|post-|versus|compared|relative|outlook/i;
+    // Only accept indication names that look like real disease names.
+    // Must be short AND contain a disease keyword OR be a known oncology abbreviation.
+    const DISEASE_KEYWORDS = /disease|disorder|cancer|carcinoma|leukemia|lymphoma|syndrome|sclerosis|fibrosis|tumor|tumour|melanoma|sarcoma|glioma|myeloma|hepatitis|infection|psoriasis|arthritis|diabetes|alzheimer|parkinson|huntington|dementia|depression|schizophrenia|epilepsy|asthma|copd|hypertension|obesity|nsclc|sclc|crc|hcc|rcc|aml|cll|cml|mds|ibd|uc|cd\b|ra\b/i;
     const isValidIndName = (s: string | undefined): s is string =>
-      !!s && s.length < 60 && !BAD_IND_WORDS.test(s);
+      !!s && s.length < 60 && DISEASE_KEYWORDS.test(s);
 
     const indications = selectedTrials.map(({ trial, reason, salesEstimate }, rank) => ({
       id: cryptoId(),
