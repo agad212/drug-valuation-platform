@@ -1326,8 +1326,12 @@ export default function HomePage() {
                   potency: "1A · Potency",
                   selectivity: "1B · Selectivity",
                   pkProfile: "1C · PK Profile",
+                  targetEngagement: "1D · Target Engagement",
+                  therapeuticWindow: "1E · Therapeutic Window",
                   targetValidation: "2A · Target Validation",
                   indicationMechFit: "2B · Indication Fit",
+                  modalityFit: "2C · Modality Fit",
+                  translationRate: "2D · Translation Rate",
                 };
                 const scoreColor = (s: number) => s >= 0.75 ? "#10b981" : s >= 0.5 ? "#f59e0b" : "#ef4444";
                 return (
@@ -1351,7 +1355,7 @@ export default function HomePage() {
                     <div style={{ marginBottom: 16 }}>
                       <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Factor Breakdown</div>
                       {Object.entries(ptrsResult.factors).map(([key, factor]: [string, any]) => (
-                        <div key={key} style={{ display: "grid", gridTemplateColumns: "160px 60px 80px 1fr", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                        <div key={key} style={{ display: "grid", gridTemplateColumns: "190px 60px 80px 1fr", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
                           <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", fontFamily: "var(--font-mono)" }}>{FACTOR_LABELS[key] || key}</div>
                           <div style={{ fontSize: 16, fontWeight: 700, color: scoreColor(factor.score), fontFamily: "var(--font-display)" }}>{(factor.score * 100).toFixed(0)}</div>
                           <div style={{ fontSize: 10, color: factor.confidence === "unknown" ? "#f59e0b" : "var(--text-muted)", textTransform: "uppercase" }}>
@@ -1372,6 +1376,30 @@ export default function HomePage() {
                     </div>
 
                     <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>{ptrsResult.summary}</div>
+
+                    {/* Phase benchmark percentile */}
+                    {ptrsResult.phaseBenchmark && (() => {
+                      const bm = ptrsResult.phaseBenchmark;
+                      const pctColor = bm.percentile >= 75 ? "#10b981" : bm.percentile >= 50 ? "#3b82f6" : bm.percentile >= 25 ? "#f59e0b" : "#ef4444";
+                      return (
+                        <div style={{ marginTop: 14, background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px" }}>
+                          <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>vs. Historical {bm.benchmarks.label} Drugs (DiMasi / Hay et al.)</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                            <div style={{ fontSize: 22, fontWeight: 800, color: pctColor, fontFamily: "var(--font-display)", minWidth: 52 }}>{bm.percentile}<span style={{ fontSize: 12, fontWeight: 500 }}>th</span></div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{bm.label}</div>
+                              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                                Industry range: {(bm.benchmarks.p10 * 100).toFixed(0)}%–{(bm.benchmarks.p90 * 100).toFixed(0)}% · median {(bm.benchmarks.median * 100).toFixed(0)}%
+                              </div>
+                            </div>
+                            {/* Simple percentile bar */}
+                            <div style={{ width: 100, height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${bm.percentile}%`, background: pctColor, borderRadius: 3, transition: "width 0.6s ease" }} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
