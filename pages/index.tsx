@@ -421,6 +421,8 @@ export default function HomePage() {
   const [ptrsLoading, setPtrsLoading] = useState(false);
   const [ptrsOverrides, setPtrsOverrides] = useState<Record<string, number>>({});
   const [ptrsRescoring, setPtrsRescoring] = useState(false);
+  const [layer2Result, setLayer2Result] = useState<any>(null);
+  const [layer2Loading, setLayer2Loading] = useState(false);
   const [recommendedNctId, setRecommendedNctId] = useState("");
   const [appliedNctIds, setAppliedNctIds] = useState<Set<string>>(new Set());
   const { pushToast, ToastHost } = useToast();
@@ -649,14 +651,53 @@ export default function HomePage() {
       if (!res.ok) throw new Error("PTRS scoring failed");
       const data = await res.json();
       setPtrsResult(data);
-      setPtrsOverrides({});  // clear any previous manual overrides
+      setPtrsOverrides({});   // clear any previous manual overrides
+      setLayer2Result(null);  // clear stale Layer 2 while new one loads
       // Auto-apply the mechanistic PTRS to the valuation
       setV((cur) => ({ ...cur, ptrs: data.ptrs }));
-      pushToast(`PTRS scored: ${(data.ptrs * 100).toFixed(1)}% (MSS ${data.mss.toFixed(2)})`, "success", 6000);
+      pushToast(`PTRS Layer 1: ${(data.ptrs * 100).toFixed(1)}% — scoring trial design…`, "success", 5000);
+      // Auto-trigger Layer 2 (3s delay — no Claude rate limit concern, separate call)
+      setTimeout(() => onScoreLayer2(drug, indication, phase, sponsor, data), 3000);
     } catch (e: any) {
       console.error("[ptrs] scoring failed:", e?.message);
     } finally {
       setPtrsLoading(false);
+    }
+  }
+
+  async function onScoreLayer2(
+    drug: string, indication: string, phase: string,
+    sponsor: string | undefined, l1Result: any
+  ) {
+    setLayer2Loading(true);
+    try {
+      // Pick best NCT ID from trial results if available
+      const nctId = trialResults?.[0]?.nctId;
+      const res = await fetch("/api/ptrs-layer2", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          drug, indication, phase, sponsor, nctId,
+          layer1: {
+            mss: l1Result.mss,
+            variance: l1Result.variance,
+            ptrs: l1Result.ptrs,
+            ciHalfWidth: l1Result.ptrsCI
+              ? (l1Result.ptrsCI.upper - l1Result.ptrsCI.lower) / 2
+              : 0.10,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error("Layer 2 scoring failed");
+      const data = await res.json();
+      setLayer2Result(data);
+      // Apply the combined PTRS (Layer 1 + 2) to the valuation
+      setV((cur) => ({ ...cur, ptrs: data.ptrsCombined }));
+      pushToast(`Final PTRS: ${(data.ptrsCombined * 100).toFixed(1)}% (Layer 1 + trial design)`, "success", 6000);
+    } catch (e: any) {
+      console.error("[layer2] scoring failed:", e?.message);
+    } finally {
+      setLayer2Loading(false);
     }
   }
 
@@ -1478,6 +1519,133 @@ export default function HomePage() {
                       return (
                         <div style={{ marginTop: 14, background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px" }}>
                           <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>vs. Historical {bm.benchmarks.label} Drugs (DiMasi / Hay et al.)</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                            <div style={{ fontSize: 22, fontWeight: 800, color: pctColor, fontFamily: "var(--font-display)", minWidth: 52 }}>{bm.percentile}<span style={{ fontSize: 12, fontWeight: 500 }}>th</span></div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{bm.label}</div>
+                              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                                Industry range: {(bm.benchmarks.p10 * 100).toFixed(0)}%–{(bm.benchmarks.p90 * 100).toFixed(0)}% · median {(bm.benchmarks.median * 100).toFixed(0)}%
+                              </div>
+                            </div>
+                            <div style={{ width: 100, height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${bm.percentile}%`, background: pctColor, borderRadius: 3, transition: "width 0.6s ease" }} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })()}
+            </Card>
+          )}
+
+          {/* Layer 2 — Trial Design Simulation */}
+          {(layer2Loading || layer2Result) && (
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                <div>
+                  <SectionLabel>Trial Design Simulation · Layer 2</SectionLabel>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
+                    Closed-form trial success probability · {v.asset} · {v.phase}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button className="btn btn-ghost" onClick={() => { if (ptrsResult) onScoreLayer2(v.asset, v.indications?.[0]?.name || "", v.phase || "Phase 2", v.sponsor, ptrsResult); }} disabled={layer2Loading} style={{ fontSize: 11 }}>{layer2Loading ? "⏳" : "↻ Refresh"}</button>
+                  <button onClick={() => setLayer2Result(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+
+              {layer2Loading && !layer2Result && (
+                <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)", fontSize: 13 }}>
+                  ⏳ Analyzing trial design…
+                </div>
+              )}
+
+              {layer2Result && (() => {
+                const scoreColor = (s: number) => s >= 0.75 ? "#10b981" : s >= 0.5 ? "#f59e0b" : "#ef4444";
+                const deltaColor = (d: number) => d >= 0 ? "#10b981" : "#ef4444";
+                const { trialInputs, riskFlags, phaseBenchmark, ptrsCombined, ptrsCI, layer2Delta, layer2Multiplier, trialSuccessProb, ptrsLayer1 } = layer2Result;
+
+                const ENDPOINT_LABEL: Record<string, string> = { hard: "Hard (OS / CR)", surrogate: "Surrogate (ORR / PFS)", pro: "PRO / Subjective" };
+                const DESIGN_LABEL: Record<string, string> = { rct: "Randomized Controlled", single_arm: "Single Arm", basket: "Basket / Umbrella" };
+                const POP_LABEL: Record<string, string> = { biomarker_selected: "Biomarker Selected", broad: "Broad / Unselected", rare_small: "Rare / Small Pool" };
+                const PLACEBO_LABEL: Record<string, string> = { low: "Low (oncology / rare)", moderate: "Moderate (autoimmune)", high: "High (CNS / pain)" };
+                const REG_LABEL: Record<string, string> = { standard: "Standard", btd: "Breakthrough Therapy", orphan: "Orphan Drug", btd_orphan: "BTD + Orphan", accelerated: "Accelerated Approval", confirmatory: "Confirmatory (post-AA)" };
+
+                return (
+                  <div>
+                    {/* Combined PTRS headline */}
+                    <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Combined PTRS (Layer 1 + 2)</div>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>
+                          Layer 1: {(ptrsLayer1 * 100).toFixed(1)}%
+                          {" "}<span style={{ color: deltaColor(layer2Delta) }}>{layer2Delta >= 0 ? "+" : ""}{(layer2Delta * 100).toFixed(1)}%</span> trial design
+                          {" · "}multiplier {layer2Multiplier.toFixed(2)}×
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 32, fontWeight: 800, color: scoreColor(ptrsCombined), fontFamily: "var(--font-display)", lineHeight: 1 }}>
+                          {(ptrsCombined * 100).toFixed(1)}%
+                        </div>
+                        {ptrsCI && (
+                          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>
+                            range {(ptrsCI.lower * 100).toFixed(0)}%–{(ptrsCI.upper * 100).toFixed(0)}%
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Trial design inputs table */}
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Trial Design Inputs</div>
+                      {[
+                        ["Sample Size", `n = ${trialInputs.n}${trialInputs.enrollmentNote ? ` · ${trialInputs.enrollmentNote}` : ""}`],
+                        ["Primary Endpoint", `${ENDPOINT_LABEL[trialInputs.endpointType] || trialInputs.endpointType}${trialInputs.endpointDescription ? ` · ${trialInputs.endpointDescription}` : ""}`],
+                        ["Trial Design", DESIGN_LABEL[trialInputs.designType] || trialInputs.designType],
+                        ["Patient Population", POP_LABEL[trialInputs.populationType] || trialInputs.populationType],
+                        ["Placebo Response", PLACEBO_LABEL[trialInputs.placeboResponse] || trialInputs.placeboResponse],
+                        ["Regulatory Context", REG_LABEL[trialInputs.regulatoryContext] || trialInputs.regulatoryContext],
+                      ].map(([label, value]) => (
+                        <div key={label} style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--border)" }}>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{label}</div>
+                          <div style={{ fontSize: 12, color: "var(--text)" }}>{value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Trial success probability */}
+                    <div style={{ marginBottom: 16, background: "var(--surface-2)", borderRadius: 8, padding: "10px 14px" }}>
+                      <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>P(trial detects effect)</div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        Given this design, probability the trial would return a statistically significant result:
+                        {" "}<span style={{ fontWeight: 700, color: scoreColor(trialSuccessProb) }}>{(trialSuccessProb * 100).toFixed(0)}%</span>
+                      </div>
+                    </div>
+
+                    {/* Risk flags */}
+                    {riskFlags.length > 0 && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Design Risk Flags</div>
+                        {riskFlags.map((flag: any, i: number) => (
+                          <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                            <span style={{ fontSize: 12, minWidth: 16 }}>
+                              {flag.severity === "high" ? "🔴" : flag.severity === "medium" ? "🟡" : "ℹ️"}
+                            </span>
+                            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{flag.message}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Phase benchmark percentile (updated with Layer 2) */}
+                    {phaseBenchmark && (() => {
+                      const bm = phaseBenchmark;
+                      const pctColor = bm.percentile >= 75 ? "#10b981" : bm.percentile >= 50 ? "#3b82f6" : bm.percentile >= 25 ? "#f59e0b" : "#ef4444";
+                      return (
+                        <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px" }}>
+                          <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>vs. Historical {bm.benchmarks.label} Drugs (Layer 1 + 2)</div>
                           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                             <div style={{ fontSize: 22, fontWeight: 800, color: pctColor, fontFamily: "var(--font-display)", minWidth: 52 }}>{bm.percentile}<span style={{ fontSize: 12, fontWeight: 500 }}>th</span></div>
                             <div style={{ flex: 1 }}>
