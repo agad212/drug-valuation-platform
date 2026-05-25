@@ -172,7 +172,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     let trialInputs: TrialDesignInputs | undefined;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       try {
         trialInputs = await extractTrialDesign(
           drug, indication || "", phase || "Phase 2",
@@ -181,8 +181,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
       } catch (e: any) {
         const is429 = e?.message?.includes("429");
-        if (attempt === 2) throw e;
-        const wait = is429 ? (attempt + 1) * 20000 : 5000;
+        if (attempt === 3) throw e;
+        const wait = is429 ? (attempt + 1) * 30000 : 5000;
         console.warn(`[layer2] attempt ${attempt + 1} failed (${e?.message}), waiting ${wait / 1000}s...`);
         await new Promise(r => setTimeout(r, wait));
       }
