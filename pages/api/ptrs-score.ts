@@ -254,15 +254,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = scoreMechanism(factors);
     const baseline = PHASE_BASELINE[phase] ?? 0.25;
     const ptrs = Math.max(0.01, Math.min(1, baseline + result.ptrsAdjustment));
+    const ptrsCI = {
+      lower: Math.max(0.01, ptrs - result.ciHalfWidth),
+      upper: Math.min(0.99, ptrs + result.ciHalfWidth),
+    };
     const phaseBenchmark = computePercentile(ptrs, phase || "Phase 2");
 
     return res.status(200).json({
       ptrs,
+      ptrsCI,
       baseline,
       ptrsAdjustment: result.ptrsAdjustment,
       ips: result.ips,
       trs: result.trs,
       mss: result.mss,
+      divergence: result.divergence,
       variance: result.variance,
       factors: result.factors,
       summary: result.summary,

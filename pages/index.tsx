@@ -419,6 +419,8 @@ export default function HomePage() {
   const [revenueTab, setRevenueTab] = useState(0);
   const [ptrsResult, setPtrsResult] = useState<any>(null);
   const [ptrsLoading, setPtrsLoading] = useState(false);
+  const [ptrsOverrides, setPtrsOverrides] = useState<Record<string, number>>({});
+  const [ptrsRescoring, setPtrsRescoring] = useState(false);
   const [recommendedNctId, setRecommendedNctId] = useState("");
   const [appliedNctIds, setAppliedNctIds] = useState<Set<string>>(new Set());
   const { pushToast, ToastHost } = useToast();
@@ -647,6 +649,7 @@ export default function HomePage() {
       if (!res.ok) throw new Error("PTRS scoring failed");
       const data = await res.json();
       setPtrsResult(data);
+      setPtrsOverrides({});  // clear any previous manual overrides
       // Auto-apply the mechanistic PTRS to the valuation
       setV((cur) => ({ ...cur, ptrs: data.ptrs }));
       pushToast(`PTRS scored: ${(data.ptrs * 100).toFixed(1)}% (MSS ${data.mss.toFixed(2)})`, "success", 6000);
@@ -654,6 +657,36 @@ export default function HomePage() {
       console.error("[ptrs] scoring failed:", e?.message);
     } finally {
       setPtrsLoading(false);
+    }
+  }
+
+  async function onRescore() {
+    if (!ptrsResult) return;
+    setPtrsRescoring(true);
+    try {
+      // Merge overrides into the existing factors
+      const mergedFactors = Object.fromEntries(
+        Object.entries(ptrsResult.factors).map(([key, factor]: [string, any]) => [
+          key,
+          ptrsOverrides[key] !== undefined
+            ? { ...factor, score: ptrsOverrides[key] / 100, rationale: factor.rationale + " [user override]" }
+            : factor,
+        ])
+      );
+      const res = await fetch("/api/ptrs-rescore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ factors: mergedFactors, phase: v.phase || "Phase 2" }),
+      });
+      if (!res.ok) throw new Error("Rescore failed");
+      const data = await res.json();
+      setPtrsResult(data);
+      setV((cur) => ({ ...cur, ptrs: data.ptrs }));
+      pushToast(`PTRS recalculated: ${(data.ptrs * 100).toFixed(1)}%`, "success", 4000);
+    } catch (e: any) {
+      console.error("[ptrs] rescore failed:", e?.message);
+    } finally {
+      setPtrsRescoring(false);
     }
   }
 
@@ -1334,6 +1367,7 @@ export default function HomePage() {
                   translationRate: "2D · Translation Rate",
                 };
                 const scoreColor = (s: number) => s >= 0.75 ? "#10b981" : s >= 0.5 ? "#f59e0b" : "#ef4444";
+                const hasOverrides = Object.keys(ptrsOverrides).length > 0;
                 return (
                   <div>
                     {/* Score summary row */}
@@ -1351,28 +1385,88 @@ export default function HomePage() {
                       ))}
                     </div>
 
-                    {/* Factor breakdown */}
+                    {/* Factor breakdown with override inputs */}
                     <div style={{ marginBottom: 16 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Factor Breakdown</div>
-                      {Object.entries(ptrsResult.factors).map(([key, factor]: [string, any]) => (
-                        <div key={key} style={{ display: "grid", gridTemplateColumns: "190px 60px 80px 1fr", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", fontFamily: "var(--font-mono)" }}>{FACTOR_LABELS[key] || key}</div>
-                          <div style={{ fontSize: 16, fontWeight: 700, color: scoreColor(factor.score), fontFamily: "var(--font-display)" }}>{(factor.score * 100).toFixed(0)}</div>
-                          <div style={{ fontSize: 10, color: factor.confidence === "unknown" ? "#f59e0b" : "var(--text-muted)", textTransform: "uppercase" }}>
-                            {factor.confidence}{factor.highVariance ? " ⚠" : ""}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Factor Breakdown</div>
+                        <div style={{ fontSize: 10, color: "var(--text-faint)" }}>Edit score to override AI</div>
+                      </div>
+                      {Object.entries(ptrsResult.factors).map(([key, factor]: [string, any]) => {
+                        const displayScore = ptrsOverrides[key] !== undefined ? ptrsOverrides[key] : Math.round(factor.score * 100);
+                        const isOverridden = ptrsOverrides[key] !== undefined;
+                        return (
+                          <div key={key} style={{ display: "grid", gridTemplateColumns: "190px 80px 80px 1fr", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                              {FACTOR_LABELS[key] || key}
+                              {isOverridden && <span style={{ color: "#f59e0b", fontSize: 10, marginLeft: 4 }}>✎</span>}
+                            </div>
+                            <input
+                              type="number"
+                              min={0} max={100}
+                              value={displayScore}
+                              onChange={(e) => {
+                                const val = Math.max(0, Math.min(100, Number(e.target.value)));
+                                setPtrsOverrides(prev => ({ ...prev, [key]: val }));
+                              }}
+                              style={{
+                                width: 60, padding: "3px 6px", borderRadius: 4, border: `1px solid ${isOverridden ? "#f59e0b" : "var(--border)"}`,
+                                background: isOverridden ? "rgba(245,158,11,0.08)" : "var(--surface-2)",
+                                color: scoreColor(displayScore / 100), fontSize: 15, fontWeight: 700,
+                                fontFamily: "var(--font-display)", textAlign: "center",
+                              }}
+                            />
+                            <div style={{ fontSize: 10, color: factor.confidence === "unknown" ? "#f59e0b" : "var(--text-muted)", textTransform: "uppercase" }}>
+                              {factor.confidence}{factor.highVariance ? " ⚠" : ""}
+                            </div>
+                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{factor.rationale}</div>
                           </div>
-                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{factor.rationale}</div>
+                        );
+                      })}
+                      {/* Override action bar */}
+                      {hasOverrides && (
+                        <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center" }}>
+                          <button
+                            className="btn btn-primary"
+                            onClick={onRescore}
+                            disabled={ptrsRescoring}
+                            style={{ fontSize: 12, padding: "6px 14px" }}
+                          >
+                            {ptrsRescoring ? "⏳ Recalculating…" : "↻ Recalculate with my inputs"}
+                          </button>
+                          <button
+                            className="btn btn-ghost"
+                            onClick={() => setPtrsOverrides({})}
+                            style={{ fontSize: 11 }}
+                          >
+                            Reset to AI scores
+                          </button>
+                          {ptrsResult.overridden && (
+                            <span style={{ fontSize: 11, color: "#f59e0b" }}>Using your overrides</span>
+                          )}
                         </div>
-                      ))}
+                      )}
                     </div>
 
-                    {/* PTRS result */}
+                    {/* PTRS result with confidence interval */}
                     <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div>
                         <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Mechanistic PTRS</div>
-                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Phase baseline {(ptrsResult.baseline * 100).toFixed(0)}% + mechanism adjustment {ptrsResult.ptrsAdjustment >= 0 ? "+" : ""}{(ptrsResult.ptrsAdjustment * 100).toFixed(0)}%</div>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>
+                          Phase baseline {(ptrsResult.baseline * 100).toFixed(0)}%
+                          {" "}{ptrsResult.ptrsAdjustment >= 0 ? "+" : ""}{(ptrsResult.ptrsAdjustment * 100).toFixed(0)}% mechanism
+                          {ptrsResult.divergence && <span style={{ color: "#f59e0b" }}> · IPS/TRS divergence</span>}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: scoreColor(ptrsResult.ptrs), fontFamily: "var(--font-display)" }}>{(ptrsResult.ptrs * 100).toFixed(1)}%</div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 28, fontWeight: 800, color: scoreColor(ptrsResult.ptrs), fontFamily: "var(--font-display)", lineHeight: 1 }}>
+                          {(ptrsResult.ptrs * 100).toFixed(1)}%
+                        </div>
+                        {ptrsResult.ptrsCI && (
+                          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>
+                            range {(ptrsResult.ptrsCI.lower * 100).toFixed(0)}%–{(ptrsResult.ptrsCI.upper * 100).toFixed(0)}%
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>{ptrsResult.summary}</div>
@@ -1392,7 +1486,6 @@ export default function HomePage() {
                                 Industry range: {(bm.benchmarks.p10 * 100).toFixed(0)}%–{(bm.benchmarks.p90 * 100).toFixed(0)}% · median {(bm.benchmarks.median * 100).toFixed(0)}%
                               </div>
                             </div>
-                            {/* Simple percentile bar */}
                             <div style={{ width: 100, height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
                               <div style={{ height: "100%", width: `${bm.percentile}%`, background: pctColor, borderRadius: 3, transition: "width 0.6s ease" }} />
                             </div>
