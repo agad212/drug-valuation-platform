@@ -73,8 +73,10 @@ export function scoreMechanism(factors: MechanismFactors): MechanismScoreResult 
     factors.targetValidation.score * TRS_WEIGHTS.targetValidation +
     factors.indicationMechFit.score * TRS_WEIGHTS.indicationMechFit;
 
-  // Mechanism Signal Strength
-  const mss = clamp01(ips * trs);
+  // Mechanism Signal Strength — geometric mean of IPS and TRS
+  // √(IPS × TRS) is fairer than multiplication: two decent scores stay decent,
+  // but imbalance is still penalized (great drug, unproven target → moderate MSS)
+  const mss = clamp01(Math.sqrt(ips * trs));
 
   // Variance — increases with unknown factors, high-variance flags, and conflicts
   const allFactors = Object.values(factors);
@@ -89,17 +91,10 @@ export function scoreMechanism(factors: MechanismFactors): MechanismScoreResult 
     (conflict ? 0.15 : 0)
   );
 
-  // Map MSS to a PTRS adjustment on top of the phase baseline
-  // MSS 0.8–1.0 → +0.20, MSS 0.6–0.8 → +0.10, MSS 0.4–0.6 → 0,
-  // MSS 0.2–0.4 → -0.08, MSS 0–0.2 → -0.15
-  const ptrsAdjustment = clamp(
-    mss >= 0.8 ? 0.20
-    : mss >= 0.6 ? 0.10
-    : mss >= 0.4 ? 0.00
-    : mss >= 0.2 ? -0.08
-    : -0.15,
-    -0.15, 0.20
-  );
+  // Map MSS to a PTRS adjustment via linear mapping centered at 0.5
+  // adjustment = (MSS - 0.5) × 0.40
+  // MSS 1.0 → +0.20, MSS 0.65 → +0.06, MSS 0.50 → 0, MSS 0.35 → -0.06, MSS 0.0 → -0.20
+  const ptrsAdjustment = clamp((mss - 0.5) * 0.40, -0.20, 0.20);
 
   // Human-readable summary
   const mssLabel = mss >= 0.8 ? "strong" : mss >= 0.6 ? "moderate-strong" : mss >= 0.4 ? "moderate" : mss >= 0.2 ? "weak-moderate" : "weak";
