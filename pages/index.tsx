@@ -577,9 +577,7 @@ export default function HomePage() {
       }
 
       // Auto-trigger PTRS mechanism scoring (after revenue delay to avoid 429)
-      if (data.mechanism) {
-        setTimeout(() => onScorePtrs(drug, data.mechanism, indNames[0], data.phase, data.sponsor), 25000);
-      }
+      setTimeout(() => onScorePtrs(drug, data.mechanism || "", indNames[0] || "", data.phase, data.sponsor), 25000);
 
       // Return summary for chat
       const mechStr = data.mechanism ? ` · ${data.mechanism}` : "";
@@ -660,6 +658,7 @@ export default function HomePage() {
       setTimeout(() => onScoreLayer2(drug, indication, phase, sponsor, data), 3000);
     } catch (e: any) {
       console.error("[ptrs] scoring failed:", e?.message);
+      pushToast(`PTRS scoring failed: ${e?.message || "unknown error"}`, "error", 6000);
     } finally {
       setPtrsLoading(false);
     }
