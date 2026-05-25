@@ -417,6 +417,8 @@ export default function HomePage() {
   const [revenueAnalysis, setRevenueAnalysis] = useState<RevenueAnalysisResult | null>(null);
   const [revenueLoading, setRevenueLoading] = useState(false);
   const [revenueTab, setRevenueTab] = useState(0);
+  const [ptrsResult, setPtrsResult] = useState<any>(null);
+  const [ptrsLoading, setPtrsLoading] = useState(false);
   const [recommendedNctId, setRecommendedNctId] = useState("");
   const [appliedNctIds, setAppliedNctIds] = useState<Set<string>>(new Set());
   const { pushToast, ToastHost } = useToast();
@@ -525,6 +527,7 @@ export default function HomePage() {
     setAutoLoading(true);
     setTrialResults(null);
     setPatentResult(null);
+    setPtrsResult(null);
     try {
       const params = new URLSearchParams({ drug, phase });
       if (sponsor) params.set("sponsor", sponsor);
@@ -567,6 +570,11 @@ export default function HomePage() {
       const indNames = (data.indications || []).map((i: any) => i.name).filter(Boolean);
       if (indNames.length > 0) {
         setTimeout(() => onResearchRevenue(indNames, drug), 15000);
+      }
+
+      // Auto-trigger PTRS mechanism scoring
+      if (data.mechanism) {
+        setTimeout(() => onScorePtrs(drug, data.mechanism, indNames[0], data.phase, data.sponsor), 2000);
       }
 
       // Return summary for chat
@@ -625,6 +633,27 @@ export default function HomePage() {
       }))});
     } finally {
       setRevenueLoading(false);
+    }
+  }
+
+  async function onScorePtrs(drug: string, mechanism: string, indication: string, phase: string, sponsor?: string) {
+    setPtrsLoading(true);
+    try {
+      const res = await fetch("/api/ptrs-score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drug, mechanism, indication, phase, sponsor }),
+      });
+      if (!res.ok) throw new Error("PTRS scoring failed");
+      const data = await res.json();
+      setPtrsResult(data);
+      // Auto-apply the mechanistic PTRS to the valuation
+      setV((cur) => ({ ...cur, ptrs: data.ptrs }));
+      pushToast(`PTRS scored: ${(data.ptrs * 100).toFixed(1)}% (MSS ${data.mss.toFixed(2)})`, "success", 6000);
+    } catch (e: any) {
+      console.error("[ptrs] scoring failed:", e?.message);
+    } finally {
+      setPtrsLoading(false);
     }
   }
 
@@ -1267,6 +1296,85 @@ export default function HomePage() {
                   </ul>
                 </div>
               )}
+            </Card>
+          )}
+
+          {/* PTRS Mechanism Breakdown */}
+          {(ptrsLoading || ptrsResult) && (
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                <div>
+                  <SectionLabel>PTRS — Mechanism Analysis</SectionLabel>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
+                    AI-scored pharmacological signal strength · {v.asset} · {v.phase}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button className="btn btn-ghost" onClick={() => { if (v.asset && v.mechanism) onScorePtrs(v.asset, v.mechanism, v.indications?.[0]?.name || "", v.phase || "Phase 2", v.sponsor); }} disabled={ptrsLoading} style={{ fontSize: 11 }}>{ptrsLoading ? "⏳" : "↻ Refresh"}</button>
+                  <button onClick={() => setPtrsResult(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+
+              {ptrsLoading && !ptrsResult && (
+                <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)", fontSize: 13 }}>
+                  ⏳ Scoring mechanism factors…
+                </div>
+              )}
+
+              {ptrsResult && (() => {
+                const FACTOR_LABELS: Record<string, string> = {
+                  potency: "1A · Potency",
+                  selectivity: "1B · Selectivity",
+                  pkProfile: "1C · PK Profile",
+                  targetValidation: "2A · Target Validation",
+                  indicationMechFit: "2B · Indication Fit",
+                };
+                const scoreColor = (s: number) => s >= 0.75 ? "#10b981" : s >= 0.5 ? "#f59e0b" : "#ef4444";
+                return (
+                  <div>
+                    {/* Score summary row */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
+                      {[
+                        { label: "IPS", desc: "Intrinsic Potency", val: ptrsResult.ips },
+                        { label: "TRS", desc: "Translational Reliability", val: ptrsResult.trs },
+                        { label: "MSS", desc: "Mechanism Signal Strength", val: ptrsResult.mss },
+                      ].map(({ label, desc, val }) => (
+                        <div key={label} style={{ background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px" }}>
+                          <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{desc}</div>
+                          <div style={{ fontSize: 24, fontWeight: 800, color: scoreColor(val), fontFamily: "var(--font-display)" }}>{(val * 100).toFixed(0)}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{label} / 100</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Factor breakdown */}
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>Factor Breakdown</div>
+                      {Object.entries(ptrsResult.factors).map(([key, factor]: [string, any]) => (
+                        <div key={key} style={{ display: "grid", gridTemplateColumns: "160px 60px 80px 1fr", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", fontFamily: "var(--font-mono)" }}>{FACTOR_LABELS[key] || key}</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: scoreColor(factor.score), fontFamily: "var(--font-display)" }}>{(factor.score * 100).toFixed(0)}</div>
+                          <div style={{ fontSize: 10, color: factor.confidence === "unknown" ? "#f59e0b" : "var(--text-muted)", textTransform: "uppercase" }}>
+                            {factor.confidence}{factor.highVariance ? " ⚠" : ""}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{factor.rationale}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* PTRS result */}
+                    <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Mechanistic PTRS</div>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Phase baseline {(ptrsResult.baseline * 100).toFixed(0)}% + mechanism adjustment {ptrsResult.ptrsAdjustment >= 0 ? "+" : ""}{(ptrsResult.ptrsAdjustment * 100).toFixed(0)}%</div>
+                      </div>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: scoreColor(ptrsResult.ptrs), fontFamily: "var(--font-display)" }}>{(ptrsResult.ptrs * 100).toFixed(1)}%</div>
+                    </div>
+
+                    <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>{ptrsResult.summary}</div>
+                  </div>
+                );
+              })()}
             </Card>
           )}
 
