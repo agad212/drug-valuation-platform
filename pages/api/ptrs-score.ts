@@ -151,11 +151,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!anthropicKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set" });
 
   try {
-    const factors = await scoreFeaturesWithClaude(
-      drug, mechanism || "", indication || "", phase || "Phase 2",
-      sponsor || undefined, anthropicKey
-    );
+    let factors;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        factors = await scoreFeaturesWithClaude(
+          drug, mechanism || "", indication || "", phase || "Phase 2",
+          sponsor || undefined, anthropicKey
+        );
+        break;
+      } catch (e: any) {
+        const is429 = e?.message?.includes("429");
+        if (attempt === 3) throw e;
+        const wait = is429 ? (attempt + 1) * 20000 : 5000;
+        console.warn(`[ptrs] attempt ${attempt + 1} failed (${e?.message}), waiting ${wait / 1000}s...`);
+        await new Promise(r => setTimeout(r, wait));
+      }
+    }
 
+    if (!factors) throw new Error("PTRS scoring failed after retries");
     const result = scoreMechanism(factors);
     const baseline = PHASE_BASELINE[phase] ?? 0.25;
     const ptrs = Math.max(0.01, Math.min(1, baseline + result.ptrsAdjustment));

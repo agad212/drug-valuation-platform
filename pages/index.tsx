@@ -572,9 +572,9 @@ export default function HomePage() {
         setTimeout(() => onResearchRevenue(indNames, drug), 15000);
       }
 
-      // Auto-trigger PTRS mechanism scoring
+      // Auto-trigger PTRS mechanism scoring (after revenue delay to avoid 429)
       if (data.mechanism) {
-        setTimeout(() => onScorePtrs(drug, data.mechanism, indNames[0], data.phase, data.sponsor), 2000);
+        setTimeout(() => onScorePtrs(drug, data.mechanism, indNames[0], data.phase, data.sponsor), 25000);
       }
 
       // Return summary for chat
