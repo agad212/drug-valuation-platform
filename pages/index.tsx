@@ -654,8 +654,8 @@ export default function HomePage() {
       // Auto-apply the mechanistic PTRS to the valuation
       setV((cur) => ({ ...cur, ptrs: data.ptrs }));
       pushToast(`PTRS Layer 1: ${(data.ptrs * 100).toFixed(1)}% — scoring trial design…`, "success", 5000);
-      // Auto-trigger Layer 2 (3s delay — no Claude rate limit concern, separate call)
-      setTimeout(() => onScoreLayer2(drug, indication, phase, sponsor, data), 3000);
+      // Auto-trigger Layer 2 (8s delay — let Layer 1 API fully complete before firing)
+      setTimeout(() => onScoreLayer2(drug, indication, phase, sponsor, data), 8000);
     } catch (e: any) {
       console.error("[ptrs] scoring failed:", e?.message);
       pushToast(`PTRS scoring failed: ${e?.message || "unknown error"}`, "error", 6000);
@@ -695,6 +695,7 @@ export default function HomePage() {
       pushToast(`Final PTRS: ${(data.ptrsCombined * 100).toFixed(1)}% (Layer 1 + trial design)`, "success", 6000);
     } catch (e: any) {
       console.error("[layer2] scoring failed:", e?.message);
+      pushToast(`Trial design scoring failed: ${e?.message || "unknown error"}`, "error", 6000);
     } finally {
       setLayer2Loading(false);
     }
