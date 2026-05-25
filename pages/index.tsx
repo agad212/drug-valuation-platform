@@ -1551,7 +1551,7 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <button className="btn btn-ghost" onClick={() => { if (ptrsResult) onScoreLayer2(v.asset, v.indications?.[0]?.name || "", v.phase || "Phase 2", v.sponsor, ptrsResult); }} disabled={layer2Loading} style={{ fontSize: 11 }}>{layer2Loading ? "⏳" : "↻ Refresh"}</button>
+                  <button className="btn btn-ghost" onClick={() => { if (ptrsResult) onScoreLayer2(v.asset || "", v.indications?.[0]?.name || "", v.phase || "Phase 2", v.sponsor || undefined, ptrsResult); }} disabled={layer2Loading} style={{ fontSize: 11 }}>{layer2Loading ? "⏳" : "↻ Refresh"}</button>
                   <button onClick={() => setLayer2Result(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
                 </div>
               </div>
