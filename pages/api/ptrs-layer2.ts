@@ -121,10 +121,11 @@ Search for this drug's key clinical trial and extract all 6 trial design paramet
 
   const raw = await callClaudeWithSearch({
     anthropicKey,
+    model: "claude-haiku-4-5-20251001",
     system: systemPrompt,
     userMessage,
     maxTokens: 800,
-    maxSearches: 3,
+    maxSearches: 0,   // Haiku does not support web_search; relies on Serper context below
     serperQueries: [
       `${drug} clinical trial enrollment design endpoint ${indication}`,
       `${drug} FDA breakthrough therapy orphan designation`,

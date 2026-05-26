@@ -50,7 +50,8 @@ export async function callClaudeWithSearch({
       model,
       max_tokens: maxTokens,
       system,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }],
+      // Only attach web_search tool if maxSearches > 0 (Haiku does not support it)
+      ...(maxSearches > 0 ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }] } : {}),
       messages: [{ role: "user", content: finalUserMessage }],
     }),
   });
