@@ -184,11 +184,10 @@ Search for published data on this drug's potency, selectivity, PK profile, targe
     anthropicKey,
     system: systemPrompt,
     userMessage,
-    maxTokens: 2000,
-    maxSearches: 4,
+    maxTokens: 3000,
+    maxSearches: 2,
     serperQueries: [
-      `${drug} mechanism potency selectivity IC50 target engagement`,
-      `${drug} ${indication} target validation clinical data safety`,
+      `${drug} mechanism potency selectivity IC50 clinical data`,
     ],
   });
 
@@ -244,7 +243,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (e: any) {
         const is429 = e?.message?.includes("429");
         if (attempt === 3) throw e;
-        const wait = is429 ? (attempt + 1) * 20000 : 5000;
+        const wait = is429 ? (attempt + 1) * 30000 : 15000;
         console.warn(`[ptrs] attempt ${attempt + 1} failed (${e?.message}), waiting ${wait / 1000}s...`);
         await new Promise(r => setTimeout(r, wait));
       }
