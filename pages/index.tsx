@@ -9,6 +9,7 @@ import { useToast } from "../components/Toast";
 import type { Valuation, Indication, RevenueAnalysisResult, IndicationRevenueAnalysis } from "../lib/types";
 import { computeOutputs, computeRevenuePV } from "../lib/cashflow";
 import type { CtgovTrial } from "../lib/ctgov";
+import DecisionAnalysis from "../components/DecisionAnalysis";
 
 const ValuationCharts = dynamic(() => import("../components/ValuationCharts"), { ssr: false });
 
@@ -1926,6 +1927,18 @@ export default function HomePage() {
             <SectionLabel>Valuation Analysis</SectionLabel>
             <ValuationCharts valuation={display} />
           </Card>
+
+          {/* Decision Analysis */}
+          {v.asset && (
+            <Card>
+              <DecisionAnalysis
+                valuation={display}
+                out={out}
+                ptrsResult={ptrsResult}
+                layer2Result={layer2Result}
+              />
+            </Card>
+          )}
 
         </div>
       </main>
