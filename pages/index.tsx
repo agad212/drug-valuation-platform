@@ -10,6 +10,8 @@ import type { Valuation, Indication, RevenueAnalysisResult, IndicationRevenueAna
 import { computeOutputs, computeRevenuePV } from "../lib/cashflow";
 import type { CtgovTrial } from "../lib/ctgov";
 import DecisionAnalysis from "../components/DecisionAnalysis";
+import DevPlan from "../components/DevPlan";
+import { buildBaseContext } from "../lib/decision-analysis";
 
 const ValuationCharts = dynamic(() => import("../components/ValuationCharts"), { ssr: false });
 
@@ -432,6 +434,7 @@ export default function HomePage() {
 
   const out = useMemo(() => computeOutputs(v), [v]);
   const display: Valuation = useMemo(() => ({ ...v, ...out }), [v, out]);
+  const base = useMemo(() => buildBaseContext(display, out, ptrsResult, layer2Result), [display, out, ptrsResult, layer2Result]);
 
   function update<K extends keyof Valuation>(key: K, val: Valuation[K]) {
     setV((cur) => ({ ...cur, [key]: val }));
@@ -1936,6 +1939,19 @@ export default function HomePage() {
                 out={out}
                 ptrsResult={ptrsResult}
                 layer2Result={layer2Result}
+              />
+            </Card>
+          )}
+
+          {/* Development Plan */}
+          {v.asset && (
+            <Card>
+              <DevPlan
+                valuation={display}
+                out={out}
+                ptrsResult={ptrsResult}
+                layer2Result={layer2Result}
+                base={base}
               />
             </Card>
           )}
