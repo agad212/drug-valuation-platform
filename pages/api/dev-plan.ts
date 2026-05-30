@@ -117,7 +117,7 @@ Your task: given the current clinical trial (already running), reason about what
 ${CPP_REFERENCE}
 
 RULES:
-1. Include the CURRENT TRIAL as stage 1 (isCurrentTrial: true) with the design parameters I provide — do NOT change them.
+1. Include the CURRENT TRIAL as stage 1 (isCurrentTrial: true) with the design parameters I provide — do NOT change them. The stage 1 "phase" field MUST equal the Current Phase I pass in (e.g. if Current Phase = "Phase 2", stage 1 phase = "Phase 2").
 2. Add exactly 1 FUTURE clinical trial stage (isCurrentTrial: false) — the registration/pivotal study. That is all.
 3. CRITICAL: The "stages" array must contain ONLY clinical trials. Do NOT include regulatory submission, BLA filing, NDA preparation, label negotiation, or any FDA/EMA review activity as a stage. Regulatory activities are handled separately outside this array.
 4. Typical paths (always exactly 2 stages total):
@@ -232,7 +232,7 @@ Reason about the full development path. Return the current trial as stage 1 (use
       return {
         id:             s.id || `stage-${i + 1}`,
         name:           s.name || `Stage ${i + 1}`,
-        phase:          s.phase || (i === 0 ? phase : "Phase 3"),
+        phase:          i === 0 ? phase : (s.phase || "Phase 3"),
         n:              (typeof s.n === "number" && s.n > 0) ? Math.round(s.n) : td.n,
         cpp:            (typeof s.cpp === "number" && s.cpp > 0) ? Math.round(s.cpp) : 200000,
         isCurrentTrial: i === 0,

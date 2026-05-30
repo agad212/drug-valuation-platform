@@ -65,8 +65,8 @@ Search for enrollment numbers in the key Phase 2 or Phase 3 trial.
 
 PARAMETER 2 — ENDPOINT TYPE (endpointType):
 Classify the PRIMARY endpoint:
-- "hard": OS (overall survival), EFS, PFS-V (verified PFS), CR (complete response by imaging), histopathologic confirmation, organ function (eGFR, FEV1)
-- "surrogate": ORR, PFS, DFS, PSA response, PK/PD biomarker, biochemical endpoint, visual acuity (BCVA), functional vision tests, ECG parameters
+- "hard": OS (overall survival), EFS, PFS-V (verified PFS), CR (complete response by imaging), histopathologic confirmation, organ function (eGFR, FEV1). NEVER use "hard" for visual endpoints — BCVA, perimetry, fMRI, ERG are always surrogates.
+- "surrogate": ORR, PFS, DFS, PSA response, PK/PD biomarker, biochemical endpoint, visual acuity (BCVA), perimetry, light sensitivity, contrast sensitivity, fMRI cortical activation, ERG, functional vision tests, ECG parameters
 - "pro": Patient-reported pain, QoL (PROMIS, SF-36), ADAS-cog, UPDRS, MMSE (unless imaging confirmed), function scores without objective confirmation
 
 PARAMETER 3 — DESIGN TYPE (designType):

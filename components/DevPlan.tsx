@@ -1,31 +1,25 @@
 // ─── Dev Plan Component ────────────────────────────────────────────────────────
 //
-// Shows the complete remaining development path as a sequence of trials,
-// each with its own probability, CPP-based cost, and Bayesian drug-truth update.
-//
-// Key metrics:
-//   P(trial succeeds)     — Layer 2 Φ(z) for this specific trial design
-//   Risk-adjusted cost    — trial cost × P(all prior stages succeeded)
-//   Bayesian update       — MSS shift after a positive result
-//   P(approval)           — compound probability across all stages × reg
-//   eNPV                  — P(approval) × Revenue PV − expected R&D cost
+// Renders the stage-by-stage development path inline in the main valuation.
+// All state (stageInputs, devPlan, loading) is owned by the parent (index.tsx)
+// and auto-generated after Layer 2 completes.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-import React, { useState, useMemo, useCallback } from "react";
-import type { Valuation } from "../lib/types";
-import { computeDevPlan, type DevStageInput, type DevPlanResult, type DevStage } from "../lib/dev-plan";
-import type { TrialDesignInputs, RegulatoryContext } from "../lib/ptrs-trial";
-import type { BaseContext } from "../lib/decision-analysis";
+import React, { useState } from "react";
+import { type DevStageInput, type DevPlanResult, type DevStage } from "../lib/dev-plan";
+import type { RegulatoryContext } from "../lib/ptrs-trial";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 type Props = {
-  valuation: Valuation;
-  out: { ptrs: number; revenuePV: number; devCostPV: number; rnpv: number };
-  ptrsResult: any;    // from /api/ptrs-score
-  layer2Result: any;  // from /api/ptrs-layer2
-  base: BaseContext | null;
+  stageInputs: DevStageInput[] | null;
+  regContext: RegulatoryContext;
+  devPlan: DevPlanResult | null;
+  reasoning: string | null;
+  loading: boolean;
+  onUpdateN: (id: string, n: number) => void;
+  onUpdateCpp: (id: string, cpp: number) => void;
 };
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
@@ -40,9 +34,6 @@ function fmtM(n?: number | null): string {
 function fmtPct(n?: number | null, dp = 1): string {
   if (n == null || Number.isNaN(n)) return "—";
   return `${(n * 100).toFixed(dp)}%`;
-}
-function fmtK(n: number): string {
-  return `$${Math.round(n / 1000)}K`;
 }
 
 // ─── Colour helpers ───────────────────────────────────────────────────────────
@@ -120,7 +111,6 @@ function StageCard({
   onUpdateN: (id: string, n: number) => void;
   onUpdateCpp: (id: string, cpp: number) => void;
 }) {
-  const isFirst = index === 0;
   const color = stage.isCurrentTrial ? "#10b981" : "#3b82f6";
   const probC = probColor(stage.trialSuccessProb);
 
@@ -250,7 +240,6 @@ function StageCard({
             background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px",
             display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 12, alignItems: "center",
           }}>
-            {/* MSS going in */}
             <div>
               <div style={{ fontSize: 10, color: "var(--text-faint)", marginBottom: 2 }}>Drug truth entering</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: mssColor(stage.mssInput), fontFamily: "var(--font-mono)" }}>
@@ -260,14 +249,10 @@ function StageCard({
                 σ² {stage.varianceInput.toFixed(2)}
               </div>
             </div>
-
-            {/* Arrow and condition */}
             <div style={{ textAlign: "center" }}>
               <div style={{ fontSize: 10, color: "var(--text-faint)", marginBottom: 4 }}>if positive →</div>
               <div style={{ fontSize: 18, color: "var(--text-faint)" }}>→</div>
             </div>
-
-            {/* MSS after success */}
             <div>
               <div style={{ fontSize: 10, color: "var(--text-faint)", marginBottom: 2 }}>Drug truth updated</div>
               <div style={{ fontSize: 16, fontWeight: 700, color: mssColor(stage.mssIfSuccess), fontFamily: "var(--font-mono)" }}>
@@ -327,7 +312,7 @@ function RegCard({ regStage }: { regStage: DevPlanResult["regStage"] }) {
               REG FILING
             </span>
             <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-display)" }}>
-              Regulatory Submission & Approval
+              Regulatory Submission &amp; Approval
             </span>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -365,8 +350,6 @@ function RegCard({ regStage }: { regStage: DevPlanResult["regStage"] }) {
 // ─── Summary Banner ────────────────────────────────────────────────────────────
 
 function SummaryBanner({ plan }: { plan: DevPlanResult }) {
-  const eNPVColor = plan.eNPVM >= 0 ? "var(--accent)" : "#ef4444";
-
   return (
     <div style={{
       background: "linear-gradient(135deg, #1e1b4b, #312e81)",
@@ -395,7 +378,7 @@ function SummaryBanner({ plan }: { plan: DevPlanResult }) {
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 3 }}>Dev Plan eNPV</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 3 }}>eNPV</div>
           <div style={{ fontSize: 28, fontWeight: 800, fontFamily: "var(--font-display)", lineHeight: 1, color: plan.eNPVM >= 0 ? "#10b981" : "#ef4444" }}>
             {fmtM(plan.eNPVM)}
           </div>
@@ -418,7 +401,7 @@ function SummaryBanner({ plan }: { plan: DevPlanResult }) {
       <div style={{ marginBottom: 8 }}>
         <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 8 }}>Probability waterfall</div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          {plan.stages.map((s, i) => (
+          {plan.stages.map((s) => (
             <React.Fragment key={s.id}>
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 2, fontFamily: "var(--font-mono)" }}>
@@ -451,7 +434,7 @@ function SummaryBanner({ plan }: { plan: DevPlanResult }) {
       <div>
         <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>Risk-adjusted cost breakdown</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {plan.stages.map((s, i) => (
+          {plan.stages.map((s) => (
             <div key={s.id} style={{
               background: "rgba(255,255,255,0.08)", borderRadius: 6, padding: "5px 10px",
               fontSize: 11, fontFamily: "var(--font-mono)",
@@ -483,188 +466,59 @@ function SummaryBanner({ plan }: { plan: DevPlanResult }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function DevPlan({ valuation, out, ptrsResult, layer2Result, base }: Props) {
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [reasoning, setReasoning] = useState<string | null>(null);
-
-  // Stage definitions — user can edit n and CPP per stage
-  const [stageInputs, setStageInputs] = useState<DevStageInput[] | null>(null);
-  const [regContext, setRegContext] = useState<RegulatoryContext>("standard");
-
-  // Generate the plan from Claude
-  const handleGenerate = useCallback(async () => {
-    if (!layer2Result?.trialInputs) {
-      setError("Run the full Auto-Valuate pipeline first (PTRS Layer 2 must complete).");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/dev-plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          drug:               valuation.asset || (valuation as any).name || "",
-          indication:         valuation.indication || valuation.indications?.[0]?.name || "",
-          phase:              valuation.phase || "Phase 2",
-          mechanism:          valuation.mechanism || "",
-          sponsor:            valuation.sponsor || "",
-          currentTrialDesign: layer2Result.trialInputs,
-          currentTrialName:   layer2Result.trialInputs?.enrollmentNote?.split(",")[0] || "",
-        }),
-      });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const data = await res.json();
-      setStageInputs(data.stages as DevStageInput[]);
-      setRegContext(data.regulatoryContext ?? "standard");
-      setReasoning(data.reasoning ?? null);
-    } catch (e: any) {
-      setError(e?.message ?? "Dev plan generation failed");
-    } finally {
-      setLoading(false);
-    }
-  }, [valuation, layer2Result]);
-
-  // Compute plan whenever stage inputs change
-  const plan = useMemo<DevPlanResult | null>(() => {
-    if (!stageInputs || !base) return null;
-    const revenuePVM = (out.revenuePV ?? 0) / 1e6;
-    return computeDevPlan(
-      base.mss,
-      base.variance,
-      base.ciHalfWidth,
-      { stages: stageInputs, regulatoryContext: regContext, regCostM: 1.0 },
-      revenuePVM,
+export default function DevPlan({ stageInputs, devPlan, reasoning, loading, onUpdateN, onUpdateCpp }: Props) {
+  if (loading && !devPlan) {
+    return (
+      <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)", fontSize: 13 }}>
+        ⏳ Generating development plan…
+      </div>
     );
-  }, [stageInputs, base, out.revenuePV, regContext]);
-
-  function updateN(id: string, n: number) {
-    setStageInputs((prev) => prev?.map((s) =>
-      s.id === id ? { ...s, n, trialDesign: { ...s.trialDesign, n } } : s
-    ) ?? null);
   }
 
-  function updateCpp(id: string, cpp: number) {
-    setStageInputs((prev) => prev?.map((s) => s.id === id ? { ...s, cpp } : s) ?? null);
-  }
-
-  if (!valuation.asset && !(valuation as any).name) return null;
+  if (!devPlan || !stageInputs) return null;
 
   return (
-    <div>
-      {/* Entry button */}
-      {!open && (
-        <button
-          className="btn btn-outline"
-          onClick={() => setOpen(true)}
-          style={{ width: "100%", justifyContent: "center", fontSize: 14, padding: "12px 0", fontWeight: 700 }}
-        >
-          Development Plan ↗
-        </button>
-      )}
-
-      {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* Header */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-display)" }}>
-                Development Plan
-              </div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                {valuation.asset} · Stage-by-stage probability and risk-adjusted cost model.
-                CPP values are editable — click any number to change it.
-              </div>
-              <div style={{
-                fontSize: 11, color: "var(--text-faint)", marginTop: 4,
-                background: "rgba(148,163,184,0.08)", borderRadius: 6,
-                padding: "5px 10px", display: "inline-block",
-              }}>
-                Note: costs here are trial execution only (CPP × enrollment). The main valuation&apos;s dev cost
-                includes CMC, overhead, and sunk program spend — a different cost base.
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="btn btn-primary"
-                onClick={handleGenerate}
-                disabled={loading}
-                style={{ fontSize: 12 }}
-              >
-                {loading ? "⏳ Generating…" : stageInputs ? "↻ Regenerate" : "Generate Dev Plan"}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
-                Close ×
-              </button>
-            </div>
-          </div>
-
-          {/* No layer2 warning */}
-          {!layer2Result?.trialInputs && (
-            <div style={{
-              background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)",
-              borderRadius: 10, padding: "14px 18px", fontSize: 13, color: "#92400e",
-            }}>
-              Run <strong>Auto-Valuate</strong> first — the dev plan needs PTRS Layer 2 to extract the current trial design.
-            </div>
-          )}
-
-          {error && (
-            <div style={{
-              background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)",
-              borderRadius: 10, padding: "12px 16px", fontSize: 13, color: "#dc2626",
-            }}>
-              {error}
-            </div>
-          )}
-
-          {/* AI reasoning */}
-          {reasoning && (
-            <div style={{
-              background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)",
-              borderRadius: 8, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7,
-            }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 6 }}>
-                AI Development Path Reasoning
-              </span>
-              {reasoning}
-            </div>
-          )}
-
-          {/* Stage timeline */}
-          {plan && stageInputs && (
-            <>
-              <div>
-                {plan.stages.map((stage, i) => (
-                  <StageCard
-                    key={stage.id}
-                    stage={stage}
-                    index={i}
-                    totalStages={plan.stages.length}
-                    onUpdateN={updateN}
-                    onUpdateCpp={updateCpp}
-                  />
-                ))}
-                <RegCard regStage={plan.regStage} />
-              </div>
-
-              {/* Summary banner */}
-              <SummaryBanner plan={plan} />
-
-              {/* Methodology note */}
-              <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
-                P(trial success) = Layer 2 Φ(z) for each trial's specific design ·
-                Drug truth update after success: MSS +10–15% (endpoint-dependent), σ² ×0.65 ·
-                Risk-adj cost = trial cost × P(all prior stages succeeded) ·
-                eNPV = P(approval) × Revenue PV − total risk-adj cost ·
-                CPP values are editable — click any underlined number
-              </div>
-            </>
-          )}
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* AI reasoning */}
+      {reasoning && (
+        <div style={{
+          background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)",
+          borderRadius: 8, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7,
+        }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 6 }}>
+            AI Development Path Reasoning
+          </span>
+          {reasoning}
         </div>
       )}
+
+      {/* Stage timeline */}
+      <div>
+        {devPlan.stages.map((stage, i) => (
+          <StageCard
+            key={stage.id}
+            stage={stage}
+            index={i}
+            totalStages={devPlan.stages.length}
+            onUpdateN={onUpdateN}
+            onUpdateCpp={onUpdateCpp}
+          />
+        ))}
+        <RegCard regStage={devPlan.regStage} />
+      </div>
+
+      {/* Summary banner */}
+      <SummaryBanner plan={devPlan} />
+
+      {/* Methodology note */}
+      <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
+        P(trial success) = Layer 2 Φ(z) for each trial&apos;s specific design ·
+        Drug truth update after success: MSS +10–15% (endpoint-dependent), σ² ×0.65 ·
+        Risk-adj cost = trial cost × P(all prior stages succeeded) ·
+        eNPV = P(approval) × Revenue PV − total risk-adj cost ·
+        Costs cover trial execution only (CPP × n); main valuation dev cost includes CMC, overhead &amp; sunk program spend ·
+        CPP values are editable — click any underlined number
+      </div>
     </div>
   );
 }

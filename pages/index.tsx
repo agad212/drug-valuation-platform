@@ -12,6 +12,8 @@ import type { CtgovTrial } from "../lib/ctgov";
 import DecisionAnalysis from "../components/DecisionAnalysis";
 import DevPlan from "../components/DevPlan";
 import { buildBaseContext } from "../lib/decision-analysis";
+import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
+import type { RegulatoryContext } from "../lib/ptrs-trial";
 
 const ValuationCharts = dynamic(() => import("../components/ValuationCharts"), { ssr: false });
 
@@ -426,6 +428,10 @@ export default function HomePage() {
   const [ptrsRescoring, setPtrsRescoring] = useState(false);
   const [layer2Result, setLayer2Result] = useState<any>(null);
   const [layer2Loading, setLayer2Loading] = useState(false);
+  const [devPlanStages, setDevPlanStages] = useState<DevStageInput[] | null>(null);
+  const [devPlanRegContext, setDevPlanRegContext] = useState<RegulatoryContext>("standard");
+  const [devPlanReasoning, setDevPlanReasoning] = useState<string | null>(null);
+  const [devPlanLoading, setDevPlanLoading] = useState(false);
   const [recommendedNctId, setRecommendedNctId] = useState("");
   const [appliedNctIds, setAppliedNctIds] = useState<Set<string>>(new Set());
   const { pushToast, ToastHost } = useToast();
@@ -435,6 +441,25 @@ export default function HomePage() {
   const out = useMemo(() => computeOutputs(v), [v]);
   const display: Valuation = useMemo(() => ({ ...v, ...out }), [v, out]);
   const base = useMemo(() => buildBaseContext(display, out, ptrsResult, layer2Result), [display, out, ptrsResult, layer2Result]);
+
+  const devPlan = useMemo<DevPlanResult | null>(() => {
+    if (!devPlanStages || !base) return null;
+    const revenuePVM = (out.revenuePV ?? 0) / 1e6;
+    return computeDevPlan(
+      base.mss, base.variance, base.ciHalfWidth,
+      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0 },
+      revenuePVM,
+    );
+  }, [devPlanStages, base, out.revenuePV, devPlanRegContext]);
+
+  function updateDevPlanN(id: string, n: number) {
+    setDevPlanStages((prev) => prev?.map((s) =>
+      s.id === id ? { ...s, n, trialDesign: { ...s.trialDesign, n } } : s
+    ) ?? null);
+  }
+  function updateDevPlanCpp(id: string, cpp: number) {
+    setDevPlanStages((prev) => prev?.map((s) => s.id === id ? { ...s, cpp } : s) ?? null);
+  }
 
   function update<K extends keyof Valuation>(key: K, val: Valuation[K]) {
     setV((cur) => ({ ...cur, [key]: val }));
@@ -536,6 +561,8 @@ export default function HomePage() {
     setTrialResults(null);
     setPatentResult(null);
     setPtrsResult(null);
+    setDevPlanStages(null);
+    setDevPlanReasoning(null);
     try {
       const params = new URLSearchParams({ drug, phase });
       if (sponsor) params.set("sponsor", sponsor);
@@ -668,6 +695,34 @@ export default function HomePage() {
     }
   }
 
+  async function onGenerateDevPlan(drug: string, indication: string, phase: string, sponsor: string | undefined, l2Result: any) {
+    if (!l2Result?.trialInputs) return;
+    setDevPlanLoading(true);
+    try {
+      const res = await fetch("/api/dev-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          drug,
+          indication,
+          phase,
+          sponsor,
+          currentTrialDesign: l2Result.trialInputs,
+          currentTrialName: drug,
+        }),
+      });
+      if (!res.ok) throw new Error(`API error ${res.status}`);
+      const data = await res.json();
+      setDevPlanStages(data.stages as DevStageInput[]);
+      setDevPlanRegContext(data.regulatoryContext ?? "standard");
+      setDevPlanReasoning(data.reasoning ?? null);
+    } catch (e: any) {
+      console.error("[dev-plan] auto-generate failed:", e?.message);
+    } finally {
+      setDevPlanLoading(false);
+    }
+  }
+
   async function onScoreLayer2(
     drug: string, indication: string, phase: string,
     sponsor: string | undefined, l1Result: any
@@ -696,7 +751,9 @@ export default function HomePage() {
       setLayer2Result(data);
       // Apply the combined PTRS (Layer 1 + 2) to the valuation
       setV((cur) => ({ ...cur, ptrs: data.ptrsCombined }));
-      pushToast(`Final PTRS: ${(data.ptrsCombined * 100).toFixed(1)}% (Layer 1 + trial design)`, "success", 6000);
+      pushToast(`Final PTRS: ${(data.ptrsCombined * 100).toFixed(1)}% (Layer 1 + trial design) — building dev plan…`, "success", 6000);
+      // Auto-generate development plan immediately after layer2
+      onGenerateDevPlan(drug, indication, phase, sponsor, data);
     } catch (e: any) {
       console.error("[layer2] scoring failed:", e?.message);
       pushToast(`Trial design scoring failed: ${e?.message || "unknown error"}`, "error", 6000);
@@ -1002,11 +1059,31 @@ export default function HomePage() {
 
           {/* Key Metrics */}
           <div className="animate-fade-up metrics-grid">
-            <MetricCard label="rNPV" value={fmtMoney(out.rnpv)} gradient="linear-gradient(135deg, #059669, #10b981)" sub={rnpvPositive ? "Risk-adjusted NPV" : "Negative — check inputs"} />
-            <MetricCard label="PTRS" value={fmtPct(out.ptrs)} gradient="linear-gradient(135deg, #1d4ed8, #3b82f6)" sub={out.mechLabel || `Phase: ${v.phase}`} />
+            <MetricCard
+              label={devPlan ? "eNPV" : "rNPV"}
+              value={fmtMoney(devPlan ? devPlan.eNPVM * 1e6 : out.rnpv)}
+              gradient="linear-gradient(135deg, #059669, #10b981)"
+              sub={devPlan ? `Dev plan · P(approval) ${fmtPct(devPlan.pApproval)}` : (rnpvPositive ? "Risk-adjusted NPV" : "Negative — check inputs")}
+            />
+            <MetricCard
+              label={devPlan ? "P(approval)" : "PTRS"}
+              value={devPlan ? fmtPct(devPlan.pApproval) : fmtPct(out.ptrs)}
+              gradient="linear-gradient(135deg, #1d4ed8, #3b82f6)"
+              sub={devPlan ? `${fmtPct(devPlan.pAllTrialsSuccess)} trials × ${fmtPct(devPlan.regStage.pApproval)} reg` : (out.mechLabel || `Phase: ${v.phase}`)}
+            />
             <MetricCard label="Revenue PV" value={fmtMoney(out.revenuePV)} gradient="linear-gradient(135deg, #7c3aed, #a855f7)" sub="Undiscounted at PTRS=1" />
-            <MetricCard label="Dev Cost PV" value={fmtMoney(out.devCostPV)} gradient="linear-gradient(135deg, #ea580c, #f97316)" sub="Investment" />
-            <MetricCard label="ROI" value={out.roi != null ? out.roi.toFixed(1) + "x" : "—"} gradient="linear-gradient(135deg, #b45309, #eab308)" sub="rNPV / Dev Cost" />
+            <MetricCard
+              label="Dev Cost"
+              value={fmtMoney(devPlan ? devPlan.totalRiskAdjCostM * 1e6 : out.devCostPV)}
+              gradient="linear-gradient(135deg, #ea580c, #f97316)"
+              sub={devPlan ? `Expected R&D · ${fmtMoney(devPlan.totalNominalCostM * 1e6)} nominal` : "Investment"}
+            />
+            <MetricCard
+              label="eROI"
+              value={devPlan ? (devPlan.eROI != null ? devPlan.eROI.toFixed(2) + "x" : "—") : (out.roi != null ? out.roi.toFixed(1) + "x" : "—")}
+              gradient="linear-gradient(135deg, #b45309, #eab308)"
+              sub={devPlan ? "eNPV / Expected R&D" : "rNPV / Dev Cost"}
+            />
           </div>
 
           {/* Inputs */}
@@ -1925,6 +2002,39 @@ export default function HomePage() {
             </Card>
           )}
 
+          {/* Development Plan — auto-generated after Layer 2, drives headline metrics */}
+          {(devPlanLoading || devPlanStages) && v.asset && (
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+                <div>
+                  <SectionLabel>Development Plan</SectionLabel>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
+                    {v.asset} · Stage-by-stage probability and risk-adjusted cost model · CPP values are editable
+                  </div>
+                </div>
+                {devPlanStages && (
+                  <button
+                    className="btn btn-ghost"
+                    onClick={() => onGenerateDevPlan(v.asset || "", v.indications?.[0]?.name || v.indication || "", v.phase || "Phase 2", v.sponsor, layer2Result)}
+                    disabled={devPlanLoading}
+                    style={{ fontSize: 11 }}
+                  >
+                    {devPlanLoading ? "⏳" : "↻ Regenerate"}
+                  </button>
+                )}
+              </div>
+              <DevPlan
+                stageInputs={devPlanStages}
+                regContext={devPlanRegContext}
+                devPlan={devPlan}
+                reasoning={devPlanReasoning}
+                loading={devPlanLoading}
+                onUpdateN={updateDevPlanN}
+                onUpdateCpp={updateDevPlanCpp}
+              />
+            </Card>
+          )}
+
           {/* Charts */}
           <Card>
             <SectionLabel>Valuation Analysis</SectionLabel>
@@ -1939,19 +2049,6 @@ export default function HomePage() {
                 out={out}
                 ptrsResult={ptrsResult}
                 layer2Result={layer2Result}
-              />
-            </Card>
-          )}
-
-          {/* Development Plan */}
-          {v.asset && (
-            <Card>
-              <DevPlan
-                valuation={display}
-                out={out}
-                ptrsResult={ptrsResult}
-                layer2Result={layer2Result}
-                base={base}
               />
             </Card>
           )}
