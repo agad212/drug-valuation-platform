@@ -577,6 +577,14 @@ export default function DevPlan({ valuation, out, ptrsResult, layer2Result, base
                 {valuation.asset} · Stage-by-stage probability and risk-adjusted cost model.
                 CPP values are editable — click any number to change it.
               </div>
+              <div style={{
+                fontSize: 11, color: "var(--text-faint)", marginTop: 4,
+                background: "rgba(148,163,184,0.08)", borderRadius: 6,
+                padding: "5px 10px", display: "inline-block",
+              }}>
+                Note: costs here are trial execution only (CPP × enrollment). The main valuation&apos;s dev cost
+                includes CMC, overhead, and sunk program spend — a different cost base.
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button

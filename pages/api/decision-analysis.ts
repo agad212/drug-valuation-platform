@@ -87,7 +87,7 @@ Be direct and specific — use the numbers. Do not hedge everything. Assume the 
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 300,
+        max_tokens: 600,
         messages: [{ role: "user", content: prompt }],
       }),
     });
