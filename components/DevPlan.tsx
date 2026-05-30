@@ -364,13 +364,7 @@ function RegCard({ regStage }: { regStage: DevPlanResult["regStage"] }) {
 
 // ─── Summary Banner ────────────────────────────────────────────────────────────
 
-function SummaryBanner({
-  plan, currentENPVM, currentDevCostM,
-}: {
-  plan: DevPlanResult;
-  currentENPVM: number;
-  currentDevCostM: number;
-}) {
+function SummaryBanner({ plan }: { plan: DevPlanResult }) {
   const eNPVColor = plan.eNPVM >= 0 ? "var(--accent)" : "#ef4444";
 
   return (
@@ -410,14 +404,12 @@ function SummaryBanner({
           </div>
         </div>
         <div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 3 }}>vs. current valuation</div>
-          <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "var(--font-mono)", lineHeight: 1,
-            color: (plan.eNPVM - currentENPVM) >= 0 ? "#10b981" : "#ef4444"
-          }}>
-            {(plan.eNPVM - currentENPVM) >= 0 ? "+" : ""}{fmtM(plan.eNPVM - currentENPVM)}
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 3 }}>Nominal total cost</div>
+          <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "var(--font-mono)", lineHeight: 1, color: "#94a3b8" }}>
+            {fmtM(plan.totalNominalCostM)}
           </div>
           <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
-            current: {fmtM(currentENPVM)}
+            if all stages run (unrisked)
           </div>
         </div>
       </div>
@@ -560,9 +552,6 @@ export default function DevPlan({ valuation, out, ptrsResult, layer2Result, base
 
   if (!valuation.asset && !(valuation as any).name) return null;
 
-  const currentENPVM = (out.rnpv ?? 0) / 1e6;
-  const currentDevCostM = (out.devCostPV ?? 0) / 1e6;
-
   return (
     <div>
       {/* Entry button */}
@@ -654,11 +643,7 @@ export default function DevPlan({ valuation, out, ptrsResult, layer2Result, base
               </div>
 
               {/* Summary banner */}
-              <SummaryBanner
-                plan={plan}
-                currentENPVM={currentENPVM}
-                currentDevCostM={currentDevCostM}
-              />
+              <SummaryBanner plan={plan} />
 
               {/* Methodology note */}
               <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>

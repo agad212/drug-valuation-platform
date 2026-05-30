@@ -118,20 +118,22 @@ ${CPP_REFERENCE}
 
 RULES:
 1. Include the CURRENT TRIAL as stage 1 (isCurrentTrial: true) with the design parameters I provide — do NOT change them.
-2. Add 1–2 FUTURE stages (isCurrentTrial: false) needed to reach approval.
-3. Typical paths:
-   - Phase 2 single-arm orphan → Phase 3 RCT registration study → approval
-   - Phase 2 RCT → Phase 3 confirmatory RCT (larger) → approval
-   - Phase 3 already → just one more confirmatory if accelerated approval, else straight to approval
-   - If already Phase 3: just one stage (the current trial), then reg
-4. For rare/orphan drugs: registration study may need only n=50–150 if strong Phase 2 data
-5. For common indications: Phase 3 typically n=200–500+
-6. CPP: estimate realistically based on disease area, delivery route, endpoint complexity
-7. Trial design for future stages: generally RCT where single-arm Phase 2 preceded it
+2. Add exactly 1 FUTURE clinical trial stage (isCurrentTrial: false) — the registration/pivotal study. That is all.
+3. CRITICAL: The "stages" array must contain ONLY clinical trials. Do NOT include regulatory submission, BLA filing, NDA preparation, label negotiation, or any FDA/EMA review activity as a stage. Regulatory activities are handled separately outside this array.
+4. Typical paths (always exactly 2 stages total):
+   - Phase 2 single-arm → Phase 3 RCT registration study
+   - Phase 2 RCT → Phase 3 larger confirmatory RCT
+   - Phase 3 already running → only 1 stage (the current trial); no future stages needed
+5. For rare/orphan drugs: registration study may need only n=50–150 if strong Phase 2 data
+6. For common indications: Phase 3 typically n=200–500+
+7. CPP: estimate realistically based on disease area, delivery route, endpoint complexity
+8. Trial design for the registration study: generally RCT where single-arm Phase 2 preceded it
 
-REGULATORY CONTEXT — look this up or reason from what you know:
-- The regulatoryContext for future stages should be the same or upgraded (e.g. if Phase 2 has orphan, Phase 3 likely also has orphan)
-- If Phase 2 succeeded with BTD, Phase 3 may have accelerated approval option
+REGULATORY CONTEXT — reason from what you know:
+- The regulatoryContext for the future stage should be the same or upgraded vs current (e.g. if Phase 2 has orphan, Phase 3 also has orphan; if BTD granted, keep btd_orphan)
+- This field goes in the trialDesign block — it lowers the evidentiary threshold for that trial's success probability calculation
+
+ABSOLUTE CONSTRAINT: Return EXACTLY 2 stages if currently in Phase 2, or EXACTLY 1 stage if currently in Phase 3. Never return 3 or more stages.
 
 RESPONSE FORMAT — return ONLY this JSON, no markdown:
 {
@@ -239,12 +241,17 @@ Reason about the full development path. Return the current trial as stage 1 (use
       };
     });
 
+    // Hard cap: Phase 2 → max 2 stages, Phase 3 → max 1 stage.
+    // Prevents Claude hallucinating regulatory activities as clinical trials.
+    const maxStages = (phase || "").includes("3") ? 1 : 2;
+    const cappedStages = stages.slice(0, maxStages);
+
     const regulatoryContext: RegulatoryContext = VALID_REG.includes(parsed.regulatoryContext)
       ? parsed.regulatoryContext
       : (currentTrialDesign.regulatoryContext ?? "standard");
 
     return res.status(200).json({
-      stages,
+      stages: cappedStages,
       regulatoryContext,
       reasoning: parsed.reasoning || "",
     });
