@@ -80,10 +80,12 @@ PARAMETER 4 — PATIENT POPULATION (populationType):
 - "rare_small": Total eligible patient population <10,000 globally OR trial enrolls <40 patients
 
 PARAMETER 5 — PLACEBO RESPONSE (placeboResponse):
-Classify by INDICATION, not by trial design:
-- "low": Oncology (all cancers), rare diseases with objective endpoints, serious diseases with hard endpoints
+Classify by INDICATION, not by trial design or endpoint subjectivity:
+- "low": Oncology (all cancers), ophthalmology/retinal diseases (retinitis pigmentosa, AMD, DME, glaucoma, LHON — visual acuity and retinal imaging endpoints are objective even if they sound functional), rare inherited diseases, serious diseases with hard endpoints, hematology
 - "moderate": Autoimmune/inflammatory (RA, IBD, psoriasis), metabolic, cardiovascular, non-rare neurology with objective endpoints
-- "high": CNS/psychiatric (depression, anxiety, schizophrenia, bipolar, insomnia), pain (neuropathic, chronic back, fibromyalgia), IBS/functional GI, subjective symptom scales
+- "high": CNS/psychiatric (depression, anxiety, schizophrenia, bipolar, insomnia), pain (neuropathic, chronic back, fibromyalgia), IBS/functional GI, subjective symptom scales without objective confirmation
+
+IMPORTANT: Retinal/ophthalmic indications are ALWAYS "low" — visual acuity (BCVA), light sensitivity, ERG, fMRI visual cortex activation, and perimetry are objective measurements, not subjective PROs. Do NOT classify them as "high" because vision involves perception.
 
 PARAMETER 6 — REGULATORY CONTEXT (regulatoryContext):
 Search specifically for these FDA designations for this drug in this indication:

@@ -197,7 +197,18 @@ export function computeOption(
   let ptrsCI: { lower: number; upper: number };
 
   if (option.ptrsOverride != null) {
+    // Explicit override — use as-is
     ptrs = clamp01(option.ptrsOverride);
+    ptrsCI = {
+      lower: Math.max(0.01, ptrs - base.ciHalfWidth),
+      upper: Math.min(0.99, ptrs + base.ciHalfWidth),
+    };
+  } else if (option.isBaseline) {
+    // Option A: use the stored combined PTRS exactly — don't recompute.
+    // Recomputing via scoreLayer2() produces a slightly different value due
+    // to floating-point and reference-trial normalization, which causes a
+    // visible mismatch between the main valuation display and Option A.
+    ptrs = base.ptrs;
     ptrsCI = {
       lower: Math.max(0.01, ptrs - base.ciHalfWidth),
       upper: Math.min(0.99, ptrs + base.ciHalfWidth),
@@ -254,11 +265,25 @@ export function computeOption(
     const baseN = base.baseTrialDesign.n;
     const optionN = trialDesign.n;
 
-    // Sample size scaling: costs scale sub-linearly at n^0.75
-    // (fixed costs like regulatory, manufacturing, sites don't grow proportionally with n)
+    // Dev cost has two components:
+    //   Fixed (60%): regulatory, CMC/manufacturing, Phase 3 skeleton, overhead —
+    //     these don't change when you change the Phase 2 trial size
+    //   Variable (40%): CRO execution, patient costs, site costs —
+    //     these scale with n
+    //
+    // Scaling only the variable portion prevents the absurd result where
+    // tripling n triples the entire $280M program cost. In reality, most
+    // of that $280M is fixed overhead that exists regardless of Phase 2 design.
+    const FIXED_FRACTION    = 0.60;
+    const VARIABLE_FRACTION = 0.40;
+
+    const fixedCost    = base.devCostM * FIXED_FRACTION;
+    const variableCost = base.devCostM * VARIABLE_FRACTION;
+
+    // Variable portion scales sub-linearly with n (n^0.75)
     const nScale = baseN > 0 ? Math.pow(optionN / baseN, 0.75) : 1;
 
-    // Design complexity: 3-arm or adaptive costs more than base design
+    // Design complexity adjustment applies only to variable costs
     const resolvedDesignKey = (() => {
       if (option.numArms === 3) return "3arm";
       if (option.numArms === "adaptive") return "adaptive";
@@ -269,7 +294,7 @@ export function computeOption(
       (DESIGN_COST_MULT[resolvedDesignKey] ?? 1.0) /
       (DESIGN_COST_MULT[baseDesignKey] ?? 1.0);
 
-    devCostM = base.devCostM * nScale * complexityAdjust;
+    devCostM = fixedCost + variableCost * nScale * complexityAdjust;
 
     // Ownership adjustment
     if (option.ownershipPct != null) {
@@ -452,8 +477,9 @@ export function buildBaseContext(
 
   if (!peakSalesRaw && !devCostRaw && !v.asset) return null;
 
-  // Derive base trial design from Layer 2 if available, else phase-appropriate defaults
-  const baseTrialDesign: TrialDesignInputs = layer2Result?.inputs ?? {
+  // Derive base trial design from Layer 2 if available, else phase-appropriate defaults.
+  // NOTE: the /api/ptrs-layer2 endpoint returns the field as "trialInputs", not "inputs".
+  const baseTrialDesign: TrialDesignInputs = layer2Result?.trialInputs ?? {
     n:                 estimateDefaultN(v.phase),
     endpointType:      "surrogate" as EndpointType,
     designType:        "single_arm" as DesignType,
