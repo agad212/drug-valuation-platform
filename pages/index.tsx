@@ -1753,6 +1753,39 @@ export default function HomePage() {
             </Card>
           )}
 
+          {/* Development Path — auto-generated after Layer 2, drives headline metrics */}
+          {(devPlanLoading || devPlanStages) && v.asset && (
+            <Card>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <div>
+                  <SectionLabel>Development Path</SectionLabel>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
+                    Stage-by-stage trial probabilities &amp; risk-adjusted costs · {v.asset} · {v.phase}
+                  </div>
+                </div>
+                {devPlanStages && (
+                  <button
+                    className="btn btn-ghost"
+                    onClick={() => onGenerateDevPlan(v.asset || "", v.indications?.[0]?.name || v.indication || "", v.phase || "Phase 2", v.sponsor, layer2Result)}
+                    disabled={devPlanLoading}
+                    style={{ fontSize: 11 }}
+                  >
+                    {devPlanLoading ? "⏳" : "↻ Refresh"}
+                  </button>
+                )}
+              </div>
+              <DevPlan
+                stageInputs={devPlanStages}
+                regContext={devPlanRegContext}
+                devPlan={devPlan}
+                reasoning={devPlanReasoning}
+                loading={devPlanLoading}
+                onUpdateN={updateDevPlanN}
+                onUpdateCpp={updateDevPlanCpp}
+              />
+            </Card>
+          )}
+
           {/* Revenue Assumptions */}
           {(revenueLoading || revenueAnalysis) && (
             <Card>
@@ -2007,38 +2040,6 @@ export default function HomePage() {
             </Card>
           )}
 
-          {/* Development Plan — auto-generated after Layer 2, drives headline metrics */}
-          {(devPlanLoading || devPlanStages) && v.asset && (
-            <Card>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-                <div>
-                  <SectionLabel>Development Plan</SectionLabel>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
-                    {v.asset} · Stage-by-stage probability and risk-adjusted cost model · CPP values are editable
-                  </div>
-                </div>
-                {devPlanStages && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => onGenerateDevPlan(v.asset || "", v.indications?.[0]?.name || v.indication || "", v.phase || "Phase 2", v.sponsor, layer2Result)}
-                    disabled={devPlanLoading}
-                    style={{ fontSize: 11 }}
-                  >
-                    {devPlanLoading ? "⏳" : "↻ Regenerate"}
-                  </button>
-                )}
-              </div>
-              <DevPlan
-                stageInputs={devPlanStages}
-                regContext={devPlanRegContext}
-                devPlan={devPlan}
-                reasoning={devPlanReasoning}
-                loading={devPlanLoading}
-                onUpdateN={updateDevPlanN}
-                onUpdateCpp={updateDevPlanCpp}
-              />
-            </Card>
-          )}
 
           {/* Charts */}
           <Card>
