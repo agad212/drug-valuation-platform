@@ -100,8 +100,10 @@ ALSO RETURN:
 - endpointDescription: the exact name of the primary endpoint (e.g. "Best Corrected Visual Acuity (BCVA) at 12 months")
 - enrollmentNote: a brief note on enrollment (e.g. "36 patients, LCA5-confirmed, single-arm open label")
 
-Use web_search to find this trial. Search for: "${drug} clinical trial enrollment primary endpoint phase design"
-Also search: "${drug} breakthrough therapy orphan drug designation FDA"${nctId ? `\nAlso look up NCT ID: ${nctId}` : ""}
+CRITICAL RULE: The drug is currently in ${phase}. You MUST extract parameters from the ${phase} trial, not from a completed earlier-phase trial. If the drug has both a completed Phase 1/Phase 1-2 and an active/enrolling ${phase} trial, USE THE ${phase} TRIAL. Only fall back to an earlier trial if no ${phase} trial exists at all.
+
+Use web_search to find this trial. Search for: "${drug} ${phase} clinical trial enrollment endpoint design"
+Also search: "${drug} breakthrough therapy orphan drug designation FDA"${nctId ? `\nThe following NCT ID may be relevant, but only use it if it matches ${phase} — do not use it if it is a completed Phase 1 or Phase 1/2 trial: ${nctId}` : ""}
 
 RESPOND WITH ONLY THIS JSON:
 {
@@ -129,7 +131,7 @@ Search for this drug's key clinical trial and extract all 6 trial design paramet
     maxTokens: 800,
     maxSearches: 0,   // Haiku does not support web_search; relies on Serper context below
     serperQueries: [
-      `${drug} clinical trial enrollment design endpoint ${indication}`,
+      `${drug} ${phase} clinical trial enrollment design endpoint ${indication}`,
       `${drug} FDA breakthrough therapy orphan designation`,
     ],
   });

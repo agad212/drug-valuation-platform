@@ -729,8 +729,13 @@ export default function HomePage() {
   ) {
     setLayer2Loading(true);
     try {
-      // Pick best NCT ID from trial results if available
-      const nctId = trialResults?.[0]?.nctId;
+      // Pick best NCT ID from trial results if available.
+      // Only pass it if it matches the current phase — don't anchor layer2 to a
+      // completed Phase 1/Phase 1-2 trial when the drug is already in Phase 2+.
+      const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
+      const drugPhaseNum = phaseNum(phase);
+      const matchingTrial = trialResults?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
+      const nctId = matchingTrial?.nctId ?? undefined;
       const res = await fetch("/api/ptrs-layer2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
