@@ -73,7 +73,15 @@ const AssistantPanel: React.FC<Props> = ({ valuation, onFieldUpdate, onAutoValue
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: next, context: { type: "valuation", payload: valuation } }),
       });
-      const data = await res.json();
+      let data: any;
+      try {
+        data = await res.json();
+      } catch {
+        const txt = await res.text().catch(() => "");
+        setMessages((m) => [...m, { role: "assistant", content: `Server error (${res.status}): ${txt.slice(0, 200) || "non-JSON response"}` }]);
+        setLoading(false);
+        return;
+      }
 
       const replyMsg: Message = {
         role: "assistant",
@@ -102,8 +110,8 @@ const AssistantPanel: React.FC<Props> = ({ valuation, onFieldUpdate, onAutoValue
         }
         return;
       }
-    } catch {
-      setMessages((m) => [...m, { role: "assistant", content: "Connection error. Check API key or server logs." }]);
+    } catch (e: any) {
+      setMessages((m) => [...m, { role: "assistant", content: `Connection error: ${e?.message || "network failure"}. Check API key or server logs.` }]);
     } finally {
       setLoading(false);
     }

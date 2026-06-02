@@ -1780,6 +1780,7 @@ export default function HomePage() {
                 devPlan={devPlan}
                 reasoning={devPlanReasoning}
                 loading={devPlanLoading}
+                ptrsResult={ptrsResult}
                 onUpdateN={updateDevPlanN}
                 onUpdateCpp={updateDevPlanCpp}
               />

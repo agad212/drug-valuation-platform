@@ -21,6 +21,7 @@
 import { scoreLayer2 } from "./ptrs-trial";
 import type {
   TrialDesignInputs,
+  TrialRiskFlag,
   EndpointType,
   RegulatoryContext,
 } from "./ptrs-trial";
@@ -92,6 +93,7 @@ export type DevStage = DevStageInput & {
   trialSuccessProb: number; // Φ(z) — P(this trial detects effect)
   layer2Multiplier: number;
   sigma2Trial: number;
+  riskFlags: TrialRiskFlag[];
 
   // Drug truth if this stage succeeds (Bayesian posterior)
   mssIfSuccess: number;
@@ -203,6 +205,7 @@ export function computeDevPlan(
       trialSuccessProb,
       layer2Multiplier:  l2.layer2Multiplier,
       sigma2Trial:       l2.sigma2Trial,
+      riskFlags:         l2.riskFlags,
       mssIfSuccess,
       varianceIfSuccess,
       trialCostM,
