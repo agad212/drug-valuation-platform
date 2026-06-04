@@ -299,7 +299,7 @@ function OptionForm({
             </div>
             <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-faint)", lineHeight: 1.5 }}>
               {option.inclusionCriteria === "tight"
-                ? "Tight criteria: raises PTRS (enriched for responders) but narrows label → peak sales ×0.7"
+                ? "Tight criteria: raises P(approval) (enriched for responders) but narrows label → peak sales ×0.7"
                 : option.inclusionCriteria === "broad"
                 ? "Broad criteria: wider addressable market → peak sales ×1.2 but more trial noise"
                 : ""}
@@ -387,7 +387,7 @@ function OptionForm({
                   hint="%"
                 />
                 <SmallNumber
-                  label="PTRS boost if positive %"
+                  label="P(approval) boost if positive %"
                   value={option.voiPtrsBoostIfPositive != null ? option.voiPtrsBoostIfPositive * 100 : undefined}
                   onChange={(v) => onUpdate({ voiPtrsBoostIfPositive: v / 100 })}
                   placeholder="8"
@@ -507,7 +507,7 @@ function ResultCard({
         {/* Secondary metrics */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 2 }}>PTRS</div>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 2 }}>P(approval)</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
               {fmtPct(ptrs)}
             </div>
@@ -719,9 +719,9 @@ function ComparisonCharts({ results }: { results: OptionResult[] }) {
 
 function SensitivityTable({ results, base }: { results: OptionResult[]; base: BaseContext }) {
   const scenarios = [
-    { label: "Bear (PTRS −10%)",  ptrsShift: -0.10 },
-    { label: "Base",              ptrsShift:  0    },
-    { label: "Bull (PTRS +10%)",  ptrsShift: +0.10 },
+    { label: "Bear (P(approval) −10%)", ptrsShift: -0.10 },
+    { label: "Base",                    ptrsShift:  0    },
+    { label: "Bull (P(approval) +10%)", ptrsShift: +0.10 },
   ];
 
   const tableResults = scenarios.map(({ label, ptrsShift }) =>
@@ -736,7 +736,7 @@ function SensitivityTable({ results, base }: { results: OptionResult[]; base: Ba
   return (
     <div>
       <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 12 }}>
-        Sensitivity — Does the ranking change if PTRS shifts ±10%?
+        Sensitivity — Does the ranking change if P(approval) shifts ±10%?
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "var(--font-mono)" }}>
@@ -908,7 +908,7 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
               background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)",
               borderRadius: 10, padding: "16px 20px", fontSize: 13, color: "#92400e",
             }}>
-              Run <strong>Auto-Valuate</strong> first to populate peak sales, dev cost, and PTRS data. Decision Analysis builds on top of the existing valuation.
+              Run <strong>Auto-Valuate</strong> first to populate peak sales, dev cost, and Approval Probability data. Decision Analysis builds on top of the existing valuation.
             </div>
           )}
 
@@ -938,7 +938,7 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
                 </div>
                 <div style={{ padding: "10px 14px", display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
                   <span>n = {base.baseTrialDesign.n} · {base.baseTrialDesign.designType.replace("_", " ")} · {base.baseTrialDesign.regulatoryContext}</span>
-                  <span>PTRS: {fmtPct(base.ptrs)}</span>
+                  <span>P(approval): {fmtPct(base.ptrs)}</span>
                   <span>Peak Sales: {fmtM(base.peakSalesM)}</span>
                   <span>Dev Cost: {fmtM(base.devCostM)}</span>
                   <span>Phase: {base.phase}</span>
@@ -1029,8 +1029,8 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
 
               {/* Methodology note */}
               <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
-                eNPV = PTRS × Revenue PV − Dev Cost PV · eROI = eNPV / Dev Cost · Marginal eROI = ΔeNPV / |ΔDev Cost| vs Option A ·
-                PTRS recalculated per option using Layer 2 trial design simulation · Dev cost scales at n^0.75 (sub-linear) ·
+                eNPV = P(approval) × Revenue PV − Dev Cost PV · eROI = eNPV / Dev Cost · Marginal eROI = ΔeNPV / |ΔDev Cost| vs Option A ·
+                P(approval) recalculated per option using trial design simulation · Dev cost scales at n^0.75 (sub-linear) ·
                 Tight inclusion: peak sales ×0.70 · Broad inclusion: ×1.20 · RCT label premium: ×1.10 · Single arm discount: ×0.90
               </div>
             </>

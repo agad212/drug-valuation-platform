@@ -159,7 +159,7 @@ function Card({ children, style }: { children: React.ReactNode; style?: React.CS
 }
 
 // ─── P&L Table ───────────────────────────────────────────────────────────────
-function PnLTable({ v, out, onClose }: { v: Valuation; out: ReturnType<typeof computeOutputs>; onClose: () => void }) {
+function PnLTable({ v, out, pApproval, onClose }: { v: Valuation; out: ReturnType<typeof computeOutputs>; pApproval?: number; onClose: () => void }) {
   const [distPct, setDistPct] = useState(v.distributionPct ?? 0.05);
   const [opexPct, setOpexPct] = useState(v.commercialOpexPct ?? 0.20);
 
@@ -167,7 +167,8 @@ function PnLTable({ v, out, onClose }: { v: Valuation; out: ReturnType<typeof co
   const disc = v.discountRate ?? 0.12;
   const cogs = v.cogsPct ?? 0.2;
   const tax = v.taxRate ?? 0.21;
-  const ptrs = out.ptrs;
+  // Use dev plan P(approval) when available; fall back to out.ptrs (Layer 1+2 or phase baseline)
+  const ptrs = pApproval ?? out.ptrs;
   const isLicensor = v.ownerType === "Licensor";
   const royalty = v.avgRoyalty ?? 0.15;
 
@@ -285,7 +286,7 @@ function PnLTable({ v, out, onClose }: { v: Valuation; out: ReturnType<typeof co
           <span style={{ color: "var(--text-faint)", marginLeft: 6, fontSize: 11 }}>— WACC / pharma industry benchmark ({v.phase === "Approved" ? "lower risk, approved asset" : v.phase === "Phase 3" ? "moderate risk, late-stage" : "high risk, early-stage"})</span>
         </div>
         <div>
-          <span style={{ color: "var(--text-faint)", marginRight: 6 }}>PTRS:</span>
+          <span style={{ color: "var(--text-faint)", marginRight: 6 }}>P(approval):</span>
           <strong style={{ color: "var(--text)" }}>{fmtPct(ptrs)}</strong>
           <span style={{ color: "var(--text-faint)", marginLeft: 6, fontSize: 11 }}>— {out.mechLabel}</span>
         </div>
@@ -311,7 +312,7 @@ function PnLTable({ v, out, onClose }: { v: Valuation; out: ReturnType<typeof co
             <tr>
               {th("Year")}
               {th("Launch")}
-              {th("PTRS")}
+              {th("P(appr.)")}
               {th("Disc. Factor")}
               {th("PW R&D Costs")}
               {th("PW Gross Revenue")}
@@ -684,7 +685,7 @@ export default function HomePage() {
       setLayer2Result(null);  // clear stale Layer 2 while new one loads
       // Auto-apply the mechanistic PTRS to the valuation
       setV((cur) => ({ ...cur, ptrs: data.ptrs }));
-      pushToast(`PTRS Layer 1: ${(data.ptrs * 100).toFixed(1)}% — scoring trial design…`, "success", 5000);
+      pushToast(`Mechanism scored: MSS ${Math.round(data.mss * 100)} → P(approval) prior ${(data.ptrs * 100).toFixed(1)}% — analyzing trial design…`, "success", 6000);
       // Auto-trigger Layer 2 (45s delay — well clear of the 60s rate-limit window)
       setTimeout(() => onScoreLayer2(drug, indication, phase, sponsor, data), 45000);
     } catch (e: any) {
@@ -756,7 +757,7 @@ export default function HomePage() {
       setLayer2Result(data);
       // Apply the combined PTRS (Layer 1 + 2) to the valuation
       setV((cur) => ({ ...cur, ptrs: data.ptrsCombined }));
-      pushToast(`Final PTRS: ${(data.ptrsCombined * 100).toFixed(1)}% (Layer 1 + trial design) — building dev plan…`, "success", 6000);
+      pushToast(`P(approval): ${(data.ptrsCombined * 100).toFixed(1)}% (mechanism + trial design) — building dev plan…`, "success", 6000);
       // Auto-generate development plan immediately after layer2
       onGenerateDevPlan(drug, indication, phase, sponsor, data);
     } catch (e: any) {
@@ -908,14 +909,14 @@ export default function HomePage() {
     rows.push(["Phase", v.phase || ""]);
     rows.push(["Mechanism", v.mechanism || ""]);
     rows.push(["Discount Rate", `${(disc * 100).toFixed(1)}%`]);
-    rows.push(["PTRS", `${(ptrsVal * 100).toFixed(1)}%`]);
+    rows.push(["P(approval)", `${(ptrsVal * 100).toFixed(1)}%`]);
     rows.push(["rNPV ($M)", String(Math.round((out.rnpv ?? 0) / 1e6))]);
     rows.push(["Revenue PV ($M)", String(Math.round((out.revenuePV ?? 0) / 1e6))]);
     rows.push(["Dev Cost PV ($M)", String(Math.round((out.devCostPV ?? 0) / 1e6))]);
     rows.push([]);
 
     // DCF table
-    rows.push(["Year", "Phase", "PTRS", "Disc Factor", "PW R&D Cost ($M)", "Gross Revenue ($M)", "COGS ($M)", "Dist ($M)", "Opex ($M)", "Net Revenue ($M)", "Net Income ($M)", "PW Net Income ($M)", "DCF ($M)", "Cum eNPV ($M)", "PI"]);
+    rows.push(["Year", "Phase", "P(approval)", "Disc Factor", "PW R&D Cost ($M)", "Gross Revenue ($M)", "COGS ($M)", "Dist ($M)", "Opex ($M)", "Net Revenue ($M)", "Net Income ($M)", "PW Net Income ($M)", "DCF ($M)", "Cum eNPV ($M)", "PI"]);
 
     let cumExpCosts = 0; let cumDcf = 0;
     devYears.forEach(yr => {
@@ -1071,12 +1072,12 @@ export default function HomePage() {
               sub={devPlan ? `Dev plan · P(approval) ${fmtPct(devPlan.pApproval)}` : (rnpvPositive ? "Risk-adjusted NPV" : "Negative — check inputs")}
             />
             <MetricCard
-              label={devPlan ? "P(approval)" : "PTRS"}
+              label="P(approval)"
               value={devPlan ? fmtPct(devPlan.pApproval) : fmtPct(out.ptrs)}
               gradient="linear-gradient(135deg, #1d4ed8, #3b82f6)"
-              sub={devPlan ? `${fmtPct(devPlan.pAllTrialsSuccess)} trials × ${fmtPct(devPlan.regStage.pApproval)} reg` : (out.mechLabel || `Phase: ${v.phase}`)}
+              sub={devPlan ? `${fmtPct(devPlan.pAllTrialsSuccess)} trials × ${fmtPct(devPlan.regStage.pApproval)} reg` : (out.mechLabel || `Phase baseline · ${v.phase}`)}
             />
-            <MetricCard label="Revenue PV" value={fmtMoney(out.revenuePV)} gradient="linear-gradient(135deg, #7c3aed, #a855f7)" sub="Undiscounted at PTRS=1" />
+            <MetricCard label="Revenue PV" value={fmtMoney(out.revenuePV)} gradient="linear-gradient(135deg, #7c3aed, #a855f7)" sub="Full Revenue PV (before probability)" />
             <MetricCard
               label="Dev Cost"
               value={fmtMoney(devPlan ? devPlan.totalRiskAdjCostM * 1e6 : out.devCostPV)}
@@ -1123,7 +1124,7 @@ export default function HomePage() {
             <div className="form-grid-3" style={{ marginBottom: 16 }}>
               <FieldNumber label="Launch Year" value={v.launchYear} onChange={(x) => update("launchYear", x)} integer />
               <FieldNumber label="LOE Year" value={v.loeYear} onChange={(x) => update("loeYear", x)} integer hint="Loss of Exclusivity" />
-              <FieldNumber label="PTRS Override" value={v.ptrs} onChange={(x) => update("ptrs", x)} isPct hint="Leave blank = auto" />
+              <FieldNumber label="Override P(approval)" value={v.ptrs} onChange={(x) => update("ptrs", x)} isPct hint="Leave blank = auto" />
             </div>
 
             <div style={{ borderTop: "1px solid var(--border)", margin: "16px 0" }} />
@@ -1138,7 +1139,7 @@ export default function HomePage() {
             ) : (
               <div style={{ overflowX: "auto" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 2fr) 90px 68px 68px 64px 80px 80px 80px 24px", gap: 6, marginBottom: 6 }}>
-                  {["Indication", "Peak Sales ($M)", "Launch", "LOE", "PTRS%", "Dev Cost ($M)", "Rev PV", "rNPV", ""].map((h, i) => (
+                  {["Indication", "Peak Sales ($M)", "Launch", "LOE", "P(appr.)", "Dev Cost ($M)", "Rev PV", "rNPV", ""].map((h, i) => (
                     <div key={i} style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", fontFamily: "var(--font-mono)" }}>{h}</div>
                   ))}
                 </div>
@@ -1464,9 +1465,9 @@ export default function HomePage() {
             <Card>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
                 <div>
-                  <SectionLabel>PTRS — Mechanism Analysis</SectionLabel>
+                  <SectionLabel>Approval Probability — Mechanism Analysis</SectionLabel>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
-                    AI-scored pharmacological signal strength · {v.asset} · {v.phase}
+                    Mechanism prior (Layer 1) · AI-scored signal strength · {v.asset} · {v.phase}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -1577,11 +1578,11 @@ export default function HomePage() {
                     {/* PTRS result with confidence interval */}
                     <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Mechanistic PTRS</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Mechanism Prior · P(approval)</div>
                         <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>
                           Phase baseline {(ptrsResult.baseline * 100).toFixed(0)}%
-                          {" "}{ptrsResult.ptrsAdjustment >= 0 ? "+" : ""}{(ptrsResult.ptrsAdjustment * 100).toFixed(0)}% mechanism
-                          {ptrsResult.divergence && <span style={{ color: "#f59e0b" }}> · IPS/TRS divergence</span>}
+                          {" "}{ptrsResult.ptrsAdjustment >= 0 ? "+" : ""}{(ptrsResult.ptrsAdjustment * 100).toFixed(0)}% mechanism adjustment
+                          {ptrsResult.divergence && <span style={{ color: "#f59e0b" }}> · IPS/TRS divergence flagged</span>}
                         </div>
                       </div>
                       <div style={{ textAlign: "right" }}>
@@ -1604,7 +1605,7 @@ export default function HomePage() {
                       const pctColor = bm.percentile >= 75 ? "#10b981" : bm.percentile >= 50 ? "#3b82f6" : bm.percentile >= 25 ? "#f59e0b" : "#ef4444";
                       return (
                         <div style={{ marginTop: 14, background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px" }}>
-                          <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>vs. Historical {bm.benchmarks.label} Drugs (DiMasi / Hay et al.)</div>
+                          <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>vs. Historical {bm.benchmarks.label} Drugs · Mechanism Prior (DiMasi / Hay et al.)</div>
                           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                             <div style={{ fontSize: 22, fontWeight: 800, color: pctColor, fontFamily: "var(--font-display)", minWidth: 52 }}>{bm.percentile}<span style={{ fontSize: 12, fontWeight: 500 }}>th</span></div>
                             <div style={{ flex: 1 }}>
@@ -1664,10 +1665,10 @@ export default function HomePage() {
                     {/* Combined PTRS headline */}
                     <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                       <div>
-                        <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Combined PTRS (Layer 1 + 2)</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>P(approval) · Mechanism + Trial Design</div>
                         <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>
-                          Layer 1: {(ptrsLayer1 * 100).toFixed(1)}%
-                          {" "}<span style={{ color: deltaColor(layer2Delta) }}>{layer2Delta >= 0 ? "+" : ""}{(layer2Delta * 100).toFixed(1)}%</span> trial design
+                          Mechanism prior: {(ptrsLayer1 * 100).toFixed(1)}%
+                          {" "}<span style={{ color: deltaColor(layer2Delta) }}>{layer2Delta >= 0 ? "+" : ""}{(layer2Delta * 100).toFixed(1)}%</span> trial design adjustment
                           {" · "}multiplier {layer2Multiplier.toFixed(2)}×
                         </div>
                       </div>
@@ -1731,7 +1732,7 @@ export default function HomePage() {
                       const pctColor = bm.percentile >= 75 ? "#10b981" : bm.percentile >= 50 ? "#3b82f6" : bm.percentile >= 25 ? "#f59e0b" : "#ef4444";
                       return (
                         <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "12px 14px" }}>
-                          <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>vs. Historical {bm.benchmarks.label} Drugs (Layer 1 + 2)</div>
+                          <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>vs. Historical {bm.benchmarks.label} Drugs · Mechanism + Trial Design</div>
                           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                             <div style={{ fontSize: 22, fontWeight: 800, color: pctColor, fontFamily: "var(--font-display)", minWidth: 52 }}>{bm.percentile}<span style={{ fontSize: 12, fontWeight: 500 }}>th</span></div>
                             <div style={{ flex: 1 }}>
@@ -2089,7 +2090,7 @@ export default function HomePage() {
               <button onClick={() => setShowPnL(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 22, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
             </div>
 
-            <PnLTable v={v} out={out} onClose={() => setShowPnL(false)} />
+            <PnLTable v={v} out={out} pApproval={devPlan?.pApproval} onClose={() => setShowPnL(false)} />
           </div>
         </div>
       )}
