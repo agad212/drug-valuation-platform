@@ -1506,8 +1506,8 @@ export default function HomePage() {
             </Card>
           )}
 
-          {/* PTRS Mechanism Breakdown */}
-          {(ptrsLoading || ptrsResult) && (
+          {/* PTRS Mechanism Breakdown — hidden once Effect Prior chain loads (chain subsumes it) */}
+          {!effectPrior && (ptrsLoading || ptrsResult) && (
             <Card>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
                 <div>
@@ -1673,8 +1673,8 @@ export default function HomePage() {
             </Card>
           )}
 
-          {/* Layer 2 — Trial Design Simulation */}
-          {(layer2Loading || layer2Result) && (
+          {/* Layer 2 — Trial Design Simulation — hidden once Effect Prior chain loads (trial design now shown per-stage in DevPlan) */}
+          {!effectPrior && (layer2Loading || layer2Result) && (
             <Card>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
                 <div>
