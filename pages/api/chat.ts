@@ -68,7 +68,7 @@ FIELD UPDATE CAPABILITY: If the user asks you to set, update, or suggest a value
 Available fields: peakSales (USD — updates the first/active indication's peak sales when indications exist), discountRate (decimal e.g. 0.10 for 10%), cogsPct (decimal), taxRate (decimal), workingCapitalPct (decimal), avgRoyalty (decimal), launchYear (integer), loeYear (integer), devCostPV (USD), phase ("Preclinical"/"Phase 1"/"Phase 2"/"Phase 3"/"Filed"/"Approved"), ptrs (decimal 0–1), asset (string), indication (string), mechanism (string), sponsor (string).
 Only include <field-update> when the user explicitly asks to change values.
 
-Be concise and practical. Lead with the answer — one or two sentences max for factual questions. Use web_search when you need current data. Cite URLs when available.`;
+Be concise and practical. Lead with the answer — one or two sentences max for factual questions. Cite information from the valuation context above.`;
 
   const claudeMessages: any[] = (messages || []).map((m: Msg) => ({
     role: m.role === "assistant" ? "assistant" : "user",
@@ -76,21 +76,17 @@ Be concise and practical. Lead with the answer — one or two sentences max for 
   }));
 
   try {
-    // web_search_20250305 is server-side — Anthropic executes searches automatically
-    // within a single API call. No manual loop needed.
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": anthropicKey,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "web-search-2025-03-05",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 1024,
         system: systemPrompt,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
         messages: claudeMessages,
       }),
     });
