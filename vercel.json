@@ -4,6 +4,7 @@
     "pages/api/revenue-assumptions.ts": { "maxDuration": 300 },
     "pages/api/ptrs-score.ts":        { "maxDuration": 300 },
     "pages/api/ptrs-layer2.ts":       { "maxDuration": 300 },
+    "pages/api/effect-prior.ts":      { "maxDuration": 300 },
     "pages/api/loe-full/[drugName].ts": { "maxDuration": 30 },
     "pages/api/chat.ts":              { "maxDuration": 30 },
     "pages/api/decision-analysis.ts": { "maxDuration": 30 },

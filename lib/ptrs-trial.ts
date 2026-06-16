@@ -1,15 +1,19 @@
 // ─── PTRS Trial Design Simulator — Layer 2 ────────────────────────────────────
 //
-// Given the drug effect distribution from Layer 1 (μ from MSS, σ²_drug from variance),
-// computes how often a trial with these specific design parameters would successfully
-// detect the effect and meet its primary endpoint.
+// Given the drug's effect-strength mixture from the True Effect Prior (one or
+// two Gaussian "curves" — see lib/effect-prior.ts), computes how often a trial
+// with these specific design parameters would successfully detect the effect
+// and meet its primary endpoint.
 //
-// Math: closed-form normal CDF — runs in <1ms, no simulation loop.
+// Math: closed-form normal CDF per mixture component — runs in <1ms, no simulation loop.
 //
-//   Drug true effect  ~  N(μ, σ²_drug)     [from Layer 1]
-//   Trial noise       ~  N(0, σ²_trial)     [from trial design]
-//   z = (μ − threshold) / √(σ²_drug + σ²_trial)
-//   P(trial success) = Φ(z)
+//   Drug true effect  ~  mixture of N(μᵢ, σ²ᵢ)   [from the True Effect Prior]
+//   Trial noise       ~  N(0, σ²_trial)           [from trial design]
+//   P(trial success)  =  Σ wᵢ · Φ((μᵢ − threshold) / √(σ²ᵢ + σ²_trial))
+//
+// For a 1-component mixture (the common case, and the only case unless the
+// True Effect Prior has detected a genuine disagreement) this reduces EXACTLY
+// to the original single-curve formula Φ((μ − threshold) / √(σ²_drug + σ²_trial)).
 //
 // Layer 2 output is expressed as a multiplier on the Layer 1 PTRS.
 // If the trial is average for this phase/drug type → multiplier ≈ 1.0.
@@ -17,6 +21,8 @@
 // Strong design (well-powered RCT, biomarker-selected, BTD) → multiplier > 1.0.
 //
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { type EffectPriorMixture, mixtureSuccessProbability } from "./effect-prior";
 
 // ─── Input types ─────────────────────────────────────────────────────────────
 
@@ -67,8 +73,8 @@ export type TrialRiskFlag = {
 
 export type Layer2Result = {
   // Core outputs
-  trialSuccessProb: number;   // Φ(z) — probability this specific trial detects the effect
-  z: number;                  // z-score
+  trialSuccessProb: number;   // Σ wᵢ·Φ(zᵢ) — probability this specific trial detects the effect
+  componentSuccessProbs: number[]; // Φ(zᵢ) per mixture component — for Bayesian weight updates downstream
   sigma2Trial: number;        // total trial noise component
   layer2Multiplier: number;   // how much Layer 2 adjusts Layer 1 PTRS
   layer2Delta: number;        // additive delta on PTRS (for display)
@@ -128,24 +134,14 @@ const THRESHOLD_ADJUSTMENT: Record<RegulatoryContext, number> = {
 const NEUTRAL_SIGMA2_TRIAL = 1.0;   // σ²_trial for the reference trial at n=100
 const BASE_THRESHOLD = 0.80;        // evidentiary bar (in μ units)
 
-export function scoreLayer2(
-  // Layer 1 inputs
-  mss: number,
-  variance: number,
-  ptrsLayer1: number,
-  ciHalfWidth: number,
-  // Trial design
-  inputs: TrialDesignInputs,
-): Layer2Result {
+/**
+ * Pure trial-design → (σ²_trial, threshold) calculation, extracted so other
+ * modules (e.g. the Early-Signal Resolver sizing in lib/decision-analysis.ts)
+ * can reuse the exact same noise/threshold numbers as scoreLayer2() without
+ * duplicating the formula.
+ */
+export function computeTrialNoise(inputs: TrialDesignInputs): { sigma2Trial: number; threshold: number } {
   const { n, endpointType, designType, populationType, placeboResponse, regulatoryContext } = inputs;
-
-  // μ: translate MSS to expected effect size in [0, 2] space
-  // MSS 0.5 (median drug) → μ = 1.0 (effect at reference level)
-  // MSS 0.8 (strong drug) → μ = 1.6; MSS 0.2 → μ = 0.4
-  const mu = mss * 2.0;
-
-  // σ²_drug: Layer 1 uncertainty, already in compatible units
-  const sigma2Drug = variance;
 
   // σ²_trial: noise from trial design
   // Base noise scales inversely with n (n=100 → 1.0, n=36 → 2.78, n=200 → 0.5)
@@ -161,11 +157,32 @@ export function scoreLayer2(
   // Threshold: evidentiary bar adjusted for regulatory context
   const threshold = BASE_THRESHOLD + THRESHOLD_ADJUSTMENT[regulatoryContext];
 
-  // z-score and P(trial success) via normal CDF
-  const z = (mu - threshold) / Math.sqrt(sigma2Drug + sigma2Trial);
-  const trialSuccessProb = normalCDF(z);
+  return { sigma2Trial, threshold };
+}
 
-  // Neutral reference: MSS=0.5, variance=0.3, n=100, rct, surrogate, broad, low, standard
+export function scoreLayer2(
+  // Drug effect-strength mixture from the True Effect Prior (1 component = normal case)
+  mixture: EffectPriorMixture,
+  ptrsLayer1: number,
+  ciHalfWidth: number,
+  // Trial design
+  inputs: TrialDesignInputs,
+): Layer2Result {
+  const { n, endpointType, designType, populationType, placeboResponse, regulatoryContext } = inputs;
+
+  const { sigma2Trial, threshold } = computeTrialNoise(inputs);
+
+  // Per-component P(trial success) — Φ((μᵢ − threshold) / √(σ²ᵢ + σ²_trial)) —
+  // plus the mixture-weighted overall probability (Σ wᵢ·Φᵢ).
+  const componentSuccessProbs = mixture.map(({ mu, sigma2 }) =>
+    normalCDF((mu - threshold) / Math.sqrt(Math.max(sigma2, 0) + sigma2Trial))
+  );
+  const trialSuccessProb = mixtureSuccessProbability(mixture, threshold, sigma2Trial);
+
+  // Neutral reference: MSS=0.5, variance=0.3, n=100, rct, surrogate, broad, low, standard.
+  // Deliberately a FIXED reference point (NOT mixture- or trial-design-aware) —
+  // the multiplier below compares THIS drug+trial to a neutral drug in a
+  // neutral trial, not this drug vs. neutral under its own trial design.
   const zNeutral = (1.0 - BASE_THRESHOLD) / Math.sqrt(0.3 + NEUTRAL_SIGMA2_TRIAL * ENDPOINT_NOISE.surrogate * DESIGN_NOISE.rct * POPULATION_NOISE.broad * PLACEBO_NOISE.low);
   const phiNeutral = normalCDF(zNeutral);
 
@@ -211,10 +228,10 @@ export function scoreLayer2(
   const regLabel = { standard: "", btd: " + BTD", orphan: " + Orphan", btd_orphan: " + BTD + Orphan", accelerated: " + Accelerated Approval", confirmatory: " + Confirmatory" }[regulatoryContext];
   const summary =
     `Trial design: ${designLabel}, n=${n}, ${endpointType} endpoint, ${populationType.replace("_", " ")} population${regLabel}. ` +
-    `Trial noise (σ²=${sigma2Trial.toFixed(2)}), z=${z.toFixed(2)}, P(trial success)=${(trialSuccessProb * 100).toFixed(0)}%. ` +
+    `Trial noise (σ²=${sigma2Trial.toFixed(2)}), P(trial success)=${(trialSuccessProb * 100).toFixed(0)}%. ` +
     `Layer 2 multiplier: ${layer2Multiplier.toFixed(2)}× → PTRS ${layer2Delta >= 0 ? "+" : ""}${(layer2Delta * 100).toFixed(1)}% vs. Layer 1.`;
 
-  return { trialSuccessProb, z, sigma2Trial, layer2Multiplier, layer2Delta, ptrsCombined, ptrsCI, riskFlags, inputs, summary };
+  return { trialSuccessProb, componentSuccessProbs, sigma2Trial, layer2Multiplier, layer2Delta, ptrsCombined, ptrsCI, riskFlags, inputs, summary };
 }
 
 // ─── Normal CDF (Abramowitz & Stegun approximation) — pure JS, no imports ────

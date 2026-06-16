@@ -24,7 +24,6 @@ type Props = {
   devPlan: DevPlanResult | null;
   reasoning: string | null;
   loading: boolean;
-  ptrsResult: any | null;
   onUpdateN: (id: string, n: number) => void;
   onUpdateCpp: (id: string, cpp: number) => void;
 };
@@ -87,11 +86,6 @@ function mssColor(m: number): string {
   if (m >= 0.55) return "#3b82f6";
   return "#f59e0b";
 }
-function scoreColor(s: number): string {
-  if (s >= 0.75) return "#10b981";
-  if (s >= 0.5)  return "#f59e0b";
-  return "#ef4444";
-}
 
 // ─── Inline number editor ─────────────────────────────────────────────────────
 
@@ -132,96 +126,6 @@ function InlineNumber({
       style={{ cursor: "text", textDecoration: "underline dotted", textUnderlineOffset: 3, fontFamily: "var(--font-mono)", fontSize: 12 }}>
       {prefix}{typeof value === "number" && value >= 1000 ? Math.round(value).toLocaleString() : value}
     </span>
-  );
-}
-
-// ─── Mechanism Section ────────────────────────────────────────────────────────
-
-const FACTOR_LABELS: Record<string, string> = {
-  potency: "1A · Potency",
-  selectivity: "1B · Selectivity",
-  pkProfile: "1C · PK Profile",
-  targetEngagement: "1D · Target Engagement",
-  therapeuticWindow: "1E · Therapeutic Window",
-  targetValidation: "2A · Target Validation",
-  indicationMechFit: "2B · Indication Fit",
-  modalityFit: "2C · Modality Fit",
-  translationRate: "2D · Translation Rate",
-};
-
-function MechanismSection({ ptrsResult }: { ptrsResult: any }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div style={{
-      background: "var(--surface-2)", borderRadius: 10,
-      border: "1px solid var(--border)", marginBottom: 16, overflow: "hidden",
-    }}>
-      {/* Header row — always visible */}
-      <div
-        onClick={() => setExpanded((e) => !e)}
-        style={{
-          display: "flex", alignItems: "center", gap: 14,
-          padding: "12px 16px", cursor: "pointer",
-        }}
-      >
-        <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.1em", flexShrink: 0 }}>
-          Mechanism inputs
-        </div>
-        {/* MSS / IPS / TRS badges */}
-        {[
-          { label: "MSS", val: ptrsResult.mss, desc: "Signal Strength" },
-          { label: "IPS", val: ptrsResult.ips, desc: "Potency" },
-          { label: "TRS", val: ptrsResult.trs, desc: "Translation" },
-        ].map(({ label, val, desc }) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ fontSize: 10, color: "var(--text-faint)" }}>{desc}</span>
-            <span style={{
-              fontFamily: "var(--font-mono)", fontWeight: 700,
-              fontSize: 15, color: scoreColor(val),
-            }}>{Math.round(val * 100)}</span>
-            <span style={{ fontSize: 9, color: "var(--text-faint)" }}>/{label}</span>
-          </div>
-        ))}
-        <div style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-faint)" }}>
-          {expanded ? "▲ hide factors" : "▼ factor breakdown"}
-        </div>
-      </div>
-
-      {/* Collapsible factor breakdown */}
-      {expanded && (
-        <div style={{ borderTop: "1px solid var(--border)", padding: "12px 16px" }}>
-          {ptrsResult.summary && (
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12, lineHeight: 1.6 }}>
-              {ptrsResult.summary}
-            </div>
-          )}
-          {Object.entries(ptrsResult.factors).map(([key, factor]: [string, any]) => (
-            <div key={key} style={{
-              display: "grid", gridTemplateColumns: "170px 44px 60px 1fr",
-              gap: 8, alignItems: "center",
-              padding: "7px 0", borderBottom: "1px solid var(--border)",
-            }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
-                {FACTOR_LABELS[key] || key}
-              </div>
-              <div style={{
-                fontSize: 14, fontWeight: 700, color: scoreColor(factor.score),
-                fontFamily: "var(--font-display)", textAlign: "right",
-              }}>
-                {Math.round(factor.score * 100)}
-              </div>
-              <div style={{ fontSize: 10, color: factor.confidence === "unknown" ? "#f59e0b" : "var(--text-faint)", textTransform: "uppercase" }}>
-                {factor.confidence}{factor.highVariance ? " ⚠" : ""}
-              </div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>
-                {factor.rationale}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -335,7 +239,7 @@ function StageCard({
           )}
 
           {/* Cost row */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
             <div>
               <div style={{ fontSize: 9, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>Cost / patient</div>
               <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
@@ -360,6 +264,15 @@ function StageCard({
                   {fmtPct(stage.pPriorSuccess)} × {fmtPct(stage.trialSuccessProb)}
                 </div>
               )}
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>Duration</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                {Math.round(stage.durationMonths)} mo
+              </div>
+              <div style={{ fontSize: 10, color: "var(--text-faint)", marginTop: 1 }}>
+                {Math.round(stage.enrollmentMonths)}mo enroll + {stage.treatmentObsMonths}mo obs + {stage.startupCushionMonths}mo startup
+              </div>
             </div>
           </div>
 
@@ -427,6 +340,11 @@ function RegCard({ regStage }: { regStage: DevPlanResult["regStage"] }) {
             <div style={{ fontSize: 9, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>Designation</div>
             <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{regStage.regulatoryContext.replace("_", " + ").toUpperCase()}</div>
           </div>
+          <div>
+            <div style={{ fontSize: 9, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>Review time</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{regStage.reviewMonths} mo</div>
+            <div style={{ fontSize: 10, color: "var(--text-faint)" }}>FDA/EMA decision</div>
+          </div>
         </div>
       </div>
     </div>
@@ -473,6 +391,13 @@ function SummaryBanner({ plan }: { plan: DevPlanResult }) {
             {fmtM(plan.totalNominalCostM)}
           </div>
           <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>if all stages run (unrisked)</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 3 }}>Est. timeline</div>
+          <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "var(--font-mono)", lineHeight: 1, color: "#94a3b8" }}>
+            {(plan.totalDurationMonths / 12).toFixed(1)} yrs
+          </div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{Math.round(plan.totalDurationMonths)} months, trials + review</div>
         </div>
       </div>
 
@@ -535,7 +460,7 @@ function SummaryBanner({ plan }: { plan: DevPlanResult }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function DevPlan({ stageInputs, devPlan, reasoning, loading, ptrsResult, onUpdateN, onUpdateCpp }: Props) {
+export default function DevPlan({ stageInputs, devPlan, reasoning, loading, onUpdateN, onUpdateCpp }: Props) {
   if (loading && !devPlan) {
     return (
       <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)", fontSize: 13 }}>
@@ -548,9 +473,6 @@ export default function DevPlan({ stageInputs, devPlan, reasoning, loading, ptrs
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-
-      {/* Mechanism inputs — collapsed by default, expandable */}
-      {ptrsResult && <MechanismSection ptrsResult={ptrsResult} />}
 
       {/* AI reasoning */}
       {reasoning && (
@@ -582,7 +504,7 @@ export default function DevPlan({ stageInputs, devPlan, reasoning, loading, ptrs
 
       {/* Methodology */}
       <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
-        P(trial success) = Φ(z) closed-form normal CDF per stage · MSS (mechanism signal strength) drives μ and σ² for each stage · Bayesian update after success: MSS +10–15% (endpoint-dependent), σ² ×0.65 · Risk-adj cost = trial cost × P(all prior stages succeeded) · eNPV = P(approval) × Revenue PV − total risk-adj cost · Costs cover trial execution (CPP × n) only · CPP values are editable — click any underlined number
+        P(trial success) = Σ wᵢ·Φ(zᵢ) across the True Effect Prior mixture (one curve normally, two if evidence points to competing scenarios) · MSS/σ² shown are mixture summaries (law of total variance) · Bayesian update after success: each curve's effect strength +10–15% (endpoint-dependent), σ² ×0.65, and mixture weights reweight toward whichever curve predicted the success · Risk-adj cost = trial cost × P(all prior stages succeeded) · eNPV = P(approval) × Revenue PV − total risk-adj cost · Duration = enrollment time (n ÷ enrollment rate) + treatment/observation + startup cushion, plus regulatory review · Costs cover trial execution (CPP × n) only · n and CPP are AI-estimated and editable — click any underlined number
       </div>
     </div>
   );

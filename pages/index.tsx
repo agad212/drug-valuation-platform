@@ -11,8 +11,10 @@ import { computeOutputs, computeRevenuePV } from "../lib/cashflow";
 import type { CtgovTrial } from "../lib/ctgov";
 import DecisionAnalysis from "../components/DecisionAnalysis";
 import DevPlan from "../components/DevPlan";
+import EffectPriorChain from "../components/EffectPriorChain";
 import { buildBaseContext } from "../lib/decision-analysis";
 import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
+import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 
 const ValuationCharts = dynamic(() => import("../components/ValuationCharts"), { ssr: false });
@@ -429,6 +431,8 @@ export default function HomePage() {
   const [ptrsRescoring, setPtrsRescoring] = useState(false);
   const [layer2Result, setLayer2Result] = useState<any>(null);
   const [layer2Loading, setLayer2Loading] = useState(false);
+  const [effectPrior, setEffectPrior] = useState<EffectPrior | null>(null);
+  const [effectPriorLoading, setEffectPriorLoading] = useState(false);
   const [devPlanStages, setDevPlanStages] = useState<DevStageInput[] | null>(null);
   const [devPlanRegContext, setDevPlanRegContext] = useState<RegulatoryContext>("standard");
   const [devPlanReasoning, setDevPlanReasoning] = useState<string | null>(null);
@@ -441,17 +445,21 @@ export default function HomePage() {
 
   const out = useMemo(() => computeOutputs(v), [v]);
   const display: Valuation = useMemo(() => ({ ...v, ...out }), [v, out]);
-  const base = useMemo(() => buildBaseContext(display, out, ptrsResult, layer2Result), [display, out, ptrsResult, layer2Result]);
+  const base = useMemo(
+    () => buildBaseContext(display, out, ptrsResult, layer2Result, effectPrior),
+    [display, out, ptrsResult, layer2Result, effectPrior],
+  );
 
   const devPlan = useMemo<DevPlanResult | null>(() => {
     if (!devPlanStages || !base) return null;
     const revenuePVM = (out.revenuePV ?? 0) / 1e6;
+    const mixture = effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
     return computeDevPlan(
-      base.mss, base.variance, base.ciHalfWidth,
+      mixture, base.ciHalfWidth,
       { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0 },
       revenuePVM,
     );
-  }, [devPlanStages, base, out.revenuePV, devPlanRegContext]);
+  }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior]);
 
   function updateDevPlanN(id: string, n: number) {
     setDevPlanStages((prev) => prev?.map((s) =>
@@ -688,11 +696,49 @@ export default function HomePage() {
       pushToast(`Mechanism scored: MSS ${Math.round(data.mss * 100)} → P(approval) prior ${(data.ptrs * 100).toFixed(1)}% — analyzing trial design…`, "success", 6000);
       // Auto-trigger Layer 2 (45s delay — well clear of the 60s rate-limit window)
       setTimeout(() => onScoreLayer2(drug, indication, phase, sponsor, data), 45000);
+      // Auto-trigger the True Effect Prior evidence chain in parallel — both
+      // only depend on the Layer 1 mechanism result, not on each other.
+      setTimeout(() => onGenerateEffectPrior(drug, indication, phase, sponsor, data), 45000);
     } catch (e: any) {
       console.error("[ptrs] scoring failed:", e?.message);
       pushToast(`PTRS scoring failed: ${e?.message || "unknown error"}`, "error", 6000);
     } finally {
       setPtrsLoading(false);
+    }
+  }
+
+  async function onGenerateEffectPrior(
+    drug: string, indication: string, phase: string,
+    sponsor: string | undefined, l1Result: any
+  ) {
+    setEffectPriorLoading(true);
+    try {
+      // Same NCT-matching logic as onScoreLayer2 — gives the "own clinical
+      // evidence" discovery step a trial to anchor to, when available.
+      const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
+      const drugPhaseNum = phaseNum(phase);
+      const matchingTrial = trialResults?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
+      const nctId = matchingTrial?.nctId ?? undefined;
+
+      const res = await fetch("/api/effect-prior", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          drug, indication, phase, sponsor, nctId,
+          mechanism: {
+            mss: l1Result.mss,
+            variance: l1Result.variance,
+            summary: l1Result.summary,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error("Effect prior generation failed");
+      const data = await res.json();
+      setEffectPrior(data.effectPrior as EffectPrior);
+    } catch (e: any) {
+      console.error("[effect-prior] generation failed:", e?.message);
+    } finally {
+      setEffectPriorLoading(false);
     }
   }
 
@@ -1754,6 +1800,13 @@ export default function HomePage() {
             </Card>
           )}
 
+          {/* True Effect Prior — step-by-step evidence story, before/after curves */}
+          {v.asset && (effectPriorLoading || effectPrior) && (
+            <Card>
+              <EffectPriorChain effectPrior={effectPrior} loading={effectPriorLoading} ptrsResult={ptrsResult} />
+            </Card>
+          )}
+
           {/* Development Path — auto-generated after Layer 2, drives headline metrics */}
           {(devPlanLoading || devPlanStages) && v.asset && (
             <Card>
@@ -1781,7 +1834,6 @@ export default function HomePage() {
                 devPlan={devPlan}
                 reasoning={devPlanReasoning}
                 loading={devPlanLoading}
-                ptrsResult={ptrsResult}
                 onUpdateN={updateDevPlanN}
                 onUpdateCpp={updateDevPlanCpp}
               />
@@ -2057,6 +2109,8 @@ export default function HomePage() {
                 out={out}
                 ptrsResult={ptrsResult}
                 layer2Result={layer2Result}
+                effectPrior={effectPrior}
+                devPlan={devPlan}
               />
             </Card>
           )}

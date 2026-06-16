@@ -58,6 +58,37 @@ Adjust upward for:
   - Long follow-up periods (+15–25% per additional year)
 `;
 
+// ─── Trial duration reference table ──────────────────────────────────────────
+// Used in the prompt as reference values for Claude to anchor timeline
+// estimates. Pure math in lib/dev-plan.ts then derives enrollmentMonths and
+// durationMonths from these per-stage numbers.
+
+const DURATION_REFERENCE = `
+TRIAL DURATION BENCHMARKS — use these as reference, adjust for disease specifics:
+
+Enrollment rate (patients enrolled per month, across all sites combined):
+  Oncology: 4–10
+  Rare/orphan (specialized centers): 1–3
+  Ophthalmology (specialized centers): 2–5
+  CNS/neurology: 4–8
+  Common chronic disease (cardiovascular, metabolic, autoimmune): 8–15
+  Infectious disease: 10–20
+
+Treatment / observation period (months — time from a patient's first dose to
+their primary-endpoint readout):
+  Short (ORR, biomarker, PK/PD, early imaging): 2–6
+  Standard (PFS, BCVA at 6-12 months, ACR response, 1-year relapse rate): 6–12
+  Long (OS, durability, multi-year relapse/progression): 12–24
+
+Study-startup cushion (site activation, IRB/EC approval, first-patient-in, months):
+  Rare disease / specialized sites / novel modality: 6–9
+  Common disease / established trial networks: 3–6
+
+Adjust similarly to CPP — rare disease and specialized-site trials enroll more
+slowly and take longer to start than common-disease trials at established
+networks.
+`;
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 type RequestBody = {
@@ -79,6 +110,9 @@ type StageOutput = {
   isCurrentTrial: boolean;
   aiRationale: string;
   trialDesign: TrialDesignInputs;
+  enrollmentRatePerMonth: number;
+  treatmentObsMonths: number;
+  startupCushionMonths: number;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -116,6 +150,8 @@ Your task: given the current clinical trial (already running), reason about what
 
 ${CPP_REFERENCE}
 
+${DURATION_REFERENCE}
+
 RULES:
 1. Include the CURRENT TRIAL as stage 1 (isCurrentTrial: true) with the design parameters I provide — do NOT change them. The stage 1 "phase" field MUST equal the Current Phase I pass in (e.g. if Current Phase = "Phase 2", stage 1 phase = "Phase 2").
 2. Add exactly 1 FUTURE clinical trial stage (isCurrentTrial: false) — the registration/pivotal study. That is all.
@@ -128,6 +164,7 @@ RULES:
 6. For common indications: Phase 3 typically n=200–500+
 7. CPP: estimate realistically based on disease area, delivery route, endpoint complexity
 8. Trial design for the registration study: generally RCT where single-arm Phase 2 preceded it
+9. For EACH stage, also estimate enrollmentRatePerMonth, treatmentObsMonths, and startupCushionMonths using the TRIAL DURATION BENCHMARKS above — reason about the specific indication, endpoint, and site availability the same way you reason about CPP
 
 REGULATORY CONTEXT — reason from what you know:
 - The regulatoryContext for the future stage should be the same or upgraded vs current (e.g. if Phase 2 has orphan, Phase 3 also has orphan; if BTD granted, keep btd_orphan)
@@ -144,6 +181,9 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
       "phase": "Phase 2",
       "n": 40,
       "cpp": 200000,
+      "enrollmentRatePerMonth": 2,
+      "treatmentObsMonths": 12,
+      "startupCushionMonths": 8,
       "isCurrentTrial": true,
       "aiRationale": "One sentence explaining this stage.",
       "trialDesign": {
@@ -163,6 +203,9 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
       "phase": "Phase 3",
       "n": 150,
       "cpp": 320000,
+      "enrollmentRatePerMonth": 3,
+      "treatmentObsMonths": 12,
+      "startupCushionMonths": 8,
       "isCurrentTrial": false,
       "aiRationale": "One sentence explaining why this stage is needed.",
       "trialDesign": {
@@ -235,6 +278,9 @@ Reason about the full development path. Return the current trial as stage 1 (use
         phase:          i === 0 ? phase : (s.phase || "Phase 3"),
         n:              (typeof s.n === "number" && s.n > 0) ? Math.round(s.n) : td.n,
         cpp:            (typeof s.cpp === "number" && s.cpp > 0) ? Math.round(s.cpp) : 200000,
+        enrollmentRatePerMonth: (typeof s.enrollmentRatePerMonth === "number" && s.enrollmentRatePerMonth > 0) ? s.enrollmentRatePerMonth : 5,
+        treatmentObsMonths:     (typeof s.treatmentObsMonths === "number" && s.treatmentObsMonths > 0) ? s.treatmentObsMonths : 9,
+        startupCushionMonths:   (typeof s.startupCushionMonths === "number" && s.startupCushionMonths >= 0) ? s.startupCushionMonths : 6,
         isCurrentTrial: i === 0,
         aiRationale:    s.aiRationale || "",
         trialDesign:    td,

@@ -15,6 +15,7 @@ import {
   type PlaceboResponse,
   type RegulatoryContext,
 } from "../../lib/ptrs-trial";
+import { mixtureFromMssVariance } from "../../lib/effect-prior";
 
 // ─── Phase benchmark ranges (mirrored from ptrs-score.ts) ────────────────────
 
@@ -195,7 +196,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!trialInputs) throw new Error("Trial design extraction failed after retries");
 
-    const result = scoreLayer2(mss, variance, ptrsLayer1, ciHalfWidth ?? 0.10, trialInputs);
+    const result = scoreLayer2(mixtureFromMssVariance(mss, variance), ptrsLayer1, ciHalfWidth ?? 0.10, trialInputs);
     const phaseBenchmark = computePercentile(result.ptrsCombined, phase || "Phase 2");
 
     return res.status(200).json({

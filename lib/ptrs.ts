@@ -22,9 +22,11 @@
 //   c) makes the unified engine importable without the full DevPlanResult type
 //
 // Usage:
-//   1. Run /api/ptrs-score  → get { mss, variance, ciHalfWidth }
-//   2. Run /api/dev-plan    → get { stages: DevStageInput[], regulatoryContext }
-//   3. Call computeApprovalProbability(mss, variance, ciHalfWidth, stages, regContext)
+//   1. Run /api/ptrs-score    → get { mss, variance, ciHalfWidth }
+//   2. Run /api/effect-prior  → get { effectPrior: { mixture, ... } } (or fall
+//      back to mixtureFromMssVariance(mss, variance) if not yet available)
+//   3. Run /api/dev-plan      → get { stages: DevStageInput[], regulatoryContext }
+//   4. Call computeApprovalProbability(mixture, ciHalfWidth, stages, regContext)
 //      → returns P(approval) and stage breakdown
 //
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,6 +34,7 @@
 import { computeDevPlan } from "./dev-plan";
 import type { DevStageInput } from "./dev-plan";
 import type { RegulatoryContext } from "./ptrs-trial";
+import type { EffectPriorMixture } from "./effect-prior";
 
 // ─── Output type ──────────────────────────────────────────────────────────────
 
@@ -57,8 +60,7 @@ export type ApprovalProbResult = {
 // ─── Main function ─────────────────────────────────────────────────────────────
 
 export function computeApprovalProbability(
-  mss: number,
-  variance: number,
+  mixture: EffectPriorMixture,
   ciHalfWidth: number,
   stages: DevStageInput[],
   regulatoryContext: RegulatoryContext,
@@ -67,8 +69,7 @@ export function computeApprovalProbability(
   // Revenue = 0 because we only want the probability outputs here;
   // eNPV is computed separately in cashflow.ts with the revenue model.
   const plan = computeDevPlan(
-    mss,
-    variance,
+    mixture,
     ciHalfWidth,
     { stages, regulatoryContext },
     0, // revenuePVM = 0, we don't need eNPV here

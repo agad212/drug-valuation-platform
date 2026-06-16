@@ -14,8 +14,9 @@
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { scoreLayer2 } from "./ptrs-trial";
+import { scoreLayer2, computeTrialNoise } from "./ptrs-trial";
 import { computeRevenuePV } from "./cashflow";
+import { mixtureFromMssVariance, mixtureSuccessProbability } from "./effect-prior";
 import type {
   TrialDesignInputs,
   EndpointType,
@@ -24,6 +25,8 @@ import type {
   PlaceboResponse,
   RegulatoryContext,
 } from "./ptrs-trial";
+import type { EffectPrior } from "./effect-prior";
+import type { DevPlanResult } from "./dev-plan";
 import type { Valuation } from "./types";
 
 // ─── Option Input Types ───────────────────────────────────────────────────────
@@ -89,6 +92,22 @@ export type BaseContext = {
   variance: number;         // σ² — uncertainty in mechanism score
   ptrsLayer1: number;       // Layer 1 PTRS before trial design adjustment
   ciHalfWidth: number;      // CI half-width on PTRS
+
+  // From /api/effect-prior — the full Gaussian-mixture effect prior, if it has
+  // finished loading. Falls back to mixtureFromMssVariance(mss, variance) when
+  // null (effect prior not yet generated, or generation failed).
+  effectPrior?: EffectPrior | null;
+
+  // Per-patient cost/timeline economics from the next real dev-plan stage
+  // (devPlan.stages[0]) — reused at smaller scale by the Early-Signal
+  // Resolver (generateBimodalVoiOption) to size its preliminary study.
+  resolverEconomics?: {
+    n: number;
+    cpp: number;
+    enrollmentRatePerMonth: number;
+    treatmentObsMonths: number;
+    startupCushionMonths: number;
+  };
 
   // From layer2Result (Layer 2) — the current trial design
   baseTrialDesign: TrialDesignInputs;
@@ -214,9 +233,9 @@ export function computeOption(
       upper: Math.min(0.99, ptrs + base.ciHalfWidth),
     };
   } else {
+    const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
     const l2 = scoreLayer2(
-      base.mss,
-      base.variance,
+      mixture,
       base.ptrsLayer1,
       base.ciHalfWidth,
       trialDesign,
@@ -470,6 +489,8 @@ export function buildBaseContext(
   out: { ptrs: number; revenuePV: number; devCostPV: number; rnpv: number },
   ptrsResult: any,   // result from /api/ptrs-score
   layer2Result: any, // result from /api/ptrs-layer2
+  effectPrior?: EffectPrior | null, // result from /api/effect-prior, if loaded
+  devPlan?: DevPlanResult | null,   // result of computeDevPlan, if available
 ): BaseContext | null {
   // Need at least some financial data
   const peakSalesRaw = v.indications?.[0]?.peakSales ?? v.peakSales ?? 0;
@@ -495,11 +516,24 @@ export function buildBaseContext(
 
   const currentYear = new Date().getFullYear();
 
+  const firstStage = devPlan?.stages?.[0];
+  const resolverEconomics = firstStage
+    ? {
+        n:                      firstStage.n,
+        cpp:                    firstStage.cpp,
+        enrollmentRatePerMonth: firstStage.enrollmentRatePerMonth,
+        treatmentObsMonths:     firstStage.treatmentObsMonths,
+        startupCushionMonths:   firstStage.startupCushionMonths,
+      }
+    : undefined;
+
   return {
     mss:          ptrsResult?.mss ?? 0.5,
     variance:     ptrsResult?.variance ?? 0.3,
     ptrsLayer1,
     ciHalfWidth:  ciHalfWidthFromResult,
+    effectPrior:  effectPrior ?? null,
+    resolverEconomics,
     baseTrialDesign,
     ptrs:         out.ptrs,
     peakSalesM:   peakSalesRaw / 1e6,
@@ -513,6 +547,43 @@ export function buildBaseContext(
     avgRoyalty:           v.avgRoyalty           ?? 0.15,
     ownerType:            v.ownerType            ?? "Owner",
     phase:                v.phase                ?? "Phase 2",
+  };
+}
+
+// ─── Early-Signal Resolver (bimodal VOI) ──────────────────────────────────────
+// When the effect prior is "bimodal" (the evidence chain found a real conflict —
+// e.g. mechanism looks great but the closest analog drug failed), the two
+// possible "stories" imply very different odds of trial success. This option
+// proposes a smaller preliminary study sized to resolve which story is true
+// BEFORE committing to the full next stage. Returns null for unimodal priors
+// or when there isn't a next dev-plan stage to scale the preliminary study from.
+
+export function generateBimodalVoiOption(base: BaseContext): OptionInputs | null {
+  if (base.effectPrior?.shape !== "bimodal" || !base.resolverEconomics) return null;
+
+  const mixture = base.effectPrior.mixture;
+  const [, strong] = [...mixture].sort((a, b) => a.mu - b.mu);
+
+  const { sigma2Trial, threshold } = computeTrialNoise(base.baseTrialDesign);
+  const pIfStrong = mixtureSuccessProbability([{ ...strong, w: 1 }], threshold, sigma2Trial);
+  const pNow = mixtureSuccessProbability(mixture, threshold, sigma2Trial);
+  const voiPtrsBoostIfPositive = Math.max(0, pIfStrong - pNow);
+
+  const { n, cpp, enrollmentRatePerMonth, treatmentObsMonths, startupCushionMonths } = base.resolverEconomics;
+  const nResolver = Math.max(10, Math.round(n * 0.35));
+  const voiCostM = (nResolver * cpp) / 1e6;
+  const voiMonths = Math.ceil(nResolver / Math.max(enrollmentRatePerMonth, 0.1) + treatmentObsMonths + startupCushionMonths);
+
+  return {
+    id: "voi-resolver",
+    name: "Early-Signal Resolver",
+    categories: ["voi"],
+    isVOI: true,
+    voiType: "biomarker_validation",
+    voiCostM,
+    voiMonths,
+    voiProbPositive: strong.w,
+    voiPtrsBoostIfPositive,
   };
 }
 
