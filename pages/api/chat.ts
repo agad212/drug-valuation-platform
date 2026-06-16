@@ -68,7 +68,7 @@ FIELD UPDATE CAPABILITY: If the user asks you to set, update, or suggest a value
 Available fields: peakSales (USD — updates the first/active indication's peak sales when indications exist), discountRate (decimal e.g. 0.10 for 10%), cogsPct (decimal), taxRate (decimal), workingCapitalPct (decimal), avgRoyalty (decimal), launchYear (integer), loeYear (integer), devCostPV (USD), phase ("Preclinical"/"Phase 1"/"Phase 2"/"Phase 3"/"Filed"/"Approved"), ptrs (decimal 0–1), asset (string), indication (string), mechanism (string), sponsor (string).
 Only include <field-update> when the user explicitly asks to change values.
 
-Be concise and practical. Lead with the answer — one or two sentences max for factual questions. Cite information from the valuation context above.`;
+Be concise and practical. Lead with the answer — one or two sentences max for factual questions. Use web_search when you need current data. Cite URLs when available.`;
 
   const claudeMessages: any[] = (messages || []).map((m: Msg) => ({
     role: m.role === "assistant" ? "assistant" : "user",
@@ -82,11 +82,13 @@ Be concise and practical. Lead with the answer — one or two sentences max for 
         "Content-Type": "application/json",
         "x-api-key": anthropicKey,
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "web-search-2025-03-05",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-sonnet-4-6",
         max_tokens: 1024,
         system: systemPrompt,
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
         messages: claudeMessages,
       }),
     });
@@ -97,10 +99,13 @@ Be concise and practical. Lead with the answer — one or two sentences max for 
       try {
         const errJson = JSON.parse(txt);
         const errType = errJson?.error?.type;
+        const errMsg = errJson?.error?.message || "";
         console.error("[chat] Anthropic API error:", r.status, errType, txt.slice(0, 300));
         if (errType === "overloaded_error") friendlyMsg = "Claude is overloaded right now. Please try again in a few seconds.";
         else if (errType === "rate_limit_error") friendlyMsg = "Rate limit reached. Please wait a moment and try again.";
         else if (errType === "authentication_error") friendlyMsg = "API key error — check ANTHROPIC_API_KEY in Vercel env vars.";
+        else if (errMsg.toLowerCase().includes("credit balance")) friendlyMsg = "API credits are out — go to console.anthropic.com → Plans & Billing to top up.";
+        else friendlyMsg = `API error (${errType || r.status}): ${errMsg || "unknown error"}`;
       } catch { console.error("[chat] Anthropic API error (unparseable):", r.status, txt.slice(0, 300)); }
       return res.status(200).json({ message: friendlyMsg });
     }
