@@ -15,7 +15,6 @@
 import React, { useState } from "react";
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import {
-  mixtureSuccessProbability,
   mixtureMoments,
   type EffectPrior,
   type EffectPriorMixture,
@@ -409,7 +408,8 @@ export default function EffectPriorChain({ effectPrior, loading, ptrsResult }: P
 
   const { mixture, shape, chain } = effectPrior;
   const isBimodal = shape === "bimodal";
-  const headlineProb = mixtureSuccessProbability(mixture, 0.8, 0.6);
+  const { mss, variance } = mixtureMoments(mixture);
+  const effectScore = Math.round(mss * 100);
   const { data: finalData, weaker, stronger } = finalCurveData(mixture, isBimodal);
 
   return (
@@ -436,10 +436,19 @@ export default function EffectPriorChain({ effectPrior, loading, ptrsResult }: P
             )}
             <div style={{ marginTop: 14 }}>
               <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", marginBottom: 2 }}>
-                Chance of a successful trial outcome, based on this estimate
+                {isBimodal ? "Weighted effect strength across both scenarios" : "Combined effect strength estimate"}
               </div>
-              <div style={{ fontSize: 36, fontWeight: 800, fontFamily: "var(--font-display)", color: probColor(headlineProb), lineHeight: 1 }}>
-                {fmtPct(headlineProb)}
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <div style={{ fontSize: 36, fontWeight: 800, fontFamily: "var(--font-display)", color: strengthColor(mss * 2), lineHeight: 1 }}>
+                  {effectScore}
+                </div>
+                <div style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", fontFamily: "var(--font-mono)" }}>/100</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", marginLeft: 4 }}>
+                  {confidenceLabel(variance)}
+                </div>
+              </div>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 3 }}>
+                How strong the drug effect appears to be — trial probability is in the Development Path below
               </div>
             </div>
             {isBimodal && weaker && stronger && (
