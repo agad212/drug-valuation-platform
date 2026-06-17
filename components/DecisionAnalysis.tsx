@@ -423,7 +423,7 @@ function ResultCard({
 }) {
   const color = OPTION_COLORS[index] ?? "#6b7280";
   const label = OPTION_LABELS[index] ?? String(index + 1);
-  const { eROI, marginalEROI, eNPVM, eNPVLowM, eNPVHighM, ptrs, ptrsCI, peakSalesM, devCostM, deltaENPVM, deltaCostM, keyDrivers, voiENPVM } = result;
+  const { eROI, marginalEROI, eNPVM, eNPVLowM, eNPVHighM, ptrs, ptrsCI, peakSalesM, devCostM, deltaENPVM, deltaCostM, keyDrivers, voiENPVM, durationMonths } = result;
 
   const eROIColor = eROI == null ? "var(--text-muted)" : eROI >= 2 ? "#10b981" : eROI >= 1 ? "#3b82f6" : "#ef4444";
   const margColor = marginalEROI == null ? "var(--text-muted)" : marginalEROI >= 1 ? "#10b981" : marginalEROI >= 0 ? "#3b82f6" : "#ef4444";
@@ -555,6 +555,14 @@ function ResultCard({
               {fmtM(result.revenuePVM)}
             </div>
           </div>
+          {durationMonths != null && (
+            <div>
+              <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 2 }}>Est. Trial Duration</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)" }}>
+                {durationMonths}mo
+              </div>
+            </div>
+          )}
         </div>
 
         {/* vs Option A delta row */}
@@ -1062,8 +1070,8 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
               {/* Methodology note */}
               <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
                 eNPV = P(approval) × Revenue PV − Dev Cost PV · eROI = eNPV / Dev Cost · Marginal eROI = ΔeNPV / |ΔDev Cost| vs Option A ·
-                P(approval) recalculated per option using trial design simulation · Dev cost scales at n^0.75 (sub-linear) ·
-                Tight inclusion: peak sales ×0.70 · Broad inclusion: ×1.20 · RCT label premium: ×1.10 · Single arm discount: ×0.90
+                P(approval) recalculated per option using trial design simulation · Dev cost = CPP × n per patient (when dev plan available), else n^0.75 scaling ·
+                Trial duration = enrollment months + treatment/obs period + startup cushion · Tight inclusion: peak sales ×0.70 · Broad inclusion: ×1.20 · RCT label premium: ×1.10 · Single arm discount: ×0.90
               </div>
             </>
           )}

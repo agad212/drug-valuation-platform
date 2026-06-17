@@ -157,6 +157,9 @@ export type OptionResult = {
   voiENPVM?: number;          // expected value of the VOI path
   voiVsDirectM?: number;      // VOI eNPV − going straight (vs Option A)
 
+  // Timeline (populated when resolverEconomics is available)
+  durationMonths?: number;    // estimated months for this trial option
+
   // Explanations
   keyDrivers: string[];
   ptrsDrivers: string;
@@ -275,8 +278,9 @@ export function computeOption(
     }
   }
 
-  // ── Step 4: Adjusted dev cost ─────────────────────────────────────────────
+  // ── Step 4: Adjusted dev cost + trial duration ───────────────────────────
   let devCostM: number;
+  let durationMonths: number | undefined;
 
   if (option.devCostMOverride != null) {
     devCostM = option.devCostMOverride;
@@ -284,25 +288,7 @@ export function computeOption(
     const baseN = base.baseTrialDesign.n;
     const optionN = trialDesign.n;
 
-    // Dev cost has two components:
-    //   Fixed (60%): regulatory, CMC/manufacturing, Phase 3 skeleton, overhead —
-    //     these don't change when you change the Phase 2 trial size
-    //   Variable (40%): CRO execution, patient costs, site costs —
-    //     these scale with n
-    //
-    // Scaling only the variable portion prevents the absurd result where
-    // tripling n triples the entire $280M program cost. In reality, most
-    // of that $280M is fixed overhead that exists regardless of Phase 2 design.
-    const FIXED_FRACTION    = 0.60;
-    const VARIABLE_FRACTION = 0.40;
-
-    const fixedCost    = base.devCostM * FIXED_FRACTION;
-    const variableCost = base.devCostM * VARIABLE_FRACTION;
-
-    // Variable portion scales sub-linearly with n (n^0.75)
-    const nScale = baseN > 0 ? Math.pow(optionN / baseN, 0.75) : 1;
-
-    // Design complexity adjustment applies only to variable costs
+    // Design complexity adjustment (applies in both cost models below)
     const resolvedDesignKey = (() => {
       if (option.numArms === 3) return "3arm";
       if (option.numArms === "adaptive") return "adaptive";
@@ -313,7 +299,26 @@ export function computeOption(
       (DESIGN_COST_MULT[resolvedDesignKey] ?? 1.0) /
       (DESIGN_COST_MULT[baseDesignKey] ?? 1.0);
 
-    devCostM = fixedCost + variableCost * nScale * complexityAdjust;
+    if (base.resolverEconomics) {
+      // Per-patient cost model: CPP × n for the current trial stage,
+      // plus the rest of the program cost (other stages) unchanged.
+      const { cpp, n: baseStageN, enrollmentRatePerMonth, treatmentObsMonths, startupCushionMonths } = base.resolverEconomics;
+      const baseStageCostM = baseStageN * cpp / 1e6;
+      const newStageCostM  = optionN * cpp / 1e6 * complexityAdjust;
+      const otherCostM     = Math.max(0, base.devCostM - baseStageCostM);
+      devCostM = otherCostM + newStageCostM;
+
+      // Trial duration from enrollment rate + treatment/obs + startup
+      durationMonths = Math.ceil(
+        optionN / Math.max(enrollmentRatePerMonth, 0.1) + treatmentObsMonths + startupCushionMonths
+      );
+    } else {
+      // Fallback: fixed (60%) + variable (40%) scaling with n^0.75
+      const fixedCost    = base.devCostM * 0.60;
+      const variableCost = base.devCostM * 0.40;
+      const nScale = baseN > 0 ? Math.pow(optionN / baseN, 0.75) : 1;
+      devCostM = fixedCost + variableCost * nScale * complexityAdjust;
+    }
 
     // Ownership adjustment
     if (option.ownershipPct != null) {
@@ -458,6 +463,7 @@ export function computeOption(
     deltaENPVM, deltaCostM, marginalEROI,
     eNPVLowM, eNPVHighM,
     voiENPVM, voiVsDirectM,
+    durationMonths,
     keyDrivers, ptrsDrivers,
   };
 }
