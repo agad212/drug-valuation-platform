@@ -45,9 +45,10 @@ Use web_search to research this drug BEFORE answering. Search for:
 PHASE RULE: Only set "phase" in your JSON to "Approved" if you find clear evidence the drug is FDA/EMA approved. If web search returns no pharma results or you find only a pipeline drug, use the input stage: ${phase}.${phase !== "Approved" ? ` DO NOT return "Approved" unless you found explicit approval evidence.` : ""}
 
 Your job:
-1. Select 5-7 most relevant trials/indications for valuation. If web search reveals additional indications not in CT.gov, create synthetic entries (nctId = "PIPELINE-{n}").
+1. Select 1-3 most relevant THERAPEUTIC indications for valuation. If web search reveals additional indications not in CT.gov, create synthetic entries (nctId = "PIPELINE-{n}").
+   CRITICAL: NEVER include "Healthy Participants", "Healthy Volunteers", "Healthy Subjects", "Healthy Adults", "Normal Volunteers", or any non-disease population as an indication. These are Phase 1 safety/PK studies with zero commercial revenue — exclude them entirely from selectedIndices and peakSalesEstimates.
 2. Identify one recommended trial/indication to start with
-3. Estimate peak annual sales per selected indication
+3. Estimate peak annual sales per selected THERAPEUTIC indication
 4. For approved drugs: peak sales = total revenue in that indication at peak
 5. For pipeline: estimate addressable market × realistic penetration
 6. Extract precise mechanism of action — never say "unknown" or "insufficient context". Use your training knowledge if search returns nothing. If truly nothing is known, write "Unknown — pre-IND asset with no public disclosure".
