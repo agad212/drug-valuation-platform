@@ -17,6 +17,7 @@
 import { scoreLayer2, computeTrialNoise } from "./ptrs-trial";
 import { computeRevenuePV } from "./cashflow";
 import { mixtureFromMssVariance, mixtureSuccessProbability } from "./effect-prior";
+import { computeDevPlan } from "./dev-plan";
 import type {
   TrialDesignInputs,
   EndpointType,
@@ -26,7 +27,7 @@ import type {
   RegulatoryContext,
 } from "./ptrs-trial";
 import type { EffectPrior } from "./effect-prior";
-import type { DevPlanResult } from "./dev-plan";
+import type { DevPlanResult, DevStageInput } from "./dev-plan";
 import type { Valuation } from "./types";
 
 // ─── Option Input Types ───────────────────────────────────────────────────────
@@ -108,6 +109,20 @@ export type BaseContext = {
     treatmentObsMonths: number;
     startupCushionMonths: number;
   };
+
+  // Full dev-plan stage inputs — used to re-run computeDevPlan per option so
+  // each option's P(approval) reflects its specific trial design across all
+  // stages, not just a single-stage Layer 2 scoreLayer2() call.
+  devPlanInputs?: {
+    stages: DevStageInput[];
+    regulatoryContext: RegulatoryContext;
+    regCostM?: number;
+  } | null;
+
+  // Cached overall P(approval) from the base dev plan — used as Option A's
+  // probability when devPlanInputs is available (keeps Option A consistent
+  // with the Development Path display).
+  devPlanPApproval?: number | null;
 
   // From layer2Result (Layer 2) — the current trial design
   baseTrialDesign: TrialDesignInputs;
@@ -193,6 +208,14 @@ const DESIGN_PEAK_SALES_MULT: Record<DesignType, number> = {
   basket:     1.00,
 };
 
+// Population type → eligible patient pool → peak sales adjustment
+// biomarker_selected restricts the label; broad expands it vs standard
+const POPULATION_PEAK_SALES_MULT: Record<PopulationType, number> = {
+  biomarker_selected: 0.70,
+  rare_small:         0.55,
+  broad:              1.15,
+};
+
 // ─── Core Calculation ─────────────────────────────────────────────────────────
 
 export function computeOption(
@@ -225,17 +248,49 @@ export function computeOption(
       lower: Math.max(0.01, ptrs - base.ciHalfWidth),
       upper: Math.min(0.99, ptrs + base.ciHalfWidth),
     };
+  } else if (option.isBaseline && base.devPlanPApproval != null) {
+    // Option A: use the dev plan's full multi-stage P(approval) so the
+    // probability here matches the Development Path display exactly.
+    ptrs = base.devPlanPApproval;
+    ptrsCI = {
+      lower: Math.max(0.01, ptrs - base.ciHalfWidth),
+      upper: Math.min(0.99, ptrs + base.ciHalfWidth),
+    };
   } else if (option.isBaseline) {
-    // Option A: use the stored combined PTRS exactly — don't recompute.
-    // Recomputing via scoreLayer2() produces a slightly different value due
-    // to floating-point and reference-trial normalization, which causes a
-    // visible mismatch between the main valuation display and Option A.
+    // Fallback when dev plan not yet computed — use stored combined PTRS.
     ptrs = base.ptrs;
     ptrsCI = {
       lower: Math.max(0.01, ptrs - base.ciHalfWidth),
       upper: Math.min(0.99, ptrs + base.ciHalfWidth),
     };
+  } else if (base.devPlanInputs?.stages?.length) {
+    // Re-run the full multi-stage development plan with this option's trial
+    // design replacing stage 0. This gives the correct multi-stage P(approval)
+    // — P(Ph2 success) × P(Ph3 success | Ph2 success) × P(reg approval) —
+    // rather than a single-stage Layer 2 score.
+    const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
+    const stage0Override: DevStageInput = {
+      ...(base.devPlanInputs.stages[0] as DevStageInput),
+      n: trialDesign.n,
+      trialDesign,
+    };
+    const fullPlan = computeDevPlan(
+      mixture,
+      base.ciHalfWidth,
+      {
+        stages: [stage0Override, ...base.devPlanInputs.stages.slice(1)],
+        regulatoryContext: base.devPlanInputs.regulatoryContext,
+        regCostM: base.devPlanInputs.regCostM,
+      },
+      0, // revenuePVM not needed — we only use pApproval from this result
+    );
+    ptrs = fullPlan.pApproval;
+    ptrsCI = {
+      lower: Math.max(0.01, ptrs - base.ciHalfWidth),
+      upper: Math.min(0.99, ptrs + base.ciHalfWidth),
+    };
   } else {
+    // Fallback: single-stage Layer 2 score (used when dev plan not available)
     const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
     const l2 = scoreLayer2(
       mixture,
@@ -266,6 +321,16 @@ export function computeOption(
     // Apply inclusion criteria → label breadth
     if (option.inclusionCriteria && option.inclusionCriteria !== "standard") {
       peakSalesM *= INCLUSION_PEAK_SALES_MULT[option.inclusionCriteria];
+    }
+
+    // Apply population type → label breadth (only when inclusionCriteria not also set,
+    // to avoid double-counting the same market-size effect)
+    if (
+      option.populationType &&
+      option.populationType !== base.baseTrialDesign.populationType &&
+      !option.inclusionCriteria
+    ) {
+      peakSalesM *= POPULATION_PEAK_SALES_MULT[option.populationType] ?? 1.0;
     }
 
     // Apply ownership/partnership
@@ -419,10 +484,13 @@ export function computeOption(
 
   // ── Step 11: Explanations ─────────────────────────────────────────────────
   const keyDrivers: string[] = [];
-  const ptrsDiff = ptrs - base.ptrs;
+  // Compare against devPlan P(approval) as baseline when available — keeps
+  // the probability axis consistent with the Development Path display.
+  const baselinePtrs = base.devPlanPApproval ?? base.ptrs;
+  const ptrsDiff = ptrs - baselinePtrs;
 
   if (Math.abs(ptrsDiff) > 0.005) {
-    keyDrivers.push(`PTRS ${ptrsDiff >= 0 ? "+" : ""}${(ptrsDiff * 100).toFixed(1)}% vs base`);
+    keyDrivers.push(`P(approval) ${ptrsDiff >= 0 ? "+" : ""}${(ptrsDiff * 100).toFixed(1)}% vs Option A`);
   }
   if (option.designType && option.designType !== base.baseTrialDesign.designType) {
     const from = base.baseTrialDesign.designType.replace("_", " ");
@@ -451,9 +519,9 @@ export function computeOption(
   }
 
   const ptrsDrivers = Math.abs(ptrsDiff) > 0.005
-    ? `PTRS ${ptrsDiff >= 0 ? "+" : ""}${(ptrsDiff * 100).toFixed(1)}% vs base ` +
-      `(${(base.ptrs * 100).toFixed(1)}% → ${(ptrs * 100).toFixed(1)}%)`
-    : `PTRS unchanged at ${(ptrs * 100).toFixed(1)}%`;
+    ? `P(approval) ${ptrsDiff >= 0 ? "+" : ""}${(ptrsDiff * 100).toFixed(1)}% vs Option A ` +
+      `(${(baselinePtrs * 100).toFixed(1)}% → ${(ptrs * 100).toFixed(1)}%)`
+    : `P(approval) ${(ptrs * 100).toFixed(1)}% (same as Option A)`;
 
   return {
     option,
@@ -533,13 +601,23 @@ export function buildBaseContext(
       }
     : undefined;
 
+  const devPlanInputs = devPlan?.stages?.length
+    ? {
+        stages:             devPlan.stages as unknown as DevStageInput[],
+        regulatoryContext:  devPlan.regStage.regulatoryContext,
+        regCostM:           devPlan.regStage.costM,
+      }
+    : null;
+
   return {
-    mss:          ptrsResult?.mss ?? 0.5,
-    variance:     ptrsResult?.variance ?? 0.3,
+    mss:                ptrsResult?.mss ?? 0.5,
+    variance:           ptrsResult?.variance ?? 0.3,
     ptrsLayer1,
-    ciHalfWidth:  ciHalfWidthFromResult,
-    effectPrior:  effectPrior ?? null,
+    ciHalfWidth:        ciHalfWidthFromResult,
+    effectPrior:        effectPrior ?? null,
     resolverEconomics,
+    devPlanInputs,
+    devPlanPApproval:   devPlan?.pApproval ?? null,
     baseTrialDesign,
     ptrs:         out.ptrs,
     peakSalesM:   peakSalesRaw / 1e6,

@@ -313,6 +313,9 @@ function StepCard({ step, index, ptrsResult }: { step: ChainStep; index: number;
                     {strengthScore(before.mss * 2)}
                   </div>
                   <div style={{ fontSize: 9, color: "var(--text-faint)" }}>{confidenceLabel(before.variance)}</div>
+                  <div style={{ fontSize: 8, color: "var(--text-faint)", fontFamily: "var(--font-mono)", marginTop: 1 }}>
+                    σ² {before.variance.toFixed(2)}
+                  </div>
                 </div>
                 <div style={{ fontSize: 18, color: "var(--text-faint)" }}>→</div>
               </>
@@ -323,6 +326,9 @@ function StepCard({ step, index, ptrsResult }: { step: ChainStep; index: number;
                 {strengthScore(after.mss * 2)}
               </div>
               <div style={{ fontSize: 9, color: "var(--text-faint)" }}>{confidenceLabel(after.variance)}</div>
+              <div style={{ fontSize: 8, color: "var(--text-faint)", fontFamily: "var(--font-mono)", marginTop: 1 }}>
+                σ² {after.variance.toFixed(2)}
+              </div>
             </div>
             {step.mixtureAfter.length === 2 && (
               <div style={{ fontSize: 11, color: "var(--warning)", maxWidth: 160, lineHeight: 1.4 }}>
