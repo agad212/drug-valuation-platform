@@ -11,7 +11,7 @@
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, ScatterChart, Scatter, ZAxis,
@@ -501,7 +501,10 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatHistory, setChatHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [aiInsight, setAiInsight] = useState<string | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const insightFiredForRef = useRef<string>("");
 
   // Build base context from current valuation + PTRS results
   const base = useMemo(
@@ -521,6 +524,42 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
     }
     return computed;
   }, [base, options]);
+
+  // Auto-fetch strategic insight once results are ready
+  useEffect(() => {
+    if (results.length < 2 || insightLoading) return;
+    // Build a fingerprint so we don't re-fetch for the same results
+    const fingerprint = results.map((r) => `${r.option.id}:${r.eNPVM}`).join("|");
+    if (fingerprint === insightFiredForRef.current) return;
+    insightFiredForRef.current = fingerprint;
+
+    setInsightLoading(true);
+    setAiInsight(null);
+    fetch("/api/decision-analysis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        drug: valuation.asset || valuation.name,
+        phase: valuation.phase,
+        options: results.map((r) => ({
+          name: r.option.name || "unnamed",
+          eNPVM: r.eNPVM,
+          eROI: r.eROI,
+          marginalEROI: r.marginalEROI,
+          ptrs: r.ptrs,
+          peakSalesM: r.peakSalesM,
+          devCostM: r.devCostM,
+          keyDrivers: r.keyDrivers,
+          isVOI: r.option.isVOI,
+          voiENPVM: r.voiENPVM,
+        })),
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data) => setAiInsight(data.insight ?? null))
+      .catch(() => setAiInsight(null))
+      .finally(() => setInsightLoading(false));
+  }, [results, valuation.asset, valuation.name, valuation.phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build the strategy context payload (lightweight subset for the AI)
   function buildStrategyContext() {
@@ -806,6 +845,30 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
 
               <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
                 <SensitivityTable results={results} base={base!} />
+              </div>
+
+              {/* AI strategic insight — auto-generated */}
+              <div style={{
+                background: "var(--surface)", border: "1px solid var(--border)",
+                borderRadius: 12, padding: 20,
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+                  Strategic Insight
+                </div>
+                {insightLoading ? (
+                  <div style={{ fontSize: 13, color: "var(--text-faint)" }}>Generating strategic insight…</div>
+                ) : aiInsight ? (
+                  <div style={{
+                    background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)",
+                    borderRadius: 8, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7,
+                  }}>
+                    {aiInsight}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
+                    Insight unavailable — check API credits.
+                  </div>
+                )}
               </div>
 
               <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
