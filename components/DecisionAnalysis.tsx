@@ -11,7 +11,7 @@
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, ScatterChart, Scatter, ZAxis,
@@ -26,7 +26,6 @@ import {
   type OptionResult,
   type BaseContext,
 } from "../lib/decision-analysis";
-import type { EndpointType, DesignType, PopulationType, PlaceboResponse, RegulatoryContext } from "../lib/ptrs-trial";
 import type { EffectPrior } from "../lib/effect-prior";
 import type { DevPlanResult } from "../lib/dev-plan";
 
@@ -66,349 +65,8 @@ function fmtX(n: number | null): string {
   if (n == null) return "—";
   return `${n >= 0 ? "" : ""}${n.toFixed(2)}x`;
 }
-function uid(): string { return Math.random().toString(36).slice(2, 8); }
 
-// ─── Empty option template ─────────────────────────────────────────────────────
 
-function makeOption(overrides: Partial<OptionInputs> = {}): OptionInputs {
-  return {
-    id: uid(),
-    name: "",
-    categories: ["trial_design"],
-    ...overrides,
-  };
-}
-
-function makeBaselineOption(base: BaseContext): OptionInputs {
-  return {
-    id: "option-a",
-    name: "Current Plan",
-    isBaseline: true,
-    // No overrides — all values come from base context
-  };
-}
-
-// ─── Small reusable UI pieces ──────────────────────────────────────────────────
-
-function Label({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{
-      fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-muted)",
-      textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4,
-    }}>
-      {children}
-    </div>
-  );
-}
-
-function SmallSelect({
-  label, value, onChange, options,
-}: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
-  return (
-    <label style={{ display: "block" }}>
-      <Label>{label}</Label>
-      <select
-        className="input-base"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{ fontSize: 12, padding: "4px 8px", cursor: "pointer" }}
-      >
-        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </label>
-  );
-}
-
-function SmallNumber({
-  label, value, onChange, placeholder, hint,
-}: { label: string; value?: number; onChange: (v: number) => void; placeholder?: string; hint?: string }) {
-  const [txt, setTxt] = useState(value != null ? String(value) : "");
-  function commit(s: string) {
-    const n = Number(s);
-    if (!Number.isNaN(n) && n >= 0) onChange(n);
-  }
-  return (
-    <label style={{ display: "block" }}>
-      <Label>{label}{hint ? ` (${hint})` : ""}</Label>
-      <input
-        type="number" className="input-base"
-        style={{ fontSize: 12, padding: "4px 8px" }}
-        value={txt} placeholder={placeholder ?? ""}
-        onChange={(e) => setTxt(e.target.value)}
-        onBlur={() => commit(txt)}
-        onKeyDown={(e) => { if (e.key === "Enter") commit(txt); }}
-      />
-    </label>
-  );
-}
-
-// ─── Option Form ───────────────────────────────────────────────────────────────
-// The form for configuring one option (excluding Option A which is auto-populated).
-
-function OptionForm({
-  option, base, color, onUpdate, onRemove,
-}: {
-  option: OptionInputs;
-  base: BaseContext;
-  color: string;
-  onUpdate: (updates: Partial<OptionInputs>) => void;
-  onRemove?: () => void;
-}) {
-  const [expanded, setExpanded] = useState(true);
-
-  const bt = base.baseTrialDesign;
-
-  return (
-    <div style={{
-      border: `1px solid ${color}40`,
-      borderRadius: 10,
-      background: "var(--surface)",
-      overflow: "hidden",
-    }}>
-      {/* Header row */}
-      <div
-        onClick={() => setExpanded((e) => !e)}
-        style={{
-          display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
-          cursor: "pointer", background: `${color}10`,
-          borderBottom: expanded ? `1px solid ${color}30` : "none",
-        }}
-      >
-        <span style={{
-          width: 22, height: 22, borderRadius: "50%",
-          background: color, color: "#fff", fontSize: 11, fontWeight: 800,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          flexShrink: 0, fontFamily: "var(--font-display)",
-        }}>
-          {option.isBaseline ? "A" : ""}
-        </span>
-        <input
-          type="text"
-          value={option.name}
-          onChange={(e) => { e.stopPropagation(); onUpdate({ name: e.target.value }); }}
-          onClick={(e) => e.stopPropagation()}
-          placeholder="Option name (e.g. Expanded RCT)"
-          style={{
-            flex: 1, background: "none", border: "none", outline: "none",
-            fontSize: 14, fontWeight: 600, color: "var(--text)",
-            fontFamily: "var(--font-display)",
-          }}
-        />
-        <span style={{ fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>
-          {expanded ? "▲" : "▼"}
-        </span>
-        {onRemove && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRemove(); }}
-            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1, padding: 0 }}
-          >×</button>
-        )}
-      </div>
-
-      {/* Form body */}
-      {expanded && (
-        <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 16 }}>
-
-          {/* ── Trial Design ── */}
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: color, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Trial Design
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
-              <SmallNumber
-                label="Sample size (n)"
-                value={option.n ?? bt.n}
-                onChange={(v) => onUpdate({ n: v })}
-                placeholder={String(bt.n)}
-              />
-              <SmallSelect
-                label="Trial design"
-                value={option.designType ?? bt.designType}
-                onChange={(v) => onUpdate({ designType: v as DesignType })}
-                options={[
-                  { value: "single_arm", label: "Single arm" },
-                  { value: "rct",        label: "RCT (2-arm)" },
-                  { value: "basket",     label: "Basket/umbrella" },
-                ]}
-              />
-              <SmallSelect
-                label="Arm count"
-                value={String(option.numArms ?? (bt.designType === "single_arm" ? 1 : 2))}
-                onChange={(v) => onUpdate({ numArms: v === "adaptive" ? "adaptive" : Number(v) as 1 | 2 | 3 })}
-                options={[
-                  { value: "1",        label: "1 (single arm)" },
-                  { value: "2",        label: "2 (drug vs control)" },
-                  { value: "3",        label: "3 (drug vs SOC vs placebo)" },
-                  { value: "adaptive", label: "Adaptive" },
-                ]}
-              />
-              <SmallSelect
-                label="Primary endpoint"
-                value={option.endpointType ?? bt.endpointType}
-                onChange={(v) => onUpdate({ endpointType: v as EndpointType })}
-                options={[
-                  { value: "hard",      label: "Hard (OS, CR)" },
-                  { value: "surrogate", label: "Surrogate (PFS, ORR)" },
-                  { value: "pro",       label: "PRO/subjective" },
-                ]}
-              />
-              <SmallSelect
-                label="Regulatory context"
-                value={option.regulatoryContext ?? bt.regulatoryContext}
-                onChange={(v) => onUpdate({ regulatoryContext: v as RegulatoryContext })}
-                options={[
-                  { value: "standard",      label: "Standard" },
-                  { value: "btd",           label: "BTD" },
-                  { value: "orphan",        label: "Orphan" },
-                  { value: "btd_orphan",    label: "BTD + Orphan" },
-                  { value: "accelerated",   label: "Accelerated" },
-                  { value: "confirmatory",  label: "Confirmatory" },
-                ]}
-              />
-            </div>
-          </div>
-
-          {/* ── Patient Selection ── */}
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: color, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Patient Selection
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
-              <SmallSelect
-                label="Population type"
-                value={option.populationType ?? bt.populationType}
-                onChange={(v) => onUpdate({ populationType: v as PopulationType })}
-                options={[
-                  { value: "broad",               label: "Broad/unselected" },
-                  { value: "biomarker_selected",   label: "Biomarker-selected" },
-                  { value: "rare_small",           label: "Rare/orphan" },
-                ]}
-              />
-              <SmallSelect
-                label="Inclusion criteria"
-                value={option.inclusionCriteria ?? "standard"}
-                onChange={(v) => onUpdate({ inclusionCriteria: v as "tight" | "standard" | "broad" })}
-                options={[
-                  { value: "tight",    label: "Tight (enriched)" },
-                  { value: "standard", label: "Standard" },
-                  { value: "broad",    label: "Broad (wide)" },
-                ]}
-              />
-              <SmallSelect
-                label="Placebo response"
-                value={option.placeboResponse ?? bt.placeboResponse}
-                onChange={(v) => onUpdate({ placeboResponse: v as PlaceboResponse })}
-                options={[
-                  { value: "low",      label: "Low" },
-                  { value: "moderate", label: "Moderate" },
-                  { value: "high",     label: "High" },
-                ]}
-              />
-            </div>
-            <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-faint)", lineHeight: 1.5 }}>
-              {option.inclusionCriteria === "tight"
-                ? "Tight criteria: raises P(approval) (enriched for responders) but narrows label → peak sales ×0.7"
-                : option.inclusionCriteria === "broad"
-                ? "Broad criteria: wider addressable market → peak sales ×1.2 but more trial noise"
-                : ""}
-            </div>
-          </div>
-
-          {/* ── Partnership ── */}
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: color, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              Ownership / Partnership
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
-              <SmallNumber
-                label="Ownership %"
-                value={option.ownershipPct ?? 100}
-                onChange={(v) => onUpdate({ ownershipPct: Math.min(100, v) })}
-                hint="of costs + revenue"
-                placeholder="100"
-              />
-              <SmallSelect
-                label="Structure"
-                value={option.isOutlicensed ? "licensed" : "owned"}
-                onChange={(v) => onUpdate({ isOutlicensed: v === "licensed" })}
-                options={[
-                  { value: "owned",    label: "Fully owned / co-dev" },
-                  { value: "licensed", label: "Out-licensed (royalty)" },
-                ]}
-              />
-              {option.isOutlicensed && (
-                <SmallNumber
-                  label="Royalty %"
-                  value={option.royaltyPctOverride != null ? option.royaltyPctOverride * 100 : (base.avgRoyalty * 100)}
-                  onChange={(v) => onUpdate({ royaltyPctOverride: v / 100 })}
-                  hint="%"
-                />
-              )}
-            </div>
-          </div>
-
-          {/* ── VOI toggle ── */}
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: option.isVOI ? 10 : 0 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: color, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                Value of Information (VOI)
-              </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={!!option.isVOI}
-                  onChange={(e) => onUpdate({ isVOI: e.target.checked })}
-                />
-                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Run study first, then decide</span>
-              </label>
-            </div>
-            {option.isVOI && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
-                <SmallSelect
-                  label="Study type"
-                  value={option.voiType ?? "pilot"}
-                  onChange={(v) => onUpdate({ voiType: v as any })}
-                  options={[
-                    { value: "pilot",               label: "Pilot / signal-finding" },
-                    { value: "biomarker_validation", label: "Biomarker validation" },
-                    { value: "adaptive_interim",     label: "Adaptive + interim" },
-                    { value: "dose_optimization",    label: "Dose optimization" },
-                  ]}
-                />
-                <SmallNumber
-                  label="Study cost ($M)"
-                  value={option.voiCostM}
-                  onChange={(v) => onUpdate({ voiCostM: v })}
-                  placeholder="15"
-                />
-                <SmallNumber
-                  label="Time added (months)"
-                  value={option.voiMonths}
-                  onChange={(v) => onUpdate({ voiMonths: v })}
-                  placeholder="12"
-                />
-                <SmallNumber
-                  label="P(study positive) %"
-                  value={option.voiProbPositive != null ? option.voiProbPositive * 100 : undefined}
-                  onChange={(v) => onUpdate({ voiProbPositive: Math.min(1, v / 100) })}
-                  placeholder="60"
-                  hint="%"
-                />
-                <SmallNumber
-                  label="P(approval) boost if positive %"
-                  value={option.voiPtrsBoostIfPositive != null ? option.voiPtrsBoostIfPositive * 100 : undefined}
-                  onChange={(v) => onUpdate({ voiPtrsBoostIfPositive: v / 100 })}
-                  placeholder="8"
-                  hint="absolute"
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── Result Card ───────────────────────────────────────────────────────────────
 // Side-by-side card showing computed results for one option.
@@ -808,13 +466,27 @@ function SensitivityTable({ results, base }: { results: OptionResult[]; base: Ba
 function round1(x: number) { return Math.round(x * 10) / 10; }
 function round2(x: number) { return Math.round(x * 100) / 100; }
 
+// ─── Quick-prompt chip suggestions ───────────────────────────────────────────
+
+const QUICK_PROMPTS = [
+  "Compare biomarker-selected vs broad population",
+  "What does out-licensing look like vs full development?",
+  "Should we run a smaller pilot first or go straight to Phase 3?",
+  "Show me aggressive vs conservative trial sizes",
+  "What's the value of seeking Breakthrough Therapy Designation?",
+];
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Result, effectPrior, devPlan }: Props) {
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<OptionInputs[]>([]);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatHistory, setChatHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
   // Build base context from current valuation + PTRS results
   const base = useMemo(
@@ -822,23 +494,10 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
     [valuation, out, ptrsResult, layer2Result, effectPrior, devPlan]
   );
 
-  // Initialize options when the panel opens for the first time
-  const handleOpen = useCallback(() => {
-    if (!open && options.length === 0 && base) {
-      setOptions([
-        makeBaselineOption(base),
-        makeOption({ name: "Option B" }),
-      ]);
-    }
-    setOpen(true);
-  }, [open, options.length, base]);
-
   // Compute results from current option definitions, plus the auto-generated
-  // Early-Signal Resolver option (if the effect prior is bimodal). The resolver
-  // is appended after the user-configured options and does not count against
-  // the 4-option cap below.
+  // Early-Signal Resolver option (if the effect prior is bimodal).
   const results = useMemo(() => {
-    if (!base) return [];
+    if (!base || options.length === 0) return [];
     const computed = computeAllOptions(base, options);
     const resolverOption = generateBimodalVoiOption(base);
     if (resolverOption) {
@@ -848,54 +507,102 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
     return computed;
   }, [base, options]);
 
-  function addOption() {
-    if (options.length >= 4) return;
-    setOptions((prev) => [...prev, makeOption({ name: `Option ${OPTION_LABELS[prev.length] ?? String(prev.length + 1)}` })]);
-    setAiSummary(null);
+  // Build the strategy context payload (lightweight subset for the AI)
+  function buildStrategyContext() {
+    return {
+      asset:       valuation.asset ?? valuation.name ?? "Unknown drug",
+      phase:       valuation.phase ?? base?.phase ?? "Unknown phase",
+      mechanism:   valuation.mechanism ?? "Unknown",
+      indication:  valuation.indication ?? "Unknown",
+      pApproval:   devPlan?.pApproval ?? base?.ptrs,
+      peakSalesM:  base?.peakSalesM,
+      eNPVM:       devPlan ? round1(devPlan.eNPVM) : null,
+      devCostM:    base?.devCostM,
+      effectShape: effectPrior?.shape,
+      currentDesign: base ? {
+        n:                 base.baseTrialDesign.n,
+        endpointType:      base.baseTrialDesign.endpointType,
+        designType:        base.baseTrialDesign.designType,
+        populationType:    base.baseTrialDesign.populationType,
+        regulatoryContext: base.baseTrialDesign.regulatoryContext,
+        placeboResponse:   base.baseTrialDesign.placeboResponse,
+      } : undefined,
+      stages: devPlan?.stages?.map((s) => ({
+        name:             s.name,
+        phase:            s.phase,
+        n:                s.n,
+        cpp:              s.cpp,
+        endpointType:     s.trialDesign.endpointType,
+        designType:       s.trialDesign.designType,
+        populationType:   s.trialDesign.populationType,
+        trialSuccessProb: s.trialSuccessProb,
+        durationMonths:   s.durationMonths,
+      })),
+    };
   }
 
-  function updateOption(id: string, updates: Partial<OptionInputs>) {
-    setOptions((prev) => prev.map((o) => o.id === id ? { ...o, ...updates } : o));
-    setAiSummary(null);
-  }
+  async function askAdvisor(message: string) {
+    if (!message.trim() || chatLoading) return;
+    setChatLoading(true);
+    setChatError(null);
 
-  function removeOption(id: string) {
-    setOptions((prev) => prev.filter((o) => o.id !== id));
-    setAiSummary(null);
-  }
+    const newHistory = [...chatHistory, { role: "user" as const, content: message }];
+    setChatHistory(newHistory);
+    setChatInput("");
 
-  async function getAiInsight() {
-    if (!results.length) return;
-    setAiLoading(true);
     try {
-      const res = await fetch("/api/decision-analysis", {
+      const res = await fetch("/api/decision-options", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          drug: valuation.asset || valuation.name,
-          phase: valuation.phase,
-          options: results.map((r) => ({
-            name: r.option.name || "unnamed",
-            eNPVM: r.eNPVM,
-            eROI: r.eROI,
-            marginalEROI: r.marginalEROI,
-            ptrs: r.ptrs,
-            peakSalesM: r.peakSalesM,
-            devCostM: r.devCostM,
-            keyDrivers: r.keyDrivers,
-            isVOI: r.option.isVOI,
-            voiENPVM: r.voiENPVM,
-          })),
+          message,
+          context: buildStrategyContext(),
+          history: chatHistory, // send previous turns for follow-up refinement
         }),
       });
-      if (!res.ok) throw new Error("AI insight failed");
+
       const data = await res.json();
-      setAiSummary(data.insight);
+
+      if (!res.ok) {
+        setChatError(data.error ?? `Request failed (${res.status})`);
+        setChatHistory((prev) => prev.slice(0, -1)); // remove the user message on error
+        return;
+      }
+
+      if (data.parseError) {
+        setChatError(data.parseError);
+      }
+
+      // Update options — always include baseline as Option A
+      if (Array.isArray(data.options) && data.options.length > 0) {
+        // Ensure Option A is the baseline
+        const hasBaseline = data.options.some((o: any) => o.isBaseline);
+        const finalOptions: OptionInputs[] = hasBaseline
+          ? data.options
+          : [{ id: "opt-a", name: "Current Plan", isBaseline: true }, ...data.options];
+        setOptions(finalOptions);
+      }
+
+      // Store the AI summary + add assistant turn to history
+      if (data.summary) {
+        setAiSummary(data.summary);
+        setChatHistory((prev) => [
+          ...prev,
+          { role: "assistant" as const, content: data.assistantMessage ?? data.summary },
+        ]);
+      }
     } catch (e) {
-      console.error("[decision-analysis] AI insight failed:", e);
-      setAiSummary("AI insight unavailable — check console for errors.");
+      setChatError("Network error — check your connection and try again.");
+      setChatHistory((prev) => prev.slice(0, -1));
     } finally {
-      setAiLoading(false);
+      setChatLoading(false);
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      askAdvisor(chatInput);
     }
   }
 
@@ -904,107 +611,166 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
 
   return (
     <div>
-      {/* Entry point button — shown when panel is closed */}
+      {/* Entry point button */}
       {!open && (
         <button
           className="btn btn-outline"
-          onClick={handleOpen}
+          onClick={() => setOpen(true)}
           style={{ width: "100%", justifyContent: "center", fontSize: 14, padding: "12px 0", fontWeight: 700 }}
         >
-          Strategic Decision Analysis ↗
+          Strategy Advisor ↗
         </button>
       )}
 
-      {/* Full panel */}
       {open && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
           {/* Panel header */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
               <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-display)" }}>
-                Strategic Decision Analysis
+                Strategy Advisor
               </div>
               <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                {valuation.asset} · Compare up to 4 strategic options side-by-side.
-                Option A is your current plan.
+                Describe your strategic question or alternatives — the AI structures the options and runs the full valuation for each.
               </div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              {options.length < 4 && (
-                <button className="btn btn-outline" onClick={addOption} style={{ fontSize: 12 }}>
-                  + Add Option
-                </button>
-              )}
-              <button className="btn btn-ghost" onClick={() => setOpen(false)} style={{ fontSize: 12 }}>
-                Close ×
-              </button>
-            </div>
+            <button className="btn btn-ghost" onClick={() => setOpen(false)} style={{ fontSize: 12, flexShrink: 0 }}>
+              Close ×
+            </button>
           </div>
 
-          {/* No data warning */}
+          {/* No-data warning */}
           {!base && (
             <div style={{
               background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)",
               borderRadius: 10, padding: "16px 20px", fontSize: 13, color: "#92400e",
             }}>
-              Run <strong>Auto-Valuate</strong> first to populate peak sales, dev cost, and Approval Probability data. Decision Analysis builds on top of the existing valuation.
+              Run <strong>Auto-Valuate</strong> first to populate the drug context. The Strategy Advisor needs peak sales, dev cost, and approval probability data to compare options.
             </div>
           )}
 
-          {/* Option builder forms */}
-          {base && (
-            <>
-              {/* Option A: read-only summary */}
-              <div style={{
-                border: "1.5px solid #10b98150",
-                borderRadius: 10,
-                background: "var(--surface)",
-                overflow: "hidden",
-              }}>
-                <div style={{
-                  background: "#10b98110", borderBottom: "1px solid #10b98130",
-                  padding: "10px 14px", display: "flex", alignItems: "center", gap: 10,
-                }}>
-                  <span style={{
-                    width: 22, height: 22, borderRadius: "50%", background: "#10b981", color: "#fff",
-                    fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center",
-                    fontFamily: "var(--font-display)",
-                  }}>A</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-display)" }}>
-                    Option A — Current Plan (auto-populated)
-                  </span>
-                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 20, background: "#10b98125", color: "#10b981" }}>BASELINE</span>
+          {/* Chat input area */}
+          <div style={{
+            background: "var(--surface)", border: "1px solid var(--border)",
+            borderRadius: 14, overflow: "hidden",
+          }}>
+            {/* Quick-prompt chips */}
+            {chatHistory.length === 0 && (
+              <div style={{ padding: "14px 16px 0", display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontSize: 11, color: "var(--text-faint)", width: "100%", marginBottom: 4 }}>
+                  Try asking…
                 </div>
-                <div style={{ padding: "10px 14px", display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
-                  <span>n = {base.baseTrialDesign.n} · {base.baseTrialDesign.designType.replace("_", " ")} · {base.baseTrialDesign.regulatoryContext}</span>
-                  <span>P(approval): {fmtPct(base.ptrs)}</span>
-                  <span>Peak Sales: {fmtM(base.peakSalesM)}</span>
-                  <span>Dev Cost: {fmtM(base.devCostM)}</span>
-                  <span>Phase: {base.phase}</span>
-                </div>
+                {QUICK_PROMPTS.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => askAdvisor(p)}
+                    disabled={chatLoading}
+                    style={{
+                      fontSize: 12, padding: "5px 12px", borderRadius: 20,
+                      border: "1px solid var(--border)", background: "var(--surface-2)",
+                      color: "var(--text-muted)", cursor: "pointer",
+                      transition: "border-color 0.15s",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+                  >
+                    {p}
+                  </button>
+                ))}
               </div>
+            )}
 
-              {/* Editable options (B, C, D) */}
-              {options.filter((o) => !o.isBaseline).map((option, i) => (
-                <OptionForm
-                  key={option.id}
-                  option={option}
-                  base={base}
-                  color={OPTION_COLORS[i + 1] ?? "#6b7280"}
-                  onUpdate={(updates) => updateOption(option.id, updates)}
-                  onRemove={options.filter((o) => !o.isBaseline).length > 1 ? () => removeOption(option.id) : undefined}
-                />
-              ))}
-            </>
+            {/* Previous conversation summary (collapsed) */}
+            {chatHistory.length > 0 && (
+              <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 11, color: "var(--text-faint)" }}>
+                  {Math.floor(chatHistory.length / 2)} question{chatHistory.length > 2 ? "s" : ""} asked
+                  {options.length > 0 && ` · ${options.length} options generated`}
+                </div>
+                <button
+                  onClick={() => {
+                    setChatHistory([]);
+                    setOptions([]);
+                    setAiSummary(null);
+                    setChatError(null);
+                  }}
+                  style={{ fontSize: 11, color: "var(--text-faint)", background: "none", border: "none", cursor: "pointer" }}
+                >
+                  Clear ×
+                </button>
+              </div>
+            )}
+
+            {/* Text input */}
+            <div style={{ display: "flex", gap: 0, alignItems: "flex-end" }}>
+              <textarea
+                ref={textareaRef}
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={chatLoading}
+                placeholder={chatHistory.length === 0
+                  ? "E.g.: Compare going all-in on the current trial vs. biomarker selection first. Also show out-licensing."
+                  : "Refine the options or ask a follow-up…"}
+                rows={3}
+                style={{
+                  flex: 1, resize: "none", border: "none", outline: "none",
+                  background: "transparent", padding: "14px 16px",
+                  fontSize: 13, color: "var(--text)", lineHeight: 1.6,
+                  fontFamily: "inherit",
+                }}
+              />
+              <div style={{ padding: "0 12px 12px 0", flexShrink: 0 }}>
+                <button
+                  onClick={() => askAdvisor(chatInput)}
+                  disabled={chatLoading || !chatInput.trim()}
+                  style={{
+                    background: chatLoading || !chatInput.trim() ? "var(--surface-2)" : "var(--accent)",
+                    color: chatLoading || !chatInput.trim() ? "var(--text-faint)" : "#fff",
+                    border: "none", borderRadius: 10, padding: "9px 20px",
+                    fontSize: 13, fontWeight: 700, cursor: chatLoading || !chatInput.trim() ? "default" : "pointer",
+                    transition: "background 0.15s",
+                  }}
+                >
+                  {chatLoading ? "⏳" : "Analyze →"}
+                </button>
+              </div>
+            </div>
+
+            {/* Error */}
+            {chatError && (
+              <div style={{
+                padding: "8px 16px 12px", fontSize: 12, color: "#ef4444",
+                borderTop: "1px solid rgba(239,68,68,0.2)",
+              }}>
+                {chatError}
+              </div>
+            )}
+          </div>
+
+          {/* AI explanation */}
+          {aiSummary && (
+            <div style={{
+              background: "linear-gradient(135deg, rgba(16,185,129,0.05), rgba(59,130,246,0.05))",
+              border: "1px solid rgba(16,185,129,0.2)",
+              borderRadius: 12, padding: "16px 18px",
+            }}>
+              <div style={{ fontSize: 10, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8, fontWeight: 700 }}>
+                Strategy Advisor
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.75, whiteSpace: "pre-wrap" }}>
+                {aiSummary}
+              </div>
+            </div>
           )}
 
-          {/* Results section */}
+          {/* Results */}
           {results.length > 0 && (
             <>
-              {/* Side-by-side comparison cards */}
               <div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 12, fontFamily: "var(--font-display)" }}>
-                  Comparison
+                  Comparison — full valuation per option
                 </div>
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                   {results.map((r, i) => (
@@ -1019,59 +785,17 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
                 </div>
               </div>
 
-              {/* Charts */}
-              <div style={{
-                background: "var(--surface)", border: "1px solid var(--border)",
-                borderRadius: 12, padding: 20,
-              }}>
+              <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
                 <ComparisonCharts results={results} />
               </div>
 
-              {/* Sensitivity table */}
-              <div style={{
-                background: "var(--surface)", border: "1px solid var(--border)",
-                borderRadius: 12, padding: 20,
-              }}>
+              <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
                 <SensitivityTable results={results} base={base!} />
               </div>
 
-              {/* AI insight */}
-              <div style={{
-                background: "var(--surface)", border: "1px solid var(--border)",
-                borderRadius: 12, padding: 20,
-              }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    AI Strategic Insight
-                  </div>
-                  <button
-                    className="btn btn-outline"
-                    onClick={getAiInsight}
-                    disabled={aiLoading}
-                    style={{ fontSize: 12 }}
-                  >
-                    {aiLoading ? "⏳ Generating…" : aiSummary ? "↻ Refresh" : "Generate Insight"}
-                  </button>
-                </div>
-                {aiSummary ? (
-                  <div style={{
-                    background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)",
-                    borderRadius: 8, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7,
-                  }}>
-                    {aiSummary}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
-                    Click "Generate Insight" for a 2–3 sentence AI summary of what the comparison means for your decision.
-                  </div>
-                )}
-              </div>
-
-              {/* Methodology note */}
               <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
                 eNPV = P(approval) × Revenue PV − Dev Cost PV · eROI = eNPV / Dev Cost · Marginal eROI = ΔeNPV / |ΔDev Cost| vs Option A ·
-                P(approval) recalculated per option using trial design simulation · Dev cost = CPP × n per patient (when dev plan available), else n^0.75 scaling ·
-                Trial duration = enrollment months + treatment/obs period + startup cushion · Tight inclusion: peak sales ×0.70 · Broad inclusion: ×1.20 · RCT label premium: ×1.10 · Single arm discount: ×0.90
+                P(approval) recalculated per option via full multi-stage development plan · Dev cost = CPP × n per patient · Biomarker-selected population: peak sales ×0.70 · Broad population: ×1.15 · Tight inclusion: ×0.70 · Broad inclusion: ×1.20
               </div>
             </>
           )}
