@@ -350,65 +350,66 @@ export function computeOption(
   let devCostM: number;
   let durationMonths: number | undefined;
 
+  const baseN = base.baseTrialDesign.n;
+  const optionN = trialDesign.n;
+
+  // Design complexity adjustment (applies in both cost models below)
+  const resolvedDesignKey = (() => {
+    if (option.numArms === 3) return "3arm";
+    if (option.numArms === "adaptive") return "adaptive";
+    return option.designType ?? base.baseTrialDesign.designType;
+  })();
+  const baseDesignKey = base.baseTrialDesign.designType;
+  const complexityAdjust =
+    (DESIGN_COST_MULT[resolvedDesignKey] ?? 1.0) /
+    (DESIGN_COST_MULT[baseDesignKey] ?? 1.0);
+
+  // Trial duration: always computed from enrollment economics when available,
+  // regardless of whether cost is overridden — cost and time are independent.
+  if (base.resolverEconomics) {
+    const { enrollmentRatePerMonth, treatmentObsMonths, startupCushionMonths } = base.resolverEconomics;
+    durationMonths = Math.ceil(
+      optionN / Math.max(enrollmentRatePerMonth, 0.1) + treatmentObsMonths + startupCushionMonths
+    );
+  }
+
   if (option.devCostMOverride != null) {
     devCostM = option.devCostMOverride;
+  } else if (base.resolverEconomics) {
+    // Per-patient cost model: CPP × n for the current trial stage,
+    // plus the rest of the program cost (other stages) unchanged.
+    const { cpp, n: baseStageN } = base.resolverEconomics;
+    const baseStageCostM = baseStageN * cpp / 1e6;
+    const newStageCostM  = optionN * cpp / 1e6 * complexityAdjust;
+    const otherCostM     = Math.max(0, base.devCostM - baseStageCostM);
+    devCostM = otherCostM + newStageCostM;
   } else {
-    const baseN = base.baseTrialDesign.n;
-    const optionN = trialDesign.n;
+    // Fallback: fixed (60%) + variable (40%) scaling with n^0.75
+    const fixedCost    = base.devCostM * 0.60;
+    const variableCost = base.devCostM * 0.40;
+    const nScale = baseN > 0 ? Math.pow(optionN / baseN, 0.75) : 1;
+    devCostM = fixedCost + variableCost * nScale * complexityAdjust;
+  }
 
-    // Design complexity adjustment (applies in both cost models below)
-    const resolvedDesignKey = (() => {
-      if (option.numArms === 3) return "3arm";
-      if (option.numArms === "adaptive") return "adaptive";
-      return option.designType ?? base.baseTrialDesign.designType;
-    })();
-    const baseDesignKey = base.baseTrialDesign.designType;
-    const complexityAdjust =
-      (DESIGN_COST_MULT[resolvedDesignKey] ?? 1.0) /
-      (DESIGN_COST_MULT[baseDesignKey] ?? 1.0);
-
-    if (base.resolverEconomics) {
-      // Per-patient cost model: CPP × n for the current trial stage,
-      // plus the rest of the program cost (other stages) unchanged.
-      const { cpp, n: baseStageN, enrollmentRatePerMonth, treatmentObsMonths, startupCushionMonths } = base.resolverEconomics;
-      const baseStageCostM = baseStageN * cpp / 1e6;
-      const newStageCostM  = optionN * cpp / 1e6 * complexityAdjust;
-      const otherCostM     = Math.max(0, base.devCostM - baseStageCostM);
-      devCostM = otherCostM + newStageCostM;
-
-      // Trial duration from enrollment rate + treatment/obs + startup
-      durationMonths = Math.ceil(
-        optionN / Math.max(enrollmentRatePerMonth, 0.1) + treatmentObsMonths + startupCushionMonths
-      );
-    } else {
-      // Fallback: fixed (60%) + variable (40%) scaling with n^0.75
-      const fixedCost    = base.devCostM * 0.60;
-      const variableCost = base.devCostM * 0.40;
-      const nScale = baseN > 0 ? Math.pow(optionN / baseN, 0.75) : 1;
-      devCostM = fixedCost + variableCost * nScale * complexityAdjust;
-    }
-
-    // Ownership adjustment
+  // Ownership adjustment (applies to both override and computed cost)
+  if (option.devCostMOverride == null) {
     if (option.ownershipPct != null) {
       devCostM *= option.ownershipPct / 100;
     } else if (option.isOutlicensed) {
-      // Out-licensed: partner pays R&D, company receives milestones + royalties
-      // Dev cost to licensor ≈ 5% (deal overhead only)
       devCostM *= 0.05;
     }
-
-    // VOI: add study cost + time value of delay
-    if (option.isVOI && option.voiCostM) {
-      devCostM += option.voiCostM;
-      if (option.voiMonths && option.voiMonths > 0) {
-        // Monthly burn rate based on 36-month expected dev period
-        const monthlyBurn = base.devCostM / 36;
-        devCostM += option.voiMonths * monthlyBurn;
-      }
-    }
-
-    devCostM = Math.max(0, devCostM);
   }
+
+  // VOI: add study cost + time value of delay
+  if (option.isVOI && option.voiCostM) {
+    devCostM += option.voiCostM;
+    if (option.voiMonths && option.voiMonths > 0) {
+      const monthlyBurn = base.devCostM / 36;
+      devCostM += option.voiMonths * monthlyBurn;
+    }
+  }
+
+  devCostM = Math.max(0, devCostM);
 
   // ── Step 5: Revenue PV ────────────────────────────────────────────────────
   // Delay launch year for VOI options
