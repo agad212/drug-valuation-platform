@@ -81,6 +81,9 @@ export type OptionInputs = {
   ptrsOverride?: number;            // explicit PTRS (skip Layer 2 recalc)
   peakSalesMOverride?: number;      // explicit peak sales in $M (skip adjustment)
   devCostMOverride?: number;        // explicit dev cost in $M (skip calculation)
+
+  // ── AI-generated metadata ─────────────────────────────────────────────────
+  changesSummary?: string;          // one-line summary of what changed vs baseline
 };
 
 // ─── Base Context ─────────────────────────────────────────────────────────────

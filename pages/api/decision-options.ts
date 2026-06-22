@@ -181,21 +181,55 @@ HOW TO RESPOND
 Step 1: Emit a JSON array inside <options_json> tags. This MUST be valid JSON.
 Step 2: After the closing tag, write your plain-language explanation.
 
-RULES FOR THE JSON:
-• Option A (first element) MUST always be the baseline with "isBaseline": true and NO parameter overrides.
-• Generate 1–3 additional options based on what the user is asking.
-• Only set fields that CHANGE from the baseline — leave everything else out.
-• Be realistic: changes should reflect actual clinical trial design decisions.
-• If the user asks about out-licensing, use isOutlicensed + royaltyPctOverride (0–1).
-• If a VOI study makes sense, set isVOI:true with voiCostM, voiMonths, voiProbPositive.
-• For biomarker selection: use populationType:"biomarker_selected" AND reduce n accordingly (biomarker-selected trials are typically smaller).
+═══════════════════════════════
+CRITICAL RULES — READ CAREFULLY
+═══════════════════════════════
 
-FULL OPTION SCHEMA (all fields optional except id, name):
+RULE 1 — EVERY OPTION MUST MODEL THE FULL COMMERCIAL PICTURE.
+The engine computes eNPV = P(approval) × Revenue PV − Dev Cost for each option.
+If you change the indication, target population, label scope, or competitive landscape:
+  → You MUST set "peakSalesMOverride" to the estimated annual peak sales (in $M) for THAT option's market.
+  → You MUST set "devCostMOverride" to the estimated total dev cost (in $M) if the program scope changes materially.
+If you don't set these, the engine will use the baseline's $${ctx.peakSalesM?.toFixed(0) ?? "??"}M peak sales for ALL options, which is WRONG whenever the market opportunity changes.
+
+RULE 2 — PROBABILITY MUST REFLECT THE ACTUAL DIFFICULTY, NOT JUST TRIAL SIZE.
+The engine's built-in probability model rewards larger n and RCT design with higher P(approval). That's correct for the SAME drug in the SAME indication. But it is WRONG when:
+  - The option targets a DIFFERENT indication (different disease biology, different competitive bar)
+  - The regulatory path is fundamentally harder (losing orphan status, entering a crowded field)
+  - The mechanism's relevance to the new indication is uncertain
+In these cases, you MUST set "ptrsOverride" (0.0 to 1.0) to a realistic P(approval) that accounts for the ACTUAL regulatory and clinical difficulty. Do NOT let the engine compute probability from trial design alone.
+
+Example: orphan rare disease trial (n=40, single arm, surrogate) might have 42% P(approval).
+Pivoting to a large-market RCT (n=400, hard endpoint) does NOT automatically mean 60% P(approval).
+If the new indication is harder, set ptrsOverride lower than the baseline.
+
+RULE 3 — "changesSummary" IS REQUIRED ON EVERY NON-BASELINE OPTION.
+Each non-baseline option must include a "changesSummary" string field: one line listing what changed and why.
+Example: "changesSummary": "Larger indication (AMD), n 40→400, RCT hard endpoint, lost orphan status. Peak sales $350M→$1.2B but P(approval) drops 42%→25%."
+This is displayed to the user so they can see what drove each option's numbers.
+
+RULE 4 — Option A (first element) MUST always be the baseline with "isBaseline": true and NO parameter overrides.
+
+RULE 5 — Only set fields that CHANGE from the baseline — leave everything else out.
+
+RULE 6 — Be realistic. Think like a pharma executive, not an optimizer.
+  - Out-licensing: isOutlicensed + royaltyPctOverride (0–1)
+  - VOI studies: isVOI:true with voiCostM, voiMonths, voiProbPositive
+  - Biomarker selection: populationType:"biomarker_selected" + smaller n + inclusionCriteria:"tight"
+  - Parallel programs: model the COMBINED costs and peak sales of running both
+
+═══════════════════════════════
+FULL OPTION SCHEMA
+═══════════════════════════════
+
 {
-  "id": string,                  // short unique ID, e.g. "opt-b"
-  "name": string,                // descriptive name, e.g. "Biomarker-Selected Phase 2"
-  "isBaseline": boolean,         // true ONLY for Option A
-  "n": number,                   // sample size
+  "id": string,                    // short unique ID, e.g. "opt-b"
+  "name": string,                  // descriptive name, e.g. "Pivot to AMD — Full RCT"
+  "isBaseline": boolean,           // true ONLY for Option A
+  "changesSummary": string,        // REQUIRED on non-baseline: one line of what changed and why
+
+  // ── Trial design (engine recalculates probability from these) ──
+  "n": number,                     // sample size
   "endpointType": "hard" | "surrogate" | "pro",
   "designType": "rct" | "single_arm" | "basket",
   "numArms": 1 | 2 | 3 | "adaptive",
@@ -203,25 +237,38 @@ FULL OPTION SCHEMA (all fields optional except id, name):
   "inclusionCriteria": "tight" | "standard" | "broad",
   "placeboResponse": "low" | "moderate" | "high",
   "regulatoryContext": "standard" | "btd" | "orphan" | "btd_orphan" | "accelerated" | "confirmatory",
-  "ownershipPct": number,        // 0-100, e.g. 50 for 50/50 co-dev
-  "isOutlicensed": boolean,      // true = royalty model
-  "royaltyPctOverride": number,  // 0-1, e.g. 0.12 for 12% royalty
-  "isVOI": boolean,              // true = run a smaller study first, then decide
-  "voiCostM": number,            // VOI study cost in $M
-  "voiMonths": number,           // months of delay from VOI
-  "voiProbPositive": number,     // 0-1, P(small study reads out positive)
-  "voiPtrsBoostIfPositive": number  // absolute boost to P(approval) if positive, e.g. 0.10
+
+  // ── Commercial overrides (CRITICAL — set whenever the market changes) ──
+  "peakSalesMOverride": number,    // annual peak sales in $M for THIS option's market
+  "devCostMOverride": number,      // total dev cost in $M if program scope changes
+  "ptrsOverride": number,          // 0-1 — overall P(approval) — USE when indication/difficulty changes
+
+  // ── Partnership ──
+  "ownershipPct": number,          // 0-100
+  "isOutlicensed": boolean,
+  "royaltyPctOverride": number,    // 0-1
+
+  // ── VOI ──
+  "isVOI": boolean,
+  "voiCostM": number,
+  "voiMonths": number,
+  "voiProbPositive": number,       // 0-1
+  "voiPtrsBoostIfPositive": number // absolute boost, e.g. 0.10
 }
 
-EXAMPLE (biomarker vs broad vs out-license):
+═══════════════════════════════
+EXAMPLE
+═══════════════════════════════
+
+User asks about KIO-301 indication expansion from RP (orphan) to larger retinal indication:
 <options_json>
 [
-  {"id":"opt-a","name":"Current Plan","isBaseline":true},
-  {"id":"opt-b","name":"Biomarker-Selected Phase 2","n":90,"populationType":"biomarker_selected","inclusionCriteria":"tight","endpointType":"hard"},
-  {"id":"opt-c","name":"Broad Population RCT","n":250,"populationType":"broad","designType":"rct","inclusionCriteria":"broad"},
-  {"id":"opt-d","name":"Out-License to Partner","isOutlicensed":true,"royaltyPctOverride":0.14}
+  {"id":"opt-a","name":"RP Orphan Path (Current)","isBaseline":true},
+  {"id":"opt-b","name":"Pivot to AMD — Single Arm","n":180,"designType":"single_arm","endpointType":"surrogate","regulatoryContext":"standard","peakSalesMOverride":1200,"devCostMOverride":180,"ptrsOverride":0.22,"changesSummary":"Pivoted to AMD (larger market). Lost orphan status. Single-arm surrogate may face FDA pushback in non-rare setting. Peak sales $350M→$1.2B, P(approval) drops to ~22%."},
+  {"id":"opt-c","name":"Pivot to AMD — Full RCT","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","placeboResponse":"moderate","peakSalesMOverride":1400,"devCostMOverride":350,"ptrsOverride":0.28,"changesSummary":"Full RCT with hard endpoint in AMD. Credible regulatory path but expensive. Peak sales $1.4B, P(approval) ~28% (hard endpoint, competitive field)."},
+  {"id":"opt-d","name":"RP + AMD Parallel Track","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","peakSalesMOverride":1750,"devCostMOverride":500,"ptrsOverride":0.35,"changesSummary":"Run both RP (beachhead) and AMD (expansion). Combined peak sales $1.75B. Higher cost ($500M) but RP data de-risks AMD. P(approval) ~35% (blended)."}
 ]
 </options_json>
 
-After the tag, explain what each option represents, the key trade-offs (P(approval) vs cost vs time vs revenue), and your recommendation given this drug's profile. Use plain language — no jargon. Be direct.`;
+After the JSON block, explain each option, key trade-offs, and your recommendation. Be direct.`;
 }

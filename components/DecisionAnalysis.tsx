@@ -136,14 +136,29 @@ function ResultCard({
         </div>
       )}
 
-      {/* Design summary */}
-      {(result.option.n || result.option.designType || result.option.regulatoryContext) && (
+      {/* What changed — AI-generated summary of input differences */}
+      {!isBaseline && result.option.changesSummary && (
+        <div style={{
+          padding: "8px 14px", fontSize: 11, color: "var(--text-muted)",
+          borderBottom: "1px solid var(--border)", lineHeight: 1.5,
+          background: `${color}06`,
+        }}>
+          <span style={{ fontWeight: 700, color, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>What changed: </span>
+          {result.option.changesSummary}
+        </div>
+      )}
+
+      {/* Design summary (trial parameters) */}
+      {(result.option.n || result.option.designType || result.option.regulatoryContext || result.option.peakSalesMOverride || result.option.ptrsOverride) && (
         <div style={{ padding: "6px 14px", fontSize: 11, color: "var(--text-faint)", borderBottom: "1px solid var(--border)", fontFamily: "var(--font-mono)" }}>
           {[
             result.option.designType?.replace("_", " ") ?? "",
             result.option.n ? `n=${result.option.n}` : "",
             result.option.regulatoryContext !== "standard" ? result.option.regulatoryContext?.replace("_", "+") : "",
             result.option.inclusionCriteria !== "standard" && result.option.inclusionCriteria ? result.option.inclusionCriteria : "",
+            result.option.peakSalesMOverride ? `peak $${result.option.peakSalesMOverride.toLocaleString()}M` : "",
+            result.option.devCostMOverride ? `cost $${result.option.devCostMOverride.toLocaleString()}M` : "",
+            result.option.ptrsOverride ? `P(appr) ${(result.option.ptrsOverride * 100).toFixed(0)}%` : "",
           ].filter(Boolean).join(" · ")}
         </div>
       )}
