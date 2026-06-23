@@ -680,16 +680,25 @@ export default function HomePage() {
         return null;
       }
       const totalDevCost = (data.indications as any[]).reduce((s: number, i: any) => s + (i.devCostPV || 0), 0);
+      // Brief has AUTHORITY over indication and phase — auto-value provides
+      // financial data (indications, LOE, dev cost) but the brief's strategic
+      // framing overrides the generic CT.gov labels when available.
+      const briefInd = brief?.base_case_indication?.value;
+      const briefPhase = brief?.true_stage?.value;
       setV((cur) => ({
         ...cur,
         asset: drugOverride || cur.asset,
         loeYear: data.loeYear ?? cur.loeYear,
-        sponsor: data.sponsor || cur.sponsor,
+        sponsor: data.sponsor || brief?.sponsor || cur.sponsor,
         mechanism: data.mechanism || cur.mechanism,
-        phase: data.phase || cur.phase,
-        indication: cur.indication || data.indications?.[0]?.name || cur.indication,
+        phase: briefPhase || data.phase || cur.phase,
+        indication: briefInd || cur.indication || data.indications?.[0]?.name || cur.indication,
         launchYear: data.indications?.[0]?.launchYear ?? cur.launchYear,
-        indications: data.indications,
+        indications: briefInd
+          ? data.indications.map((ind: any, i: number) =>
+              i === 0 ? { ...ind, name: briefInd } : ind
+            )
+          : data.indications,
         devCostPV: totalDevCost || cur.devCostPV,
         sources: [...(cur.sources || []), ...(data.sources || [])],
       }));
@@ -707,15 +716,18 @@ export default function HomePage() {
         `Auto-value complete: ${indCount} indication${indCount !== 1 ? "s" : ""} added${withSales ? `, ${withSales} with peak sales estimates` : ""}${data.loeYear ? `, LOE ${data.loeYear}` : ""}. Running revenue deep-dive…`,
         "success", 8000
       );
-      // Auto-trigger deep revenue research
-      const indNames = (data.indications || []).map((i: any) => i.name).filter(Boolean);
-      if (indNames.length > 0) {
-        setTimeout(() => onResearchRevenue(indNames, drug), 15000);
+      // Auto-trigger deep revenue research — use brief's indication as the lead
+      const autoIndNames = (data.indications || []).map((i: any) => i.name).filter(Boolean);
+      const briefIndication = brief?.base_case_indication?.value;
+      const revenueIndNames = briefIndication
+        ? [briefIndication, ...autoIndNames.filter((n: string) => n !== briefIndication)]
+        : autoIndNames;
+      if (revenueIndNames.length > 0) {
+        setTimeout(() => onResearchRevenue(revenueIndNames, drug), 15000);
       }
 
-      // Auto-trigger PTRS mechanism scoring — use brief's indication if available
-      const briefIndication = brief?.base_case_indication?.value;
-      const ptrsIndication = briefIndication || indNames[0] || "";
+      // Auto-trigger PTRS mechanism scoring — brief's indication and phase govern
+      const ptrsIndication = briefIndication || autoIndNames[0] || "";
       const ptrsPhase = brief?.true_stage?.value || data.phase;
       setTimeout(() => onScorePtrs(drug, data.mechanism || "", ptrsIndication, ptrsPhase, data.sponsor), 25000);
 
