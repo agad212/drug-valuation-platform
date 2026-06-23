@@ -623,13 +623,15 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
         return;
       }
 
-      if (data.parseError) {
+      // If parsing failed entirely (no options), show clean error only
+      if (data.parseError && (!Array.isArray(data.options) || data.options.length === 0)) {
         setChatError(data.parseError);
+        setChatHistory((prev) => prev.slice(0, -1));
+        return;
       }
 
       // Update options — always include baseline as Option A
       if (Array.isArray(data.options) && data.options.length > 0) {
-        // Ensure Option A is the baseline
         const hasBaseline = data.options.some((o: any) => o.isBaseline);
         const finalOptions: OptionInputs[] = hasBaseline
           ? data.options
@@ -637,12 +639,12 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
         setOptions(finalOptions);
       }
 
-      // Store the AI summary + add assistant turn to history
+      // Store the sanitized summary (never raw model text) + add to history
       if (data.summary) {
         setAiSummary(data.summary);
         setChatHistory((prev) => [
           ...prev,
-          { role: "assistant" as const, content: data.assistantMessage ?? data.summary },
+          { role: "assistant" as const, content: data.summary },
         ]);
       }
     } catch (e) {

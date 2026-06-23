@@ -65,7 +65,78 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const data = await r.json() as any;
   const rawText: string = data.content?.[0]?.text ?? "";
 
-  // Extract <options_json>[...]</options_json>
+  // Try to parse structured options from the response
+  const result = parseAdvisorResponse(rawText);
+
+  // If parsing failed on first attempt, RETRY with a corrective instruction
+  if (result.options.length === 0 && !result.parseError) {
+    // No options and no parse error means the model didn't emit the tags at all
+    const retryMessages = [
+      ...messages,
+      { role: "assistant" as const, content: rawText },
+      { role: "user" as const, content: "Your response did not include the required <options_json> block. Please emit the options as a JSON array inside <options_json>...</options_json> tags, followed by your explanation. This is required." },
+    ];
+
+    const r2 = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": anthropicKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: retryMessages,
+      }),
+    });
+
+    if (r2.ok) {
+      const d2 = await r2.json() as any;
+      const retryText: string = d2.content?.[0]?.text ?? "";
+      const retryResult = parseAdvisorResponse(retryText);
+      if (retryResult.options.length > 0) {
+        return res.status(200).json(retryResult);
+      }
+    }
+
+    // Both attempts failed — return clean error, no raw text
+    return res.status(200).json({
+      options: [],
+      summary: "",
+      parseError: "Couldn't generate structured options — please try rephrasing your question.",
+    });
+  }
+
+  return res.status(200).json(result);
+}
+
+/**
+ * Strip internal/reasoning tags that must never reach the UI.
+ * Removes: <thinking>, <antThinking>, <artifact>, and any other
+ * XML-like tags that contain model internal reasoning.
+ */
+function sanitizeOutput(text: string): string {
+  return text
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+    .replace(/<antThinking>[\s\S]*?<\/antThinking>/gi, "")
+    .replace(/<artifact[\s\S]*?<\/artifact>/gi, "")
+    // Catch unclosed thinking tags (model cut off mid-thought)
+    .replace(/<thinking>[\s\S]*/gi, "")
+    .replace(/<antThinking>[\s\S]*/gi, "")
+    .trim();
+}
+
+/**
+ * Parse the AI response: extract <options_json>, sanitize the summary,
+ * never return raw internal reasoning.
+ */
+function parseAdvisorResponse(rawText: string): {
+  options: any[];
+  summary: string;
+  parseError?: string;
+} {
   const match = rawText.match(/<options_json>([\s\S]*?)<\/options_json>/);
   let options: any[] = [];
   let parseError: string | undefined;
@@ -74,24 +145,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const parsed = JSON.parse(match[1].trim());
       options = Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-      parseError = "AI returned malformed JSON — please try again.";
+    } catch {
+      parseError = "AI returned malformed option data — please try again.";
     }
-  } else {
-    parseError = "AI response did not include structured options — please try again.";
   }
 
-  // Summary = everything outside the <options_json> block
-  const summary = rawText
-    .replace(/<options_json>[\s\S]*?<\/options_json>/g, "")
-    .trim();
+  // Summary = everything outside internal tags and the options block
+  const summary = sanitizeOutput(
+    rawText.replace(/<options_json>[\s\S]*?<\/options_json>/g, ""),
+  );
 
-  return res.status(200).json({
-    options,
-    summary,
-    assistantMessage: rawText,
-    parseError,
-  });
+  return { options, summary, parseError };
 }
 
 // ─── Context type (subset of valuation state sent from client) ────────────────
