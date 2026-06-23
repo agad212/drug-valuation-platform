@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import React, { useState } from "react";
+import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from "recharts";
 import { type DevStageInput, type DevPlanResult, type DevStage } from "../lib/dev-plan";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 
@@ -276,28 +277,117 @@ function StageCard({
             </div>
           </div>
 
-          {/* Drug truth state */}
-          <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 12, alignItems: "center" }}>
-            <div>
-              <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 2 }}>Mechanism signal entering</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: mssColor(stage.mssInput), fontFamily: "var(--font-mono)" }}>
-                MSS {(stage.mssInput * 100).toFixed(0)}
+          {/* Response-rate curve: prior → posterior */}
+          {stage.rrPriorGrid && stage.rrPosteriorGrid && (
+            <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+                Estimated True Response Rate
               </div>
-              <div style={{ fontSize: 9, color: "var(--text-faint)" }}>σ² {stage.varianceInput.toFixed(2)}</div>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 4 }}>if positive →</div>
-              <div style={{ fontSize: 18, color: "var(--text-faint)" }}>→</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 2 }}>Signal after success</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: mssColor(stage.mssIfSuccess), fontFamily: "var(--font-mono)" }}>
-                MSS {(stage.mssIfSuccess * 100).toFixed(0)}
-                <span style={{ fontSize: 11, color: "#10b981", marginLeft: 4 }}>+{((stage.mssIfSuccess - stage.mssInput) * 100).toFixed(0)}</span>
+
+              {/* Density chart: prior (dashed) vs posterior (solid) */}
+              <div style={{ height: 100 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart
+                    data={stage.rrPriorGrid.theta.map((t: number, i: number) => ({
+                      theta: t,
+                      prior: stage.rrPriorGrid!.density[i],
+                      posterior: stage.rrPosteriorGrid!.density[i],
+                    }))}
+                    margin={{ top: 4, right: 4, left: 4, bottom: 0 }}
+                  >
+                    <XAxis
+                      dataKey="theta" type="number" domain={[0, 1]}
+                      tick={{ fontSize: 9 }} tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+                    />
+                    <YAxis hide domain={[0, "auto"]} />
+                    <ReferenceLine
+                      x={stage.nullResponseRate}
+                      stroke="var(--text-faint)" strokeDasharray="4 3"
+                      label={{ value: "threshold", position: "top", fontSize: 8, fill: "var(--text-faint)" }}
+                    />
+                    <Area
+                      type="monotone" dataKey="prior"
+                      stroke="var(--text-faint)" fill="var(--text-faint)" fillOpacity={0.08}
+                      strokeWidth={1.5} strokeDasharray="3 3" isAnimationActive={false}
+                    />
+                    <Area
+                      type="monotone" dataKey="posterior"
+                      stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.18}
+                      strokeWidth={2} isAnimationActive={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
               </div>
-              <div style={{ fontSize: 9, color: "var(--text-faint)" }}>σ² {stage.varianceIfSuccess.toFixed(2)}</div>
+              <div style={{ display: "flex", gap: 12, justifyContent: "center", fontSize: 9, color: "var(--text-faint)", marginTop: 2 }}>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--text-faint)", marginRight: 4, opacity: 0.5 }} />Before</span>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--accent)", marginRight: 4 }} />After success</span>
+              </div>
+
+              {/* Band masses — plain language */}
+              {stage.bandsBefore && stage.bandsAfter && (
+                <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 8, fontSize: 11, color: "var(--text-muted)" }}>
+                  <div>
+                    <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 3 }}>Before this trial</div>
+                    <div>{fmtPct(stage.bandsBefore.belowThreshold)} below threshold</div>
+                    <div>{fmtPct(stage.bandsBefore.modest)} modest</div>
+                    <div>{fmtPct(stage.bandsBefore.strong)} strong</div>
+                  </div>
+                  <div style={{ fontSize: 14, color: "var(--text-faint)", alignSelf: "center" }}>→</div>
+                  <div>
+                    <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 3 }}>After success</div>
+                    <div style={{ color: stage.bandsAfter.belowThreshold < stage.bandsBefore.belowThreshold ? "#10b981" : "var(--text-muted)" }}>
+                      {fmtPct(stage.bandsAfter.belowThreshold)} below
+                    </div>
+                    <div>{fmtPct(stage.bandsAfter.modest)} modest</div>
+                    <div style={{ color: stage.bandsAfter.strong > stage.bandsBefore.strong ? "#10b981" : "var(--text-muted)" }}>
+                      {fmtPct(stage.bandsAfter.strong)} strong
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Time-to-event proxy note */}
+              {stage.isProxied && (
+                <div style={{ marginTop: 8, fontSize: 10, color: "#f59e0b", fontStyle: "italic" }}>
+                  Time-to-event endpoint approximated via response-rate proxy — refined modeling planned.
+                </div>
+              )}
+
+              {/* Counterfactual ablations */}
+              {stage.counterfactuals && stage.counterfactuals.length > 0 && (
+                <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                  <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 4 }}>What-if analysis</div>
+                  {stage.counterfactuals.map((cf, ci) => (
+                    <div key={ci} style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                      <span>{cf.label}</span>
+                      <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: probColor(cf.pSuccess) }}>
+                        {fmtPct(cf.pSuccess)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
+          )}
+
+          {/* Fallback: MSS display when RR grids not available */}
+          {!stage.rrPriorGrid && (
+            <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 12, alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 2 }}>Mechanism signal entering</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: mssColor(stage.mssInput), fontFamily: "var(--font-mono)" }}>
+                  MSS {(stage.mssInput * 100).toFixed(0)}
+                </div>
+              </div>
+              <div style={{ fontSize: 14, color: "var(--text-faint)" }}>→</div>
+              <div>
+                <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 2 }}>After success</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: mssColor(stage.mssIfSuccess), fontFamily: "var(--font-mono)" }}>
+                  MSS {(stage.mssIfSuccess * 100).toFixed(0)}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -504,7 +594,7 @@ export default function DevPlan({ stageInputs, devPlan, reasoning, loading, onUp
 
       {/* Methodology */}
       <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
-        P(trial success) = Σ wᵢ·Φ(zᵢ) across the True Effect Prior mixture (one curve normally, two if evidence points to competing scenarios) · MSS/σ² shown are mixture summaries (law of total variance) · Bayesian update after success: each curve's effect strength +10–15% (endpoint-dependent), σ² ×0.65, and mixture weights reweight toward whichever curve predicted the success · Risk-adj cost = trial cost × P(all prior stages succeeded) · eNPV = P(approval) × Revenue PV − total risk-adj cost · Duration = enrollment time (n ÷ enrollment rate) + treatment/observation + startup cushion, plus regulatory review · Costs cover trial execution (CPP × n) only · n and CPP are AI-estimated and editable — click any underlined number
+        P(trial success) = ∫ P(success|θ) × prior(θ) dθ — true Bayesian posterior updating over response-rate distributions. Small trials tighten the curve less than large trials (emerges from the math, not a fixed factor). Prior is a Beta mixture anchored to the evidence engine; posterior ∝ prior × trial power function, computed on a 1001-point grid. What-if counterfactuals re-run the full model with one input changed. Risk-adj cost = trial cost × P(all prior stages succeeded) · eNPV = P(approval) × Revenue PV − total risk-adj cost · n and CPP are AI-estimated and editable — click any underlined number
       </div>
     </div>
   );

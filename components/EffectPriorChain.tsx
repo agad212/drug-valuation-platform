@@ -454,7 +454,7 @@ export default function EffectPriorChain({ effectPrior, loading, ptrsResult }: P
                 </div>
               </div>
               <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 3 }}>
-                How strong the drug effect appears to be — trial probability is in the Development Path below
+                Estimated true response rate ~{Math.round(mss * 100)}% — trial probability is in the Development Path below
               </div>
             </div>
             {isBimodal && weaker && stronger && (
