@@ -666,9 +666,11 @@ export default function HomePage() {
     setDevPlanStages(null);
     setDevPlanReasoning(null);
 
-    // ── STEP 0: Lead Reasoner fires FIRST ──────────────────────────────────
-    // Its structured brief governs all downstream modules.
-    const brief = await onRunLeadReasoner(drug, sponsor, phase, v.mechanism, v.indication);
+    // ── Lead Reasoner fires IN PARALLEL with auto-value ───────────────────
+    // The brief governs downstream modules. It runs alongside auto-value
+    // (not blocking it) so the pipeline doesn't stall for 30s.
+    const briefPromise = onRunLeadReasoner(drug, sponsor, phase, v.mechanism, v.indication);
+
     try {
       const params = new URLSearchParams({ drug, phase });
       if (sponsor) params.set("sponsor", sponsor);
@@ -680,25 +682,17 @@ export default function HomePage() {
         return null;
       }
       const totalDevCost = (data.indications as any[]).reduce((s: number, i: any) => s + (i.devCostPV || 0), 0);
-      // Brief has AUTHORITY over indication and phase — auto-value provides
-      // financial data (indications, LOE, dev cost) but the brief's strategic
-      // framing overrides the generic CT.gov labels when available.
-      const briefInd = brief?.base_case_indication?.value;
-      const briefPhase = brief?.true_stage?.value;
+      // Apply auto-value financial data immediately (brief may still be loading)
       setV((cur) => ({
         ...cur,
         asset: drugOverride || cur.asset,
         loeYear: data.loeYear ?? cur.loeYear,
-        sponsor: data.sponsor || brief?.sponsor || cur.sponsor,
+        sponsor: data.sponsor || cur.sponsor,
         mechanism: data.mechanism || cur.mechanism,
-        phase: briefPhase || data.phase || cur.phase,
-        indication: briefInd || cur.indication || data.indications?.[0]?.name || cur.indication,
+        phase: data.phase || cur.phase,
+        indication: cur.indication || data.indications?.[0]?.name || cur.indication,
         launchYear: data.indications?.[0]?.launchYear ?? cur.launchYear,
-        indications: briefInd
-          ? data.indications.map((ind: any, i: number) =>
-              i === 0 ? { ...ind, name: briefInd } : ind
-            )
-          : data.indications,
+        indications: data.indications,
         devCostPV: totalDevCost || cur.devCostPV,
         sources: [...(cur.sources || []), ...(data.sources || [])],
       }));
@@ -716,20 +710,34 @@ export default function HomePage() {
         `Auto-value complete: ${indCount} indication${indCount !== 1 ? "s" : ""} added${withSales ? `, ${withSales} with peak sales estimates` : ""}${data.loeYear ? `, LOE ${data.loeYear}` : ""}. Running revenue deep-dive…`,
         "success", 8000
       );
-      // Auto-trigger deep revenue research — use brief's indication as the lead
+      // Revenue research can start immediately (doesn't need the brief)
       const autoIndNames = (data.indications || []).map((i: any) => i.name).filter(Boolean);
+      if (autoIndNames.length > 0) {
+        setTimeout(() => onResearchRevenue(autoIndNames, drug), 15000);
+      }
+
+      // Wait for the brief to finish (if it hasn't already), then use it
+      // to govern PTRS scoring. The brief runs in parallel with auto-value,
+      // so by the time we reach here, it may already be done.
+      const brief = await briefPromise;
       const briefIndication = brief?.base_case_indication?.value;
-      const revenueIndNames = briefIndication
-        ? [briefIndication, ...autoIndNames.filter((n: string) => n !== briefIndication)]
-        : autoIndNames;
-      if (revenueIndNames.length > 0) {
-        setTimeout(() => onResearchRevenue(revenueIndNames, drug), 15000);
+      const ptrsIndication = briefIndication || autoIndNames[0] || "";
+      const ptrsPhase = brief?.true_stage?.value || data.phase;
+
+      // Re-apply brief's indication now that both brief and auto-value are done
+      if (briefIndication) {
+        setV((cur) => ({
+          ...cur,
+          indication: briefIndication,
+          phase: brief?.true_stage?.value || cur.phase,
+          indications: cur.indications?.map((ind, i) =>
+            i === 0 ? { ...ind, name: briefIndication } : ind
+          ),
+        }));
       }
 
       // Auto-trigger PTRS mechanism scoring — brief's indication and phase govern
-      const ptrsIndication = briefIndication || autoIndNames[0] || "";
-      const ptrsPhase = brief?.true_stage?.value || data.phase;
-      setTimeout(() => onScorePtrs(drug, data.mechanism || "", ptrsIndication, ptrsPhase, data.sponsor), 25000);
+      setTimeout(() => onScorePtrs(drug, data.mechanism || "", ptrsIndication, ptrsPhase, data.sponsor), 5000);
 
       // Return summary for chat
       const mechStr = data.mechanism ? ` · ${data.mechanism}` : "";
