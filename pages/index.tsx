@@ -12,10 +12,12 @@ import type { CtgovTrial } from "../lib/ctgov";
 import DecisionAnalysis from "../components/DecisionAnalysis";
 import DevPlan from "../components/DevPlan";
 import EffectPriorChain from "../components/EffectPriorChain";
+import StrategicAssessment from "../components/StrategicAssessment";
 import { buildBaseContext } from "../lib/decision-analysis";
 import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
+import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
 
 const ValuationCharts = dynamic(() => import("../components/ValuationCharts"), { ssr: false });
 
@@ -439,6 +441,10 @@ export default function HomePage() {
   const [devPlanLoading, setDevPlanLoading] = useState(false);
   const [recommendedNctId, setRecommendedNctId] = useState("");
   const [appliedNctIds, setAppliedNctIds] = useState<Set<string>>(new Set());
+  const [valuationBrief, setValuationBrief] = useState<ValuationBrief | null>(null);
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [briefSummary, setBriefSummary] = useState<string | null>(null);
+  const [expectationAudit, setExpectationAudit] = useState<ExpectationAuditResult | null>(null);
   const { pushToast, ToastHost } = useToast();
 
   useEffect(() => setSaved(loadAll()), []);
@@ -460,6 +466,13 @@ export default function HomePage() {
       revenuePVM,
     );
   }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior]);
+
+  // ── Expectation smoke detector: fires when devPlan result changes ─────────
+  useEffect(() => {
+    if (devPlan && valuationBrief) {
+      runExpectationCheck(valuationBrief, devPlan.pApproval);
+    }
+  }, [devPlan?.pApproval, valuationBrief]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateDevPlanN(id: string, n: number) {
     setDevPlanStages((prev) => prev?.map((s) =>
@@ -545,12 +558,93 @@ export default function HomePage() {
     }
   }
 
+  // ── Lead Reasoner: runs FIRST, produces strategic assessment ─────────────
+  async function onRunLeadReasoner(
+    drug: string, sponsor?: string, phase?: string,
+    mechanism?: string, indication?: string,
+  ): Promise<ValuationBrief | null> {
+    setBriefLoading(true);
+    setValuationBrief(null);
+    setBriefSummary(null);
+    setExpectationAudit(null);
+    try {
+      const res = await fetch("/api/lead-reasoner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drug, sponsor, phase, mechanism, indication }),
+      });
+      const data = await res.json();
+      if (data.brief) {
+        setValuationBrief(data.brief);
+        setBriefSummary(data.summary ?? null);
+
+        // Apply the brief's findings to the valuation state
+        const brief = data.brief as ValuationBrief;
+        setV((cur) => ({
+          ...cur,
+          phase: brief.true_stage?.value || cur.phase,
+          indication: brief.base_case_indication?.value || cur.indication,
+        }));
+
+        pushToast(
+          `Strategic assessment complete — ${brief.is_low_confidence ? "LOW CONFIDENCE (thin evidence basis)" : "base case framed"}`,
+          brief.is_low_confidence ? "info" : "success",
+          6000,
+        );
+        return brief;
+      } else {
+        pushToast(data.error || "Lead reasoner did not produce an assessment.", "error");
+        return null;
+      }
+    } catch (e: any) {
+      console.error("[lead-reasoner] failed:", e?.message);
+      pushToast(`Strategic assessment failed: ${e?.message || "error"}`, "error");
+      return null;
+    } finally {
+      setBriefLoading(false);
+    }
+  }
+
+  // ── Expectation smoke detector: runs AFTER math, flags divergence ──────
+  function runExpectationCheck(brief: ValuationBrief, pApproval: number) {
+    const { range_low, range_high, reason } = brief.expectation_anchor;
+    const divergence: ExpectationAuditResult["divergence"] =
+      pApproval < range_low * 0.5 || pApproval > range_high * 2.0 ? "sharp"
+      : pApproval < range_low || pApproval > range_high ? "mild"
+      : "none";
+
+    const audit: ExpectationAuditResult = {
+      expected_range: [range_low, range_high],
+      actual_p_approval: pApproval,
+      divergence,
+      audit_findings: [],
+      corrections_made: [],
+      conclusion: "",
+    };
+
+    if (divergence === "sharp") {
+      audit.audit_findings.push(
+        `Sharp divergence: expected ${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}%, got ${(pApproval * 100).toFixed(1)}%.`,
+        `Re-examine: Is the right trial selected as efficacy gate? Is the SOC threshold correctly sourced? Are evidence inputs real?`,
+      );
+      audit.conclusion = `The computed P(approval) of ${(pApproval * 100).toFixed(1)}% is sharply different from the ${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}% expectation. Check the inputs — the math is only as good as what goes in.`;
+    } else if (divergence === "mild") {
+      audit.audit_findings.push(
+        `Mild divergence from expectation (${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}% expected, ${(pApproval * 100).toFixed(1)}% computed). May be fine — verify threshold sourcing.`,
+      );
+      audit.conclusion = `Computed P(approval) is slightly outside expectations. Worth a quick check on inputs but not alarming.`;
+    } else {
+      audit.conclusion = `Computed P(approval) of ${(pApproval * 100).toFixed(1)}% is within the expected ${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}% range. No divergence flag.`;
+    }
+
+    setExpectationAudit(audit);
+  }
+
   async function onAutoValue(
     drugOverride?: string,
     sponsorOverride?: string,
     phaseOverride?: string
   ): Promise<string | null> {
-    // If called from chat, update the form fields first
     if (drugOverride) {
       setV((cur) => ({
         ...cur,
@@ -563,7 +657,6 @@ export default function HomePage() {
     const drug = drugOverride || v.asset || (v as any).name;
     if (!drug) { pushToast("Enter an Asset name first.", "error"); return null; }
     const sponsor = sponsorOverride || v.sponsor;
-    // If triggered from chat with a new drug name, don't inherit stale phase from previous valuation
     const phase = phaseOverride || (drugOverride ? "Phase 2" : v.phase) || "Phase 2";
 
     setAutoLoading(true);
@@ -572,6 +665,10 @@ export default function HomePage() {
     setPtrsResult(null);
     setDevPlanStages(null);
     setDevPlanReasoning(null);
+
+    // ── STEP 0: Lead Reasoner fires FIRST ──────────────────────────────────
+    // Its structured brief governs all downstream modules.
+    const brief = await onRunLeadReasoner(drug, sponsor, phase, v.mechanism, v.indication);
     try {
       const params = new URLSearchParams({ drug, phase });
       if (sponsor) params.set("sponsor", sponsor);
@@ -616,8 +713,11 @@ export default function HomePage() {
         setTimeout(() => onResearchRevenue(indNames, drug), 15000);
       }
 
-      // Auto-trigger PTRS mechanism scoring (after revenue delay to avoid 429)
-      setTimeout(() => onScorePtrs(drug, data.mechanism || "", indNames[0] || "", data.phase, data.sponsor), 25000);
+      // Auto-trigger PTRS mechanism scoring — use brief's indication if available
+      const briefIndication = brief?.base_case_indication?.value;
+      const ptrsIndication = briefIndication || indNames[0] || "";
+      const ptrsPhase = brief?.true_stage?.value || data.phase;
+      setTimeout(() => onScorePtrs(drug, data.mechanism || "", ptrsIndication, ptrsPhase, data.sponsor), 25000);
 
       // Return summary for chat
       const mechStr = data.mechanism ? ` · ${data.mechanism}` : "";
@@ -760,7 +860,13 @@ export default function HomePage() {
       });
       if (!res.ok) throw new Error(`API error ${res.status}`);
       const data = await res.json();
-      setDevPlanStages(data.stages as DevStageInput[]);
+      // Override stage nullResponseRate with the brief's sourced SOC rate when available
+      const briefSocRR = valuationBrief?.soc_response_rate?.value;
+      const stages = (data.stages as DevStageInput[]).map((s) => ({
+        ...s,
+        nullResponseRate: s.nullResponseRate ?? briefSocRR,
+      }));
+      setDevPlanStages(stages);
       setDevPlanRegContext(data.regulatoryContext ?? "standard");
       setDevPlanReasoning(data.reasoning ?? null);
     } catch (e: any) {
@@ -776,13 +882,17 @@ export default function HomePage() {
   ) {
     setLayer2Loading(true);
     try {
-      // Pick best NCT ID from trial results if available.
-      // Only pass it if it matches the current phase — don't anchor layer2 to a
-      // completed Phase 1/Phase 1-2 trial when the drug is already in Phase 2+.
-      const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
-      const drugPhaseNum = phaseNum(phase);
-      const matchingTrial = trialResults?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
-      const nctId = matchingTrial?.nctId ?? undefined;
+      // Use the brief's efficacy gate trial when available (the lead reasoner has
+      // already identified which trial is the REAL efficacy gate, excluding substudies).
+      // Falls back to the old heuristic: pick a trial matching the drug's phase.
+      const briefNctId = valuationBrief?.efficacy_gate_trial?.trial_id;
+      let nctId: string | undefined = briefNctId || undefined;
+      if (!nctId) {
+        const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
+        const drugPhaseNum = phaseNum(phase);
+        const matchingTrial = trialResults?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
+        nctId = matchingTrial?.nctId ?? undefined;
+      }
       const res = await fetch("/api/ptrs-layer2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1798,6 +1908,16 @@ export default function HomePage() {
                 );
               })()}
             </Card>
+          )}
+
+          {/* Strategic Assessment — Lead Reasoner output, shown FIRST */}
+          {v.asset && (briefLoading || valuationBrief) && (
+            <StrategicAssessment
+              brief={valuationBrief}
+              summary={briefSummary}
+              loading={briefLoading}
+              expectationAudit={expectationAudit}
+            />
           )}
 
           {/* True Effect Prior — step-by-step evidence story, before/after curves */}
