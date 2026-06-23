@@ -32,29 +32,19 @@ import type {
   RegulatoryContext,
 } from "./ptrs-trial";
 import { mixtureMoments, type EffectPriorMixture } from "./effect-prior";
+import {
+  computeStageRR,
+  gridToGaussianMixture,
+  downsampleGrid,
+  type RRBands,
+  type RRTrialDesign,
+} from "./bayesian-rr";
 
-// ─── Bayesian MSS update tables ───────────────────────────────────────────────
-//
-// When a trial succeeds, we gain information that the drug works.
-// The MSS (mechanism signal strength) increases by an uplift amount,
-// and variance decreases (we know more).
-//
-// Uplift is larger for harder endpoints (more confirmatory) and smaller
-// for soft endpoints (could be noise).
-
-const MSS_UPLIFT_BY_ENDPOINT: Record<EndpointType, number> = {
-  hard:      0.15,   // OS, CR confirmed — strong mechanistic confirmation
-  surrogate: 0.10,   // PFS, ORR, BCVA — moderate confirmation
-  pro:       0.06,   // subjective — weak confirmation, could be noise
-};
-
-// Each successful trial reduces variance by this fraction
-// (uncertainty shrinks as evidence accumulates)
-const VARIANCE_REDUCTION = 0.65;
-
-// Cap on mu (effect-strength mean) after a successful-trial uplift — mirrors
-// the historical mssIfSuccess cap of 0.95 (MAX_MU = 2 × 0.95).
-const MAX_MU = 1.9;
+// ─── REMOVED: Fixed heuristic constants ──────────────────────────────────────
+// MSS_UPLIFT_BY_ENDPOINT, VARIANCE_REDUCTION, MAX_MU are GONE.
+// Posterior updating is now done by the Bayesian response-rate engine
+// (lib/bayesian-rr.ts) — tightening emerges from trial statistical
+// power, not fixed factors.
 
 // ─── Regulatory approval probability ─────────────────────────────────────────
 // P(FDA/EMA approves | all clinical trials succeeded)
@@ -108,6 +98,12 @@ export type DevStageInput = {
   enrollmentRatePerMonth: number; // patients enrolled per month, across all sites
   treatmentObsMonths: number;     // treatment + follow-up/observation period
   startupCushionMonths: number;   // site activation, IRB/EC approval, first-patient-in
+
+  // Bayesian RR engine inputs (AI-estimated or user-entered)
+  nullResponseRate?: number;      // SOC/historical control response rate (0-1)
+  observedResponseRate?: number;  // actual observed RR from a completed trial
+  observedN?: number;             // n for the observed result
+  isTimeToEvent?: boolean;        // true = OS/PFS/DFS endpoint, approximated via RR proxy
 };
 
 // Computed result for one stage
@@ -144,6 +140,15 @@ export type DevStage = DevStageInput & {
 
   // Cumulative probability through this stage
   cumSuccessProb: number;      // pPriorSuccess × trialSuccessProb
+
+  // ── Bayesian RR diagnostics (from lib/bayesian-rr.ts) ──
+  rrPriorGrid?: { theta: number[]; density: number[] };     // downsampled ~60 pts for UI
+  rrPosteriorGrid?: { theta: number[]; density: number[] }; // downsampled ~60 pts for UI
+  bandsBefore?: RRBands;
+  bandsAfter?: RRBands;
+  nullResponseRate: number;
+  isProxied?: boolean;           // true if TTE endpoint approximated via RR proxy
+  counterfactuals?: { label: string; pSuccess: number }[];
 };
 
 export type RegStage = {
@@ -183,6 +188,15 @@ export type DevPlanInputs = {
   regCostM?: number;                   // override default $1M
 };
 
+// Default null/control response rates by phase (when AI doesn't provide one)
+const DEFAULT_NULL_RR: Record<string, number> = {
+  "Preclinical": 0.05,
+  "Phase 1":     0.10,
+  "Phase 2":     0.15,
+  "Phase 3":     0.20,
+  "Filed":       0.20,
+};
+
 // ─── Core computation ─────────────────────────────────────────────────────────
 
 export function computeDevPlan(
@@ -213,7 +227,7 @@ export function computeDevPlan(
       : Math.max((currentMSS - 0.5) * 0.30, -0.15);
     const ptrsLayer1 = clamp01(phaseBase + mechAdj);
 
-    // ── Layer 2: trial-specific success probability ───────────────────────────
+    // ── Layer 2: still called for risk flags, multiplier, sigma2Trial ────────
     const l2 = scoreLayer2(
       currentMixture,
       ptrsLayer1,
@@ -221,28 +235,38 @@ export function computeDevPlan(
       stageInput.trialDesign,
     );
 
-    // trialSuccessProb = Σ wᵢ·Φ(zᵢ) = P(this trial detects the effect)
-    // This is the per-stage probability, not the compound approval probability.
-    const trialSuccessProb = l2.trialSuccessProb;
+    // ── Bayesian RR engine: true posterior updating ──────────────────────────
+    // P(success) comes from numerical integration over the response-rate
+    // distribution, NOT from the Gaussian Φ(z) heuristic. The posterior
+    // after success is computed via Bayes' rule on the discretized grid,
+    // so tightening EMERGES from the trial's statistical power.
+    const nullRR = stageInput.nullResponseRate
+      ?? DEFAULT_NULL_RR[stageInput.phase]
+      ?? 0.15;
 
-    // ── Bayesian update: drug truth if this stage succeeds ────────────────────
-    // Positive trial = confirmation. Each component's mu shifts toward MAX_MU
-    // and sigma2 shrinks (same tightening as before), AND each component's
-    // weight is reweighted by Bayes' rule using its OWN success probability:
-    //   w'ᵢ = wᵢ · pᵢ / Σⱼ(wⱼ · pⱼ)   where Σⱼ(wⱼ·pⱼ) = trialSuccessProb
-    // A "story" that predicted this success more confidently gains weight —
-    // this is what lets a bimodal split resolve toward one world as real
-    // trials read out. For a 1-component mixture, w' = 1 always (no-op).
-    const uplift = MSS_UPLIFT_BY_ENDPOINT[stageInput.trialDesign.endpointType] ?? 0.10;
-    const mixtureIfSuccess: EffectPriorMixture = currentMixture.map((c, i) => {
-      const pComponent = l2.componentSuccessProbs[i];
-      const wNew = trialSuccessProb > 1e-9 ? (c.w * pComponent) / trialSuccessProb : c.w;
-      return {
-        w: wNew,
-        mu: Math.min(MAX_MU, c.mu + 2 * uplift),
-        sigma2: c.sigma2 * VARIANCE_REDUCTION,
-      };
-    });
+    const rrDesign: RRTrialDesign = {
+      designType:        stageInput.trialDesign.designType,
+      endpointType:      stageInput.trialDesign.endpointType,
+      populationType:    stageInput.trialDesign.populationType,
+      regulatoryContext: stageInput.trialDesign.regulatoryContext,
+    };
+
+    const rrResult = computeStageRR(
+      currentMixture,
+      stageInput.n,
+      nullRR,
+      rrDesign,
+      stageInput.observedResponseRate,
+      stageInput.observedN,
+    );
+
+    const trialSuccessProb = rrResult.trialSuccessProb;
+
+    // Convert the posterior grid back to a Gaussian mixture for the next stage
+    const mixtureIfSuccess = gridToGaussianMixture(
+      rrResult.posteriorGrid,
+      currentMixture.length,
+    );
     const { mss: mssIfSuccess, variance: varianceIfSuccess } = mixtureMoments(mixtureIfSuccess);
 
     // ── Cost accounting ───────────────────────────────────────────────────────
@@ -277,6 +301,14 @@ export function computeDevPlan(
       enrollmentMonths,
       durationMonths,
       cumSuccessProb,
+      // Bayesian RR diagnostics
+      rrPriorGrid:       downsampleGrid(rrResult.priorGrid),
+      rrPosteriorGrid:   downsampleGrid(rrResult.posteriorGrid),
+      bandsBefore:       rrResult.bandsBefore,
+      bandsAfter:        rrResult.bandsAfter,
+      nullResponseRate:  nullRR,
+      isProxied:         stageInput.isTimeToEvent === true,
+      counterfactuals:   rrResult.counterfactuals,
     });
 
     // Advance drug truth for next stage: assume this stage succeeds
