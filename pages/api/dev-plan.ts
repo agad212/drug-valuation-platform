@@ -113,6 +113,8 @@ type StageOutput = {
   enrollmentRatePerMonth: number;
   treatmentObsMonths: number;
   startupCushionMonths: number;
+  nullResponseRate?: number;
+  isTimeToEvent?: boolean;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -170,6 +172,16 @@ REGULATORY CONTEXT — reason from what you know:
 - The regulatoryContext for the future stage should be the same or upgraded vs current (e.g. if Phase 2 has orphan, Phase 3 also has orphan; if BTD granted, keep btd_orphan)
 - This field goes in the trialDesign block — it lowers the evidentiary threshold for that trial's success probability calculation
 
+NULL RESPONSE RATE — REQUIRED for each stage:
+10. For EACH stage, estimate "nullResponseRate": the standard-of-care or historical control response rate for this indication and endpoint. Express as a decimal (0-1). This is the response rate the drug must BEAT to demonstrate efficacy.
+   - Oncology solid tumors with no effective SOC: 0.03–0.10
+   - Hematology with existing SOC: 0.15–0.30
+   - Inherited diseases with no treatment: 0.02–0.05
+   - Common disease with strong SOC: 0.25–0.50
+   Think: "what response rate would a placebo or SOC patient show for this endpoint?"
+
+11. For EACH stage, set "isTimeToEvent": true if the PRIMARY endpoint is OS, PFS, DFS, EFS, or any survival/time-to-event/Kaplan-Meier endpoint. false for response rate endpoints (ORR, CR rate, biomarker clearance, BCVA improvement, etc.).
+
 ABSOLUTE CONSTRAINT: Return EXACTLY 2 stages if currently in Phase 2, or EXACTLY 1 stage if currently in Phase 3. Never return 3 or more stages.
 
 RESPONSE FORMAT — return ONLY this JSON, no markdown:
@@ -184,6 +196,8 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
       "enrollmentRatePerMonth": 2,
       "treatmentObsMonths": 12,
       "startupCushionMonths": 8,
+      "nullResponseRate": 0.05,
+      "isTimeToEvent": false,
       "isCurrentTrial": true,
       "aiRationale": "One sentence explaining this stage.",
       "trialDesign": {
@@ -206,6 +220,8 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
       "enrollmentRatePerMonth": 3,
       "treatmentObsMonths": 12,
       "startupCushionMonths": 8,
+      "nullResponseRate": 0.05,
+      "isTimeToEvent": false,
       "isCurrentTrial": false,
       "aiRationale": "One sentence explaining why this stage is needed.",
       "trialDesign": {
@@ -284,6 +300,11 @@ Reason about the full development path. Return the current trial as stage 1 (use
         isCurrentTrial: i === 0,
         aiRationale:    s.aiRationale || "",
         trialDesign:    td,
+        // Bayesian RR engine inputs
+        nullResponseRate: (typeof s.nullResponseRate === "number" && s.nullResponseRate > 0 && s.nullResponseRate < 1)
+          ? Math.round(s.nullResponseRate * 1000) / 1000  // clamp to 3 decimal places
+          : undefined,  // let dev-plan.ts use DEFAULT_NULL_RR
+        isTimeToEvent: s.isTimeToEvent === true,
       };
     });
 
