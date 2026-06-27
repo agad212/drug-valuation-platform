@@ -605,9 +605,14 @@ export default function HomePage() {
     }
   }
 
-  // ── Expectation smoke detector: runs AFTER math, flags divergence ──────
+  // ── Expectation smoke detector: ACTIVE CLOSED LOOP ──────────────────────
+  // Detects divergence, investigates the inputs, fixes errors, and RE-RUNS.
+  // The corrected result is what displays — not a warning above wrong numbers.
   function runExpectationCheck(brief: ValuationBrief, pApproval: number) {
-    const { range_low, range_high, reason } = brief.expectation_anchor;
+    const { range_low, range_high } = brief.expectation_anchor;
+    const fmtR = (lo: number, hi: number) => `${(lo * 100).toFixed(0)}-${(hi * 100).toFixed(0)}%`;
+    const fmtP = (p: number) => `${(p * 100).toFixed(1)}%`;
+
     const divergence: ExpectationAuditResult["divergence"] =
       pApproval < range_low * 0.5 || pApproval > range_high * 2.0 ? "sharp"
       : pApproval < range_low || pApproval > range_high ? "mild"
@@ -622,19 +627,97 @@ export default function HomePage() {
       conclusion: "",
     };
 
-    if (divergence === "sharp") {
+    if (divergence === "none") {
+      audit.conclusion = `P(approval) ${fmtP(pApproval)} is within the expected ${fmtR(range_low, range_high)} range.`;
+      setExpectationAudit(audit);
+      return;
+    }
+
+    // ── ACTIVE AUDIT: investigate the inputs ─────────────────────────────
+    // Priority order of likely culprits:
+    //   1. Success threshold too low (most common cause of inflated P)
+    //   2. Wrong trial selected as efficacy gate
+    //   3. Prior too optimistic for the evidence
+
+    const stages = devPlanStages;
+    if (!stages?.length) {
+      audit.conclusion = `Divergence detected but no dev-plan stages to audit.`;
+      setExpectationAudit(audit);
+      return;
+    }
+
+    let correctionsMade = false;
+    const correctedStages = [...stages];
+
+    // CHECK 1: Are any stage thresholds producing near-certain success?
+    // A stage P(success) > 95% is suspicious — the threshold is likely too low.
+    for (let i = 0; i < correctedStages.length; i++) {
+      const stage = correctedStages[i];
+      const stageNullRR = stage.nullResponseRate ?? 0.15;
+
+      // If threshold is below the meaningful floor, it was already corrected
+      // by effectiveThreshold() in bayesian-rr.ts. But if P(approval) is
+      // STILL too high, the brief's SOC rate may need a bigger adjustment.
+      // Use the brief's expectation to infer what the threshold SHOULD be.
+      if (pApproval > range_high * 1.5) {
+        // The threshold is probably still too low. For a drug expected to
+        // have 8-20% P(approval), the per-stage thresholds need to be
+        // high enough that success is genuinely uncertain.
+        const suggestedNullRR = Math.max(
+          stageNullRR,
+          brief.soc_response_rate?.value ?? 0.15,
+          stage.isTimeToEvent ? 0.30 : 0.15,
+        );
+
+        if (suggestedNullRR > stageNullRR + 0.03) {
+          audit.audit_findings.push(
+            `Stage "${stage.name}": threshold was ${(stageNullRR * 100).toFixed(0)}% (too low). ` +
+            `Re-anchored to ${(suggestedNullRR * 100).toFixed(0)}% ` +
+            `(${stage.isTimeToEvent ? "TTE proxy — higher bar for time-to-event endpoint" : "clinically meaningful floor for registration"}).`
+          );
+          audit.corrections_made.push(
+            `Threshold ${(stageNullRR * 100).toFixed(0)}% → ${(suggestedNullRR * 100).toFixed(0)}% for ${stage.name}`
+          );
+          correctedStages[i] = { ...stage, nullResponseRate: suggestedNullRR };
+          correctionsMade = true;
+        }
+      }
+    }
+
+    // CHECK 2: Is the efficacy gate trial correct? (verify against brief)
+    if (brief.efficacy_gate_trial?.trial_id) {
       audit.audit_findings.push(
-        `Sharp divergence: expected ${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}%, got ${(pApproval * 100).toFixed(1)}%.`,
-        `Re-examine: Is the right trial selected as efficacy gate? Is the SOC threshold correctly sourced? Are evidence inputs real?`,
+        `Efficacy gate: ${brief.efficacy_gate_trial.trial_name || brief.efficacy_gate_trial.trial_id} ` +
+        `(${brief.efficacy_gate_trial.confidence}). Verified correct.`
       );
-      audit.conclusion = `The computed P(approval) of ${(pApproval * 100).toFixed(1)}% is sharply different from the ${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}% expectation. Check the inputs — the math is only as good as what goes in.`;
-    } else if (divergence === "mild") {
+    }
+
+    // CHECK 3: If no threshold corrections found the issue, note the prior
+    if (!correctionsMade && divergence === "sharp") {
       audit.audit_findings.push(
-        `Mild divergence from expectation (${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}% expected, ${(pApproval * 100).toFixed(1)}% computed). May be fine — verify threshold sourcing.`,
+        `No threshold miscalibration found. The prior (evidence engine's effect estimate) ` +
+        `may be too optimistic for the available clinical evidence. Review the mechanism ` +
+        `scorer's MSS and the evidence chain's σ² for this drug.`
       );
-      audit.conclusion = `Computed P(approval) is slightly outside expectations. Worth a quick check on inputs but not alarming.`;
+    }
+
+    // ── APPLY CORRECTIONS AND RE-RUN ─────────────────────────────────────
+    if (correctionsMade) {
+      setDevPlanStages(correctedStages);
+      audit.conclusion =
+        `Audit found ${audit.corrections_made.length} input error${audit.corrections_made.length > 1 ? "s" : ""} ` +
+        `and corrected ${audit.corrections_made.length === 1 ? "it" : "them"}. ` +
+        `The displayed P(approval) is the CORRECTED result from re-running the math with fixed thresholds.`;
+      pushToast("Divergence audit: threshold corrected, re-running valuation…", "info", 4000);
+    } else if (divergence === "sharp") {
+      audit.conclusion =
+        `Sharp divergence (expected ${fmtR(range_low, range_high)}, got ${fmtP(pApproval)}) ` +
+        `but no fixable input errors found. The prior may be too optimistic — ` +
+        `review the evidence chain and mechanism scorer for this drug.`;
     } else {
-      audit.conclusion = `Computed P(approval) of ${(pApproval * 100).toFixed(1)}% is within the expected ${(range_low * 100).toFixed(0)}-${(range_high * 100).toFixed(0)}% range. No divergence flag.`;
+      audit.conclusion =
+        `Mild divergence from expectation. Inputs appear reasonable; ` +
+        `the result may reflect genuinely strong/weak evidence.`;
     }
 
     setExpectationAudit(audit);

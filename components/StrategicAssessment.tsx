@@ -121,16 +121,26 @@ export default function StrategicAssessment({ brief, summary, loading, expectati
         }}>
           <div style={{
             fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4,
-            color: expectationAudit.divergence === "sharp" ? "#f87171" : "#fbbf24",
+            color: expectationAudit.corrections_made.length > 0 ? "#10b981" : (expectationAudit.divergence === "sharp" ? "#f87171" : "#fbbf24"),
           }}>
-            {expectationAudit.divergence === "sharp" ? "Sharp Divergence" : "Mild Divergence"} — Input Audit
+            {expectationAudit.corrections_made.length > 0
+              ? "Divergence Detected → Inputs Corrected → Re-ran"
+              : expectationAudit.divergence === "sharp" ? "Sharp Divergence — Audit" : "Mild Divergence — Check"}
           </div>
           <div style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", lineHeight: 1.6 }}>
             {expectationAudit.conclusion}
           </div>
-          {expectationAudit.audit_findings.length > 1 && (
+          {expectationAudit.corrections_made.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ fontSize: 10, color: "rgba(16,185,129,0.8)", fontWeight: 700, marginBottom: 2 }}>Corrections applied:</div>
+              {expectationAudit.corrections_made.map((c, i) => (
+                <div key={i} style={{ fontSize: 11, color: "rgba(16,185,129,0.7)", padding: "1px 0" }}>{c}</div>
+              ))}
+            </div>
+          )}
+          {expectationAudit.audit_findings.length > 0 && (
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 6 }}>
-              {expectationAudit.audit_findings.slice(1).map((f, i) => (
+              {expectationAudit.audit_findings.map((f, i) => (
                 <div key={i}>{f}</div>
               ))}
             </div>

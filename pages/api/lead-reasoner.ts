@@ -244,7 +244,13 @@ WHAT YOU MUST REASON ABOUT
    Separate CONFIRMED (company publicly stated) from INFERRED (deduced from signals).
 
 3. RIGHT EFFICACY FRAME
-   The pivotal indication, realistic endpoint, and the SOC/control response rate the trial must beat. The SOC rate must be SOURCED — cite the study, meta-analysis, or prescribing information that establishes it. Do not guess.
+   The pivotal indication, realistic endpoint, and the CLINICALLY MEANINGFUL RESPONSE RATE the trial must demonstrate to have a plausible path to approval.
+
+   CRITICAL: soc_response_rate is NOT just the raw placebo/control rate — it is the MINIMUM response rate that would be considered clinically meaningful for registration in this indication.
+   - If the raw SOC/control rate is very low (e.g., 2% spontaneous clearance, 5% BSC response), the soc_response_rate should STILL reflect what FDA/regulators would consider a meaningful clinical signal — typically 15-30%+ for oncology, depending on the setting and unmet need.
+   - For time-to-event endpoints (OS, PFS, RFS, DFS) approximated via a response-rate proxy: set the threshold at 25-40% to reflect the genuine difficulty of demonstrating a survival benefit.
+   - The soc_response_rate MUST be SOURCED — cite the study, regulatory guidance, or prescribing information. Do not guess.
+   - Ask: "What response rate would convince an FDA reviewer that this drug works in this indication?" — THAT is the soc_response_rate.
 
 4. EXPECTATION ANCHOR
    BEFORE any math runs, state your rough prior on the probability this drug gets approved. Express as a range (e.g., 15-30%) with reasoning. This is a SMOKE DETECTOR — it will be used to flag surprising math results for input audit, NEVER to adjust the output.

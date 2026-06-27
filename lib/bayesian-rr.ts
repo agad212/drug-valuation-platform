@@ -72,6 +72,36 @@ export type RRTrialDesign = {
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
+/**
+ * Minimum clinically meaningful response rate for the success threshold.
+ *
+ * Even if the SOC/control rate is very low (e.g. 2% spontaneous clearance),
+ * a regulatory body won't approve a drug for barely beating zero. The trial
+ * must show a CLINICALLY MEANINGFUL effect. This floor ensures the power
+ * calculation doesn't produce absurd near-certainty from a trivially low bar.
+ *
+ * For RR endpoints: floor at 10% (a drug showing <10% RR is rarely approvable).
+ * For TTE endpoints proxied through RR: floor at 25% (harder bar — the proxy
+ * must reflect the difficulty of the actual time-to-event endpoint).
+ */
+export const MEANINGFUL_RR_FLOOR = 0.10;
+export const TTE_PROXY_RR_FLOOR = 0.25;
+
+/**
+ * Compute the effective threshold for a trial, applying clinical
+ * meaningfulness floors. The raw SOC rate is the statistical null;
+ * the effective threshold is what the drug must actually beat for
+ * the trial result to be considered CLINICALLY MEANINGFUL for
+ * registration.
+ */
+export function effectiveThreshold(
+  rawNullRR: number,
+  isTimeToEvent: boolean = false,
+): number {
+  const floor = isTimeToEvent ? TTE_PROXY_RR_FLOOR : MEANINGFUL_RR_FLOOR;
+  return Math.max(rawNullRR, floor);
+}
+
 export const GRID_SIZE = 1001;
 const GRID_MIN = 0.001;
 const GRID_MAX = 0.999;
@@ -632,6 +662,8 @@ export type StageRRResult = {
   bandsAfter: RRBands;
   priorMean: number;
   posteriorMean: number;
+  effectiveNullRR: number;       // the threshold actually used (after floor)
+  rawNullRR: number;             // the raw SOC rate before floor
   counterfactuals: { label: string; pSuccess: number }[];
 };
 
@@ -640,8 +672,9 @@ export type StageRRResult = {
  *
  * @param gaussianMixture  Current effect-prior mixture (Gaussian space)
  * @param n                Trial sample size
- * @param nullRR           Null/control response rate (0-1)
+ * @param nullRR           Raw null/control response rate (0-1) — will be floored
  * @param design           Trial design parameters
+ * @param isTimeToEvent    True if endpoint is TTE (higher threshold floor)
  * @param observedRR       If set, use observed-result mode instead of success-event
  * @param observedN        N for the observed result (required if observedRR set)
  */
@@ -650,32 +683,36 @@ export function computeStageRR(
   n: number,
   nullRR: number,
   design: RRTrialDesign,
+  isTimeToEvent: boolean = false,
   observedRR?: number,
   observedN?: number,
 ): StageRRResult {
+  // 0. Apply clinically meaningful threshold floor
+  const effectiveNull = effectiveThreshold(nullRR, isTimeToEvent);
+
   // 1. Convert to Beta mixture and discretize on grid
   const betaMix = mixtureToBeta(gaussianMixture);
   const priorGrid = betaToGrid(betaMix);
 
   // 2. Compute P(stage success) via numerical integration
-  const trialSuccessProb = computeStageSuccess(priorGrid, n, nullRR, design);
+  const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, design);
 
   // 3. Compute posterior
   const posteriorGrid = (observedRR != null && observedN != null)
     ? posteriorFromObservedRR(priorGrid, observedRR, observedN)
-    : posteriorAfterSuccess(priorGrid, n, nullRR, design);
+    : posteriorAfterSuccess(priorGrid, n, effectiveNull, design);
 
-  // 4. Band masses before and after
-  const bandsBefore = computeBandMasses(priorGrid, nullRR);
-  const bandsAfter = computeBandMasses(posteriorGrid, nullRR);
+  // 4. Band masses before and after (use effective threshold for bands)
+  const bandsBefore = computeBandMasses(priorGrid, effectiveNull);
+  const bandsAfter = computeBandMasses(posteriorGrid, effectiveNull);
 
   // 5. Summary statistics
   const priorMoments = gridMoments(priorGrid);
   const posteriorMoments = gridMoments(posteriorGrid);
 
-  // 6. Counterfactual ablations
+  // 6. Counterfactual ablations (use effective threshold)
   const counterfactuals = generateCounterfactuals(
-    priorGrid, n, nullRR, design, trialSuccessProb,
+    priorGrid, n, effectiveNull, design, trialSuccessProb,
   );
 
   return {
@@ -686,6 +723,8 @@ export function computeStageRR(
     bandsAfter,
     priorMean: priorMoments.mean,
     posteriorMean: posteriorMoments.mean,
+    effectiveNullRR: effectiveNull,
+    rawNullRR: nullRR,
     counterfactuals,
   };
 }

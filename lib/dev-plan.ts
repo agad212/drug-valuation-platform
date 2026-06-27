@@ -256,6 +256,7 @@ export function computeDevPlan(
       stageInput.n,
       nullRR,
       rrDesign,
+      stageInput.isTimeToEvent === true,
       stageInput.observedResponseRate,
       stageInput.observedN,
     );
@@ -306,7 +307,7 @@ export function computeDevPlan(
       rrPosteriorGrid:   downsampleGrid(rrResult.posteriorGrid),
       bandsBefore:       rrResult.bandsBefore,
       bandsAfter:        rrResult.bandsAfter,
-      nullResponseRate:  nullRR,
+      nullResponseRate:  rrResult.effectiveNullRR,
       isProxied:         stageInput.isTimeToEvent === true,
       counterfactuals:   rrResult.counterfactuals,
     });
