@@ -649,38 +649,45 @@ export default function HomePage() {
     let correctionsMade = false;
     const correctedStages = [...stages];
 
-    // CHECK 1: Are any stage thresholds producing near-certain success?
-    // A stage P(success) > 95% is suspicious — the threshold is likely too low.
+    // The lead reasoner's soc_response_rate is the PRIMARY threshold —
+    // the per-indication clinically meaningful registration bar. The
+    // absolute floor (10% RR / 25% TTE) is just a backstop.
+    const reasonedBar = brief.soc_response_rate?.value ?? 0.15;
+    const reasonedSource = brief.soc_response_rate?.source ?? "default";
+
+    // CHECK 1: Reconcile each stage's threshold against BOTH:
+    //   (a) The absolute floor (already applied by effectiveThreshold in bayesian-rr.ts)
+    //   (b) The lead reasoner's per-indication bar (the REAL check)
+    // A threshold that clears the floor but sits below the reasoned bar is still wrong.
     for (let i = 0; i < correctedStages.length; i++) {
       const stage = correctedStages[i];
       const stageNullRR = stage.nullResponseRate ?? 0.15;
 
-      // If threshold is below the meaningful floor, it was already corrected
-      // by effectiveThreshold() in bayesian-rr.ts. But if P(approval) is
-      // STILL too high, the brief's SOC rate may need a bigger adjustment.
-      // Use the brief's expectation to infer what the threshold SHOULD be.
-      if (pApproval > range_high * 1.5) {
-        // The threshold is probably still too low. For a drug expected to
-        // have 8-20% P(approval), the per-stage thresholds need to be
-        // high enough that success is genuinely uncertain.
-        const suggestedNullRR = Math.max(
-          stageNullRR,
-          brief.soc_response_rate?.value ?? 0.15,
-          stage.isTimeToEvent ? 0.30 : 0.15,
-        );
+      // The correct threshold is the MAX of:
+      //   - what's currently set on the stage
+      //   - the lead reasoner's clinically meaningful bar for this indication
+      //   - the TTE proxy floor if applicable
+      const correctThreshold = Math.max(
+        stageNullRR,
+        reasonedBar,
+        stage.isTimeToEvent ? 0.30 : 0,
+      );
 
-        if (suggestedNullRR > stageNullRR + 0.03) {
-          audit.audit_findings.push(
-            `Stage "${stage.name}": threshold was ${(stageNullRR * 100).toFixed(0)}% (too low). ` +
-            `Re-anchored to ${(suggestedNullRR * 100).toFixed(0)}% ` +
-            `(${stage.isTimeToEvent ? "TTE proxy — higher bar for time-to-event endpoint" : "clinically meaningful floor for registration"}).`
-          );
-          audit.corrections_made.push(
-            `Threshold ${(stageNullRR * 100).toFixed(0)}% → ${(suggestedNullRR * 100).toFixed(0)}% for ${stage.name}`
-          );
-          correctedStages[i] = { ...stage, nullResponseRate: suggestedNullRR };
-          correctionsMade = true;
-        }
+      if (correctThreshold > stageNullRR + 0.02) {
+        const reason = correctThreshold === reasonedBar
+          ? `lead reasoner's per-indication registration bar (${reasonedSource})`
+          : stage.isTimeToEvent
+            ? "TTE proxy — higher bar for time-to-event endpoint"
+            : "clinically meaningful floor";
+        audit.audit_findings.push(
+          `Stage "${stage.name}": threshold was ${(stageNullRR * 100).toFixed(0)}%, ` +
+          `below the ${(correctThreshold * 100).toFixed(0)}% ${reason}. Corrected.`
+        );
+        audit.corrections_made.push(
+          `Threshold ${(stageNullRR * 100).toFixed(0)}% → ${(correctThreshold * 100).toFixed(0)}% for ${stage.name}`
+        );
+        correctedStages[i] = { ...stage, nullResponseRate: correctThreshold };
+        correctionsMade = true;
       }
     }
 
