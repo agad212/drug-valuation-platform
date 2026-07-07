@@ -14,7 +14,7 @@ import DevPlan from "../components/DevPlan";
 import EffectPriorChain from "../components/EffectPriorChain";
 import StrategicAssessment from "../components/StrategicAssessment";
 import { buildBaseContext } from "../lib/decision-analysis";
-import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
+import { computeDevPlan, shiftLoeForLaunch, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
@@ -476,22 +476,36 @@ export default function HomePage() {
 
   // ── Timeline → launch year: dev-plan duration drives revenue PV discounting ─
   // Only depends on the implied year, so a manual launchYear edit afterwards
-  // sticks until the plan's duration actually changes.
+  // sticks until the plan's duration actually changes. LOE follows per its
+  // basis: exclusivity-anchored LOE slides with launch, patent LOE stays
+  // calendar-fixed unless launch overtakes it (then regulatory exclusivity
+  // from approval becomes the binding constraint).
   useEffect(() => {
     if (!devPlan) return;
     const implied = devPlan.impliedLaunchYear;
     const current = v.indications?.[0]?.launchYear ?? v.launchYear;
     if (current === implied) return;
+    const excl = v.loeExclusivityYears ?? 8;
+    const newLoe = shiftLoeForLaunch(v.loeYear, v.loeBasis, implied, excl);
+    const loeChanged = newLoe != null && newLoe !== v.loeYear;
     setV((cur) => ({
       ...cur,
       launchYear: implied,
+      loeYear: newLoe ?? cur.loeYear,
       indications: cur.indications?.length
-        ? cur.indications.map((ind, i) => (i === 0 ? { ...ind, launchYear: implied } : ind))
+        ? cur.indications.map((ind, i) => (i === 0
+            ? { ...ind, launchYear: implied, loeYear: shiftLoeForLaunch(ind.loeYear, cur.loeBasis, implied, excl) }
+            : ind))
         : cur.indications,
     }));
     pushToast(
-      `Launch year set to ${implied} from dev plan timeline (${Math.round(devPlan.totalDurationMonths)} months to approval).`,
-      "info", 6000,
+      `Launch year set to ${implied} from dev plan timeline (${Math.round(devPlan.totalDurationMonths)} months to approval).` +
+      (loeChanged
+        ? (v.loeBasis === "exclusivity"
+            ? ` LOE moved to ${newLoe} (exclusivity-based, anchored to launch).`
+            : ` LOE moved to ${newLoe} — launch reached the prior LOE, so regulatory exclusivity (+${excl}y) is now the binding constraint.`)
+        : ""),
+      "info", loeChanged ? 9000 : 6000,
     );
   }, [devPlan?.impliedLaunchYear]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -563,7 +577,13 @@ export default function HomePage() {
       const data = await res.json();
       setPatentResult(data);
       if (data.loeYear) {
-        setV((cur) => ({ ...cur, loeYear: data.loeYear, sources: [...(cur.sources || []), ...(data.orangeBook?.sources || [])] }));
+        setV((cur) => ({
+          ...cur,
+          loeYear: data.loeYear,
+          loeBasis: data.loeBasis ?? undefined,
+          loeExclusivityYears: data.exclusivityYears ?? cur.loeExclusivityYears,
+          sources: [...(cur.sources || []), ...(data.orangeBook?.sources || [])],
+        }));
         if (data.isDefinitive) {
           pushToast(`LOE confirmed by FDA Orange Book: ${data.loeYear}. Patent context loaded below.`, "success", 8000);
         } else {
@@ -798,6 +818,8 @@ export default function HomePage() {
         ...cur,
         asset: drugOverride || cur.asset,
         loeYear: data.loeYear ?? cur.loeYear,
+        loeBasis: data.loeYear ? (data.loeBasis ?? undefined) : cur.loeBasis,
+        loeExclusivityYears: data.loeExclusivityYears ?? cur.loeExclusivityYears,
         sponsor: data.sponsor || cur.sponsor,
         mechanism: data.mechanism || cur.mechanism,
         phase: data.phase || cur.phase,
@@ -1410,7 +1432,7 @@ export default function HomePage() {
             <SectionLabel>Timeline</SectionLabel>
             <div className="form-grid-3" style={{ marginBottom: 16 }}>
               <FieldNumber label="Launch Year" value={v.launchYear} onChange={(x) => update("launchYear", x)} integer />
-              <FieldNumber label="LOE Year" value={v.loeYear} onChange={(x) => update("loeYear", x)} integer hint="Loss of Exclusivity" />
+              <FieldNumber label="LOE Year" value={v.loeYear} onChange={(x) => setV((cur) => ({ ...cur, loeYear: x, loeBasis: undefined }))} integer hint="Loss of Exclusivity" />
               <FieldNumber label="Override P(approval)" value={v.ptrs} onChange={(x) => update("ptrs", x)} isPct hint="Leave blank = auto" />
             </div>
 
@@ -1621,7 +1643,7 @@ export default function HomePage() {
                       </div>
                     )}
                   </div>
-                  <button className="btn" onClick={() => setV(cur => ({ ...cur, loeYear: patentResult.loeYear }))}
+                  <button className="btn" onClick={() => setV(cur => ({ ...cur, loeYear: patentResult.loeYear, loeBasis: patentResult.loeBasis ?? undefined, loeExclusivityYears: patentResult.exclusivityYears ?? cur.loeExclusivityYears }))}
                     style={{ background: "rgba(255,255,255,0.9)", color: patentResult.isDefinitive ? "#059669" : patentResult.isBpcia ? "#7c3aed" : "#1d4ed8", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
                     Use {patentResult.loeYear} →
                   </button>

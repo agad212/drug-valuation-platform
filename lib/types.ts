@@ -76,6 +76,11 @@ export type Valuation = {
   commercialOpexPct?: number;
   launchYear?: number;
   loeYear?: number;
+  // How loeYear was derived: "patent" = calendar-fixed patent expiry;
+  // "exclusivity" = regulatory exclusivity anchored to launch/approval.
+  // Undefined = manually entered (never auto-shifted unless launch overtakes it).
+  loeBasis?: "patent" | "exclusivity";
+  loeExclusivityYears?: number; // regulatory exclusivity term (12 biologic, 8 small molecule)
   phase?: string;
   ptrs?: number;
   devCostPV?: Money;

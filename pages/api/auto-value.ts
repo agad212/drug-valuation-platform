@@ -236,6 +236,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── Infer LOE from mechanism if pipeline returned nothing ─────────────────
     let loeYear = loeResult?.loeYear ?? null;
+    let loeBasis: "patent" | "exclusivity" | null = loeResult?.loeBasis ?? null;
+    let loeExclusivityYears: number | null = loeResult?.exclusivityYears ?? null;
     let biologicLoeNote: string | null = null;
     if (loeYear === null) {
       const mechLower = (analysis.mechanism || "").toLowerCase();
@@ -249,6 +251,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const refLaunchYear = selectedTrials[0]?.trial.estimatedLaunchYear ?? inferredLaunchYear;
       const exclusivityYears = isBiologic ? 12 : 8;
       loeYear = refLaunchYear + exclusivityYears;
+      loeBasis = "exclusivity";
+      loeExclusivityYears = exclusivityYears;
       biologicLoeNote = isBiologic
         ? `BPCIA 12-year biologic exclusivity estimated from launch year ${refLaunchYear}`
         : `Default ${exclusivityYears}-year exclusivity estimated from launch year ${refLaunchYear}`;
@@ -311,6 +315,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       indications,
       trials: trialCards,
       loeYear,
+      loeBasis,
+      loeExclusivityYears,
       loeSource: loeSourceOut,
       mechanism: analysis.mechanism || undefined,
       phase: analysis.phase || undefined,

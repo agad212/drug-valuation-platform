@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDevPlan, impliedLaunchYear, type DevStageInput } from "../dev-plan";
+import { computeDevPlan, impliedLaunchYear, shiftLoeForLaunch, type DevStageInput } from "../dev-plan";
 import { mixtureFromMssVariance } from "../effect-prior";
 import type { TrialDesignInputs } from "../ptrs-trial";
 
@@ -118,5 +118,28 @@ describe("impliedLaunchYear — timeline drives launch year", () => {
     const mixture = mixtureFromMssVariance(0.5, 0.2);
     const plan = computeDevPlan(mixture, 0.1, { stages: [makeStage()], regulatoryContext: "standard" }, 0);
     expect(plan.impliedLaunchYear).toBe(impliedLaunchYear(plan.totalDurationMonths));
+  });
+});
+
+describe("shiftLoeForLaunch — LOE response to a moved launch year", () => {
+  it("exclusivity-based LOE slides with launch (anchored to approval)", () => {
+    expect(shiftLoeForLaunch(2036, "exclusivity", 2032, 8)).toBe(2040);
+    expect(shiftLoeForLaunch(2040, "exclusivity", 2031, 12)).toBe(2043);
+  });
+
+  it("patent-based LOE stays calendar-fixed when launch is still before it", () => {
+    expect(shiftLoeForLaunch(2036, "patent", 2030, 8)).toBe(2036);
+    // manual entry (no basis) is also left alone
+    expect(shiftLoeForLaunch(2036, undefined, 2030, 8)).toBe(2036);
+  });
+
+  it("launch reaching or passing LOE resets it to launch + exclusivity, regardless of basis", () => {
+    expect(shiftLoeForLaunch(2030, "patent", 2032, 8)).toBe(2040);
+    expect(shiftLoeForLaunch(2030, "patent", 2030, 8)).toBe(2038); // same-year counts
+    expect(shiftLoeForLaunch(2030, undefined, 2031, 12)).toBe(2043);
+  });
+
+  it("missing LOE passes through untouched", () => {
+    expect(shiftLoeForLaunch(undefined, "patent", 2032, 8)).toBeUndefined();
   });
 });

@@ -78,6 +78,11 @@ export type LoePipelineResult = {
   loeYear: number | null;
   loeMin: number | null;
   loeMax: number | null;
+  // How loeYear was derived: "patent" = calendar-fixed expiry date;
+  // "exclusivity" = regulatory exclusivity anchored to approval/launch,
+  // so it shifts if the launch year shifts.
+  loeBasis: "patent" | "exclusivity" | null;
+  exclusivityYears: number; // regulatory exclusivity term (12 biologic, 8 small molecule)
   orangeBook: {
     found: boolean;
     loeDate: string | null;
@@ -137,9 +142,16 @@ export async function runLoePipeline(
   const patentMin  = patentAnalysis?.loeMin ?? null;
   const patentMax  = patentAnalysis?.loeMax ?? null;
 
-  const loeYear = isBpcia
-    ? (patentBest ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
-    : (obYear ?? patentBest ?? fdaFallbackYear ?? hintLoeYear ?? null);
+  // Same precedence as before, but track which candidate won: patent expiry
+  // dates are calendar-fixed; BPCIA dates, FDA default estimates, and
+  // launch+exclusivity hints are all anchored to approval/launch.
+  const loeCandidates: [number | null, "patent" | "exclusivity"][] = isBpcia
+    ? [[patentBest, "patent"], [obYear, "exclusivity"], [fdaFallbackYear, "exclusivity"], [hintLoeYear, "exclusivity"]]
+    : [[obYear, "patent"], [patentBest, "patent"], [fdaFallbackYear, "exclusivity"], [hintLoeYear, "exclusivity"]];
+  const loeWinner = loeCandidates.find(([y]) => y != null);
+  const loeYear  = loeWinner?.[0] ?? null;
+  const loeBasis = loeWinner?.[1] ?? null;
+  const exclusivityYears = (isBpcia || hints?.isBiologic) ? 12 : 8;
   const loeMin = isBpcia
     ? (patentMin ?? obYear ?? fdaFallbackYear ?? hintLoeYear ?? null)
     : (obYear ?? patentMin ?? fdaFallbackYear ?? hintLoeYear ?? null);
@@ -155,6 +167,8 @@ export async function runLoePipeline(
     loeYear,
     loeMin,
     loeMax,
+    loeBasis,
+    exclusivityYears,
     orangeBook: obResult ? {
       found: obConfirmed,
       loeDate: obResult.loeDate,

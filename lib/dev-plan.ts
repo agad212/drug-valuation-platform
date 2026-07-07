@@ -219,6 +219,30 @@ export function impliedLaunchYear(totalDurationMonths: number, asOf: Date = new 
   return d.getFullYear();
 }
 
+/**
+ * How the LOE year responds when the launch year moves.
+ *
+ * - "exclusivity" basis (BPCIA floor, launch+exclusivity estimate): the LOE is
+ *   anchored to approval/launch, so it slides to launchYear + exclusivityYears.
+ * - "patent" basis (Orange Book / patent analysis) and manual entries are
+ *   calendar-fixed — a later launch compresses the revenue window.
+ * - Either way, if launch reaches or passes the stored LOE, the patents are
+ *   moot: FDA regulatory exclusivity from approval becomes the binding
+ *   constraint, so LOE resets to launchYear + exclusivityYears.
+ */
+export function shiftLoeForLaunch(
+  loeYear: number | undefined,
+  loeBasis: "patent" | "exclusivity" | undefined,
+  launchYear: number,
+  exclusivityYears: number = 8,
+): number | undefined {
+  if (loeYear == null) return loeYear;
+  if (loeBasis === "exclusivity" || launchYear >= loeYear) {
+    return launchYear + exclusivityYears;
+  }
+  return loeYear;
+}
+
 // ─── Core computation ─────────────────────────────────────────────────────────
 
 export function computeDevPlan(
