@@ -104,6 +104,14 @@ export type DevStageInput = {
   observedResponseRate?: number;  // actual observed RR from a completed trial
   observedN?: number;             // n for the observed result
   isTimeToEvent?: boolean;        // true = OS/PFS/DFS endpoint, approximated via RR proxy
+  comparatorSigma2?: number;      // variance of the historical control estimate
+                                  //   0 for RCTs (control measured in-trial)
+                                  //   >0 for single-arm vs uncertain historical benchmark
+  comparatorSource?: string;      // where the comparator rate comes from (for display)
+
+  // Endpoint transparency
+  endpointRationale?: string;            // plain-language: why this endpoint for this stage
+  endpointEvidenceBasis?: "CONFIRMED" | "INFERRED"; // confirmed by company vs FDA precedent/inference
 };
 
 // Computed result for one stage
@@ -148,6 +156,8 @@ export type DevStage = DevStageInput & {
   bandsAfter?: RRBands;
   nullResponseRate: number;
   isProxied?: boolean;           // true if TTE endpoint approximated via RR proxy
+  comparatorGrid?: { theta: number[]; density: number[] } | null; // comparator density for chart
+  comparatorSigma2Effective: number; // actual comparatorSigma2 used in computation
   counterfactuals?: { label: string; pSuccess: number }[];
 };
 
@@ -259,6 +269,7 @@ export function computeDevPlan(
       stageInput.isTimeToEvent === true,
       stageInput.observedResponseRate,
       stageInput.observedN,
+      stageInput.comparatorSigma2 ?? 0,
     );
 
     const trialSuccessProb = rrResult.trialSuccessProb;
@@ -309,6 +320,8 @@ export function computeDevPlan(
       bandsAfter:        rrResult.bandsAfter,
       nullResponseRate:  rrResult.effectiveNullRR,
       isProxied:         stageInput.isTimeToEvent === true,
+      comparatorGrid:    rrResult.comparatorGrid,
+      comparatorSigma2Effective: rrResult.comparatorSigma2,
       counterfactuals:   rrResult.counterfactuals,
     });
 

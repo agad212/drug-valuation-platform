@@ -48,21 +48,45 @@ export function buildMechanismStep(mechanism: {
 const SCALE_CALIBRATION = `SCALE — "mu" and "sigma2" (same units used throughout this platform):
 
 mu = 2 × (an MSS-equivalent score, 0-1, for THIS EVIDENCE ALONE)
-  Anchors (apply ONLY to the evidence you found, not the drug overall):
-    ~0.20 (mu≈0.4)  weak / below-average — modest effect size, marginal significance
-    ~0.50 (mu≈1.0)  average / typical — a normal, unremarkable result for this evidence type
-    ~0.65 (mu≈1.3)  above-average — clearly positive, better than the typical case
-    ~0.80 (mu≈1.6)  strong / best-in-class — exceptional, top-tier result
-  Most real evidence lands between mu=0.6 and mu=1.4. Reserve the extremes (mu<0.4 or mu>1.7)
-  for evidence that is unambiguously poor or unambiguously outstanding.
+  CONFIRMING evidence anchors:
+    ~0.20 (mu≈0.4)  poor / below-average — notably below expectations (e.g., marginal effect in weak model)
+    ~0.50 (mu≈1.0)  average / typical — a normal, unremarkable result
+    ~0.65 (mu≈1.3)  above-average — clearly positive
+    ~0.80 (mu≈1.6)  strong / best-in-class — exceptional
+  Strong positive evidence (large n, consistent effect, indication-matched) → HIGH mu + LOW sigma2.
 
-sigma2 = how much uncertainty this evidence carries as a signal about the DRUG'S TRUE EFFECT
-(not just statistical uncertainty in the study itself — also how directly this evidence
-speaks to the question):
+  DISCONFIRMING evidence — these are NOT "weak" results; they are STRONG NEGATIVE signals:
+    Serial class failures (3+ programs, no pivotal success, class graveyard):
+      → mu in 0.10–0.35 — this is strong negative evidence. A class that has serially failed
+        in Phase 2/3 does NOT produce mu near 1.0. It produces mu well below 0.5.
+    Stable disease only, zero ORR in a solid-tumor ORR endpoint:
+      → mu in 0.25–0.45 — stable disease in a setting where ORR is the gate is near-failure.
+        Do NOT score this as "average" (mu≈1.0). It is a weak efficacy signal.
+    Null / wrong-direction own data:
+      → mu in 0.10–0.35 depending on severity.
+
+sigma2 = how much CONFIDENCE this evidence gives us about the drug's true effect.
+  LOW sigma2 = HIGH confidence (we know clearly, in either direction).
+  HIGH sigma2 = LOW confidence (small, indirect, or ambiguous).
+
+  CONFIRMING evidence:
     0.05-0.10  large, consistent, directly-relevant dataset
-    0.15-0.30  typical single study, or a moderately-relevant analog
-    0.40-0.80  small/early/indirect/anecdotal data, or a loosely-relevant analog
+    0.15-0.30  typical single study, moderately-relevant analog
+    0.40-0.80  small/early/indirect/anecdotal data, loosely-relevant analog
 
+  DISCONFIRMING evidence — sigma2 must reflect CONFIDENCE IN THE NEGATIVE, not just sample size:
+    3+ consistent class failures, well-documented:
+      → sigma2 0.08–0.15 (MANY consistent negatives = HIGH confidence they're negative = LOW sigma2)
+    1-2 failures, or early-stage failures only:
+      → sigma2 0.20–0.35
+    Single failing analog with weak relevance:
+      → sigma2 0.40-0.60
+  CRITICAL: Do NOT give a class graveyard sigma2 = 0.6. That would barely move the prior.
+  Multiple consistent documented failures → LOW sigma2 (high confidence) → strong downward pull.
+
+SYMMETRY RULE: Strong confirming evidence → HIGH mu, LOW sigma2 (strong upward pull).
+Strong disconfirming evidence → LOW mu, LOW sigma2 (strong downward pull). This is intentional
+and correct — the engine is calibrated to move in BOTH directions, not just the optimistic one.
 Both must be valid JSON numbers. Clamp mu to [0,2] and sigma2 to [0.05,0.8] yourself.`;
 
 // ─── System prompts ───────────────────────────────────────────────────────────
@@ -106,8 +130,22 @@ STEP 1 — IDENTIFY CANDIDATES: search for OTHER drugs (approved, failed, or in 
 STEP 2 — SCORE RELEVANCE of each candidate on three axes: target (same target > same pathway > same broad class), indication (same disease > related pathophysiology > different), modality (same drug type — small molecule/mAb/ADC/gene therapy — > related > very different).
 
 STEP 3 — SYNTHESIZE:
-- mu: what does the analog track record suggest about likely effect size for THIS drug's mechanism? A class with repeated clinical success → higher mu. A class with repeated high-profile failures → lower mu — regardless of how good this drug's OWN mechanism score was. This evidence's job is to potentially CONFLICT with the mechanism story.
-- sigma2: reflects both consistency across analogs AND their relevance (from Step 2). High relevance + multiple consistent analogs → lower sigma2 (0.10-0.20). Single analog, or relevant on only one axis → higher sigma2 (0.4-0.8).
+- mu: what does the analog track record suggest about likely effect size for THIS drug's mechanism?
+  * Class with repeated clinical success → mu 0.9-1.5 (higher is better)
+  * CLASS GRAVEYARD (3+ programs failed/discontinued, no pivotal success in class) → mu in 0.10-0.35.
+    This is STRONG NEGATIVE EVIDENCE. If no drug in this mechanism class has ever succeeded in
+    Phase 2/3, that is not a "5-point nudge" situation — it is a class-level signal of likely
+    failure that should substantially pull the prior DOWN. Do NOT soften this.
+  * Mixed track record (some successes, some failures) → mu 0.5-0.8
+  * This evidence's job is to potentially CONFLICT with the mechanism story — don't suppress that conflict.
+
+- sigma2: determined by NUMBER and CONSISTENCY of analog data points, not just "is this indirect":
+  * 3+ consistent class failures (well-documented, different companies) → sigma2 0.08-0.15
+    (multiple consistent negatives = HIGH CONFIDENCE = LOW sigma2 = STRONG downward pull)
+  * 1-2 failures, or mixed → sigma2 0.20-0.35
+  * Single analog, or very different indication → sigma2 0.40-0.60
+  CRITICAL: A class graveyard with 4+ documented Phase 2+ failures must NOT get sigma2 0.6.
+  Your confidence in that negative signal is HIGH, so sigma2 must be LOW (0.08-0.15).
 
 found: false IS APPROPRIATE WHEN:
 - No drugs with meaningful target/pathway overlap have reached a stage with clinical outcome data (genuinely first-in-class target).
@@ -133,8 +171,43 @@ ${SCALE_CALIBRATION}
 YOUR TASK: search for THIS drug's own clinical results (Phase 1/1b/2/interim 3 — press releases, conference presentations, CT.gov results postings). Focus on EFFICACY signals: response rates, biomarker changes consistent with mechanism, time-to-event endpoints — anything speaking to whether the drug DOES WHAT THE MECHANISM PREDICTS in humans.
 
 REASONING GUIDANCE:
-- mu reflects how strong the observed effect was vs. what you'd expect for this mechanism/indication: clearly above historical controls/SOC → higher mu; roughly in line with SOC/placebo → mu near 1.0; flat/null/wrong-direction → lower mu.
-- sigma2 reflects sample size/maturity: small early cohort (n<30, short follow-up) → higher sigma2 (0.4-0.8) even with a good point estimate. Larger/more mature/controlled → lower sigma2 (0.10-0.25).
+- mu reflects how strong the observed effect was vs. what you'd expect for this mechanism/indication:
+  * Clearly above historical controls/SOC → mu 0.9-1.6 (higher = stronger)
+  * Roughly in line with SOC → mu 0.7-1.0
+  * STABLE DISEASE ONLY, ZERO OBJECTIVE RESPONSES in a solid-tumor ORR-gated trial:
+    → mu in 0.25-0.45. Stable disease in a context where ORR is the approval gate is
+      near-failure for the efficacy bar. Do NOT score it as "average" (mu≈1.0). It is a weak
+      positive at best, near-negative in most regulatory contexts. Score it accordingly.
+  * Flat/null/wrong-direction: mu 0.10-0.35
+
+- sigma2 reflects sample size/maturity AND any translation gap (see below):
+  * Large/mature/controlled trial → sigma2 0.10-0.25
+  * Small early cohort (n<30, short follow-up) → sigma2 0.40-0.65
+
+INDICATION/ENDPOINT MISMATCH — ALWAYS REASON ABOUT THIS:
+  Compare the setting and endpoint of the evidence you found to the indication being VALUED.
+  If they differ, the translation gap MUST widen sigma2 AND pull mu toward the base rate (≈0.7-0.9).
+
+  HIGH translation gap (large sigma2 penalty + mu regression):
+  - Evidence: RECIST response (PR/SD/PD) or ORR in measurable METASTATIC disease
+    Indication valued: ctDNA clearance / MRD negativity / biomarker clearance in POST-SURGERY
+    minimal-residual-disease setting (no measurable disease, RECIST doesn't apply)
+    → sigma2 += 0.25-0.35 (push sigma2 to 0.55-0.70 even for small n).
+      mu → pull toward 0.6-0.85 (these settings have different biology; the metastatic ORR
+      tells you little about whether the drug can clear microscopic residual disease).
+  - Evidence: any mixed-histology basket cohort
+    Indication valued: single specific tumor type
+    → sigma2 += 0.15-0.20; mild mu regression
+
+  MODERATE translation gap:
+  - Evidence: same tumor type, different line of therapy
+    → sigma2 += 0.10-0.15
+
+  LOW / NO translation gap:
+  - Evidence: same tumor type, same line, same endpoint type as indication being valued
+    → No adjustment; use evidence directly
+
+  STATE EXPLICITLY whether a mismatch exists, what it is, and how it changed your sigma2/mu.
 
 found: false IS APPROPRIATE WHEN:
 - No clinical efficacy data reported yet (still Phase 1 dose-escalation with only safety/PK/tolerability, or Preclinical).

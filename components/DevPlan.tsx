@@ -277,22 +277,47 @@ function StageCard({
             </div>
           </div>
 
-          {/* Response-rate curve: prior → posterior */}
+          {/* Endpoint rationale */}
+          {stage.endpointRationale && (
+            <div style={{ marginBottom: 12, padding: "8px 10px", background: "var(--surface-2)", borderRadius: 6, borderLeft: "3px solid var(--border)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+                  Why this endpoint
+                </div>
+                {stage.endpointEvidenceBasis && (
+                  <span style={{
+                    fontSize: 8, fontWeight: 700, padding: "1px 6px", borderRadius: 10,
+                    background: stage.endpointEvidenceBasis === "CONFIRMED" ? "rgba(16,185,129,0.15)" : "rgba(59,130,246,0.15)",
+                    color: stage.endpointEvidenceBasis === "CONFIRMED" ? "#10b981" : "#3b82f6",
+                  }}>
+                    {stage.endpointEvidenceBasis}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 }}>{stage.endpointRationale}</div>
+            </div>
+          )}
+
+          {/* Response-rate curve: prior → posterior, with optional comparator overlay */}
           {stage.rrPriorGrid && stage.rrPosteriorGrid && (
             <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px" }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
                 Estimated True Response Rate
               </div>
 
-              {/* Density chart: prior (dashed) vs posterior (solid) */}
-              <div style={{ height: 100 }}>
+              {/* Density chart: prior (dashed) vs posterior (solid) vs comparator (red) */}
+              <div style={{ height: 110 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart
-                    data={stage.rrPriorGrid.theta.map((t: number, i: number) => ({
-                      theta: t,
-                      prior: stage.rrPriorGrid!.density[i],
-                      posterior: stage.rrPosteriorGrid!.density[i],
-                    }))}
+                    data={stage.rrPriorGrid.theta.map((t: number, i: number) => {
+                      const comp = stage.comparatorGrid;
+                      return {
+                        theta: t,
+                        prior: stage.rrPriorGrid!.density[i],
+                        posterior: stage.rrPosteriorGrid!.density[i],
+                        comparator: comp ? comp.density[i] : undefined,
+                      };
+                    })}
                     margin={{ top: 4, right: 4, left: 4, bottom: 0 }}
                   >
                     <XAxis
@@ -305,6 +330,14 @@ function StageCard({
                       stroke="var(--text-faint)" strokeDasharray="4 3"
                       label={{ value: "threshold", position: "top", fontSize: 8, fill: "var(--text-faint)" }}
                     />
+                    {/* Comparator distribution (rendered first so drug curves overlay it) */}
+                    {stage.comparatorGrid && (
+                      <Area
+                        type="monotone" dataKey="comparator"
+                        stroke="#f87171" fill="#f87171" fillOpacity={0.12}
+                        strokeWidth={1.5} strokeDasharray="2 2" isAnimationActive={false}
+                      />
+                    )}
                     <Area
                       type="monotone" dataKey="prior"
                       stroke="var(--text-faint)" fill="var(--text-faint)" fillOpacity={0.08}
@@ -318,10 +351,31 @@ function StageCard({
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
-              <div style={{ display: "flex", gap: 12, justifyContent: "center", fontSize: 9, color: "var(--text-faint)", marginTop: 2 }}>
-                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--text-faint)", marginRight: 4, opacity: 0.5 }} />Before</span>
-                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--accent)", marginRight: 4 }} />After success</span>
+
+              {/* Legend */}
+              <div style={{ display: "flex", gap: 12, justifyContent: "center", fontSize: 9, color: "var(--text-faint)", marginTop: 2, flexWrap: "wrap" }}>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--text-faint)", marginRight: 4, opacity: 0.5 }} />Drug (before)</span>
+                <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "var(--accent)", marginRight: 4 }} />Drug (after success)</span>
+                {stage.comparatorGrid && (
+                  <span><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: "#f87171", marginRight: 4 }} />Comparator</span>
+                )}
               </div>
+
+              {/* Comparator source */}
+              {stage.comparatorGrid && stage.comparatorSource && (
+                <div style={{ marginTop: 5, fontSize: 10, color: "var(--text-faint)", fontStyle: "italic" }}>
+                  Comparator: {stage.comparatorSource}
+                  {stage.comparatorSigma2Effective > 0 && (
+                    <span style={{ color: "#f59e0b", marginLeft: 4 }}>
+                      (σ²={stage.comparatorSigma2Effective.toFixed(4)} — {
+                        stage.comparatorSigma2Effective < 0.005 ? "well-studied" :
+                        stage.comparatorSigma2Effective < 0.015 ? "moderate uncertainty" :
+                        "uncertain benchmark"
+                      })
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Band masses — plain language */}
               {stage.bandsBefore && stage.bandsAfter && (
@@ -594,7 +648,7 @@ export default function DevPlan({ stageInputs, devPlan, reasoning, loading, onUp
 
       {/* Methodology */}
       <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
-        P(trial success) = ∫ P(success|θ) × prior(θ) dθ — true Bayesian posterior updating over response-rate distributions. Small trials tighten the curve less than large trials (emerges from the math, not a fixed factor). Prior is a Beta mixture anchored to the evidence engine; posterior ∝ prior × trial power function, computed on a 1001-point grid. What-if counterfactuals re-run the full model with one input changed. Risk-adj cost = trial cost × P(all prior stages succeeded) · eNPV = P(approval) × Revenue PV − total risk-adj cost · n and CPP are AI-estimated and editable — click any underlined number
+        P(trial success) = ∫ P(success|θ) × prior(θ) dθ — true Bayesian posterior over response-rate distributions. Small trials tighten less than large trials (emerges from the math). Comparator shown as a distribution (not a point) — σ²_comparator enters the power denominator: single-arm vs uncertain historical benchmark is less conclusive than a concurrent-control RCT. Endpoint rationale tagged CONFIRMED (company-stated) or INFERRED (FDA precedent / regulatory convention). What-if counterfactuals re-run the full model with one input changed. Risk-adj cost = trial cost × P(all prior stages succeeded) · n and CPP are AI-estimated and editable — click any underlined number
       </div>
     </div>
   );

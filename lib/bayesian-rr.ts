@@ -399,16 +399,21 @@ export function downsampleGrid(
  * Compute P(trial success | θ_true, trial design) — the statistical
  * power of the trial at a given true response rate θ.
  *
- * @param theta    True response rate (0-1)
- * @param nullRR   Null/control response rate (historical control or SOC)
- * @param n        Total sample size
- * @param design   Trial design parameters affecting n_effective and z_alpha
+ * @param theta             True response rate (0-1)
+ * @param nullRR            Null/control response rate (historical control or SOC)
+ * @param n                 Total sample size
+ * @param design            Trial design parameters affecting n_effective and z_alpha
+ * @param comparatorSigma2  Variance of the historical control estimate (0 for RCTs with
+ *                          concurrent control; >0 for single-arm vs uncertain historical
+ *                          benchmark). Widens the success denominator, correctly making
+ *                          single-arm comparisons against uncertain baselines less confident.
  */
 export function rrTrialPower(
   theta: number,
   nullRR: number,
   n: number,
   design: RRTrialDesign,
+  comparatorSigma2: number = 0,
 ): number {
   if (theta <= 0 || theta >= 1) return theta >= 1 ? 1 : 0;
   if (n < 1) return 0;
@@ -420,28 +425,64 @@ export function rrTrialPower(
   const zA = Z_ALPHA[design.regulatoryContext] ?? 1.645;
 
   if (design.designType === "rct") {
-    // Two-proportion z-test power (equal allocation)
+    // Two-proportion z-test (equal allocation). For RCTs the control arm is
+    // measured in-trial; comparatorSigma2 adds any residual external-benchmark
+    // uncertainty (typically ~0 for a proper RCT).
     const nArm = Math.max(1, nEff / 2);
     const se = Math.sqrt(
-      (theta * (1 - theta) + nullRR * (1 - nullRR)) / nArm
+      (theta * (1 - theta) + nullRR * (1 - nullRR)) / nArm + comparatorSigma2
     );
     if (se < 1e-10) return theta > nullRR ? 1 : 0;
     return normalCDF((theta - nullRR) / se - zA);
   }
 
-  // Single-arm (or basket): one-proportion test vs historical control
+  // Single-arm (or basket): one-proportion test vs historical control.
+  // comparatorSigma2 represents uncertainty in that historical benchmark —
+  // higher for informal/sparse historical data, lower for well-studied SOC.
   const nSingleArm = design.designType === "basket"
     ? Math.max(1, nEff / 3)  // basket splits across ~3 cohorts
     : Math.max(1, nEff);
 
-  // Critical observed RR to reject H₀
+  // Critical observed RR to reject H₀ (based on null distribution alone)
   const seCrit = Math.sqrt(nullRR * (1 - nullRR) / nSingleArm);
   const thetaCrit = nullRR + zA * seCrit;
 
-  // Power: P(observed RR > θ_crit | θ_true)
-  const seObs = Math.sqrt(theta * (1 - theta) / nSingleArm);
+  // Power: P(observed RR > θ_crit | θ_true), with comparator uncertainty
+  // widening the denominator — makes the test less conclusive when the
+  // historical benchmark itself is uncertain.
+  const seObs = Math.sqrt(theta * (1 - theta) / nSingleArm + comparatorSigma2);
   if (seObs < 1e-10) return theta > thetaCrit ? 1 : 0;
   return normalCDF((theta - thetaCrit) / seObs);
+}
+
+// ─── Comparator distribution grid ────────────────────────────────────────────
+//
+// Represents the historical control / SOC rate as a probability DISTRIBUTION
+// rather than a single known number. The width of this distribution depends on
+// how well-established the benchmark is:
+//   RCT (concurrent control) → comparatorSigma2 = 0, no comparator curve shown
+//   Single-arm vs well-studied SOC → comparatorSigma2 ≈ 0.002-0.008 (narrow)
+//   Single-arm vs approximate/sparse historical control → ≈ 0.010-0.040 (wide)
+//
+// The comparator curve is displayed alongside the drug prior/posterior so users
+// can SEE that success = the drug's curve sitting clearly above the comparator's
+// curve — accounting for both distributions' widths, not just a point threshold.
+
+/**
+ * Build a downsampled comparator density curve for UI display.
+ * Converts (nullRR, comparatorSigma2) → Beta distribution → 60-point grid.
+ * Returns null when comparatorSigma2 is negligibly small (no meaningful width).
+ */
+export function makeComparatorGrid(
+  nullRR: number,
+  comparatorSigma2: number,
+): { theta: number[]; density: number[] } | null {
+  if (comparatorSigma2 <= 0.0005) return null;
+  // Reuse Gaussian-to-Beta: treat comparator as Gaussian(nullRR×2, comparatorSigma2×4)
+  // so mean_rr = nullRR and var_rr = comparatorSigma2 in response-rate space.
+  const { alpha, beta: betaP } = gaussianToBeta(nullRR * 2, comparatorSigma2 * 4);
+  const grid = betaToGrid([{ w: 1, alpha, beta: betaP }]);
+  return downsampleGrid(grid, 60);
 }
 
 // ─── Stage success probability (numerical integration) ───────────────────
@@ -460,10 +501,11 @@ export function computeStageSuccess(
   n: number,
   nullRR: number,
   design: RRTrialDesign,
+  comparatorSigma2: number = 0,
 ): number {
   let pSuccess = 0;
   for (let i = 0; i < priorGrid.theta.length; i++) {
-    const power = rrTrialPower(priorGrid.theta[i], nullRR, n, design);
+    const power = rrTrialPower(priorGrid.theta[i], nullRR, n, design, comparatorSigma2);
     pSuccess += priorGrid.density[i] * power * GRID_STEP;
   }
   return Math.max(0, Math.min(1, pSuccess));
@@ -494,12 +536,13 @@ export function posteriorAfterSuccess(
   n: number,
   nullRR: number,
   design: RRTrialDesign,
+  comparatorSigma2: number = 0,
 ): RRGrid {
   const theta = priorGrid.theta;
   const posterior: number[] = new Array(theta.length);
 
   for (let i = 0; i < theta.length; i++) {
-    const power = rrTrialPower(theta[i], nullRR, n, design);
+    const power = rrTrialPower(theta[i], nullRR, n, design, comparatorSigma2);
     posterior[i] = priorGrid.density[i] * power;
   }
 
@@ -618,6 +661,7 @@ export function generateCounterfactuals(
   nullRR: number,
   design: RRTrialDesign,
   basePSuccess: number,
+  comparatorSigma2: number = 0,
 ): { label: string; pSuccess: number }[] {
   const results: { label: string; pSuccess: number }[] = [];
 
@@ -664,19 +708,24 @@ export type StageRRResult = {
   posteriorMean: number;
   effectiveNullRR: number;       // the threshold actually used (after floor)
   rawNullRR: number;             // the raw SOC rate before floor
+  comparatorSigma2: number;      // variance of the historical control estimate
+  /** Downsampled comparator density for chart display. null when comparatorSigma2 ≈ 0. */
+  comparatorGrid: { theta: number[]; density: number[] } | null;
   counterfactuals: { label: string; pSuccess: number }[];
 };
 
 /**
  * Run the full Bayesian response-rate computation for one trial stage.
  *
- * @param gaussianMixture  Current effect-prior mixture (Gaussian space)
- * @param n                Trial sample size
- * @param nullRR           Raw null/control response rate (0-1) — will be floored
- * @param design           Trial design parameters
- * @param isTimeToEvent    True if endpoint is TTE (higher threshold floor)
- * @param observedRR       If set, use observed-result mode instead of success-event
- * @param observedN        N for the observed result (required if observedRR set)
+ * @param gaussianMixture   Current effect-prior mixture (Gaussian space)
+ * @param n                 Trial sample size
+ * @param nullRR            Raw null/control response rate (0-1) — will be floored
+ * @param design            Trial design parameters
+ * @param isTimeToEvent     True if endpoint is TTE (higher threshold floor)
+ * @param observedRR        If set, use observed-result mode instead of success-event
+ * @param observedN         N for the observed result (required if observedRR set)
+ * @param comparatorSigma2  Variance of the historical control estimate (0 for RCTs;
+ *                          >0 for single-arm vs uncertain historical benchmark)
  */
 export function computeStageRR(
   gaussianMixture: EffectPriorMixture,
@@ -686,6 +735,7 @@ export function computeStageRR(
   isTimeToEvent: boolean = false,
   observedRR?: number,
   observedN?: number,
+  comparatorSigma2: number = 0,
 ): StageRRResult {
   // 0. Apply clinically meaningful threshold floor
   const effectiveNull = effectiveThreshold(nullRR, isTimeToEvent);
@@ -694,13 +744,13 @@ export function computeStageRR(
   const betaMix = mixtureToBeta(gaussianMixture);
   const priorGrid = betaToGrid(betaMix);
 
-  // 2. Compute P(stage success) via numerical integration
-  const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, design);
+  // 2. Compute P(stage success) via numerical integration (with comparator uncertainty)
+  const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, design, comparatorSigma2);
 
   // 3. Compute posterior
   const posteriorGrid = (observedRR != null && observedN != null)
     ? posteriorFromObservedRR(priorGrid, observedRR, observedN)
-    : posteriorAfterSuccess(priorGrid, n, effectiveNull, design);
+    : posteriorAfterSuccess(priorGrid, n, effectiveNull, design, comparatorSigma2);
 
   // 4. Band masses before and after (use effective threshold for bands)
   const bandsBefore = computeBandMasses(priorGrid, effectiveNull);
@@ -712,8 +762,11 @@ export function computeStageRR(
 
   // 6. Counterfactual ablations (use effective threshold)
   const counterfactuals = generateCounterfactuals(
-    priorGrid, n, effectiveNull, design, trialSuccessProb,
+    priorGrid, n, effectiveNull, design, trialSuccessProb, comparatorSigma2,
   );
+
+  // 7. Build comparator distribution curve for display
+  const comparatorGrid = makeComparatorGrid(effectiveNull, comparatorSigma2);
 
   return {
     priorGrid,
@@ -725,6 +778,8 @@ export function computeStageRR(
     posteriorMean: posteriorMoments.mean,
     effectiveNullRR: effectiveNull,
     rawNullRR: nullRR,
+    comparatorSigma2,
+    comparatorGrid,
     counterfactuals,
   };
 }

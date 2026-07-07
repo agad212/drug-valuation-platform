@@ -115,6 +115,10 @@ type StageOutput = {
   startupCushionMonths: number;
   nullResponseRate?: number;
   isTimeToEvent?: boolean;
+  endpointRationale?: string;
+  endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
+  comparatorSigma2?: number;
+  comparatorSource?: string;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -180,7 +184,49 @@ NULL RESPONSE RATE — REQUIRED for each stage:
    - Common disease with strong SOC: 0.25–0.50
    Think: "what response rate would a placebo or SOC patient show for this endpoint?"
 
-11. For EACH stage, set "isTimeToEvent": true if the PRIMARY endpoint is OS, PFS, DFS, EFS, or any survival/time-to-event/Kaplan-Meier endpoint. false for response rate endpoints (ORR, CR rate, biomarker clearance, BCVA improvement, etc.).
+11. ENDPOINT TYPE — CRITICAL, read carefully before setting isTimeToEvent:
+   Set "isTimeToEvent": true ONLY if the PRIMARY gating endpoint is OS, PFS, DFS, RFS, EFS,
+   or any Kaplan-Meier / time-to-event / survival endpoint. These are measured in time units.
+   Set "isTimeToEvent": false for ALL of the following (they are RATES, not time-to-event):
+   - ORR, DCR, CR rate, PR rate (oncology response rates)
+   - ctDNA clearance, ctDNA negativity (proportion of patients clearing ctDNA)
+   - MRD negativity rate, MRD clearance rate
+   - Biomarker clearance rate (any % of patients achieving a clearance/negativity endpoint)
+   - BCVA improvement, visual acuity endpoints (measured at a fixed time point)
+   - Pathological complete response (pCR)
+   - Any endpoint measuring a PROPORTION of patients achieving a binary outcome
+   When a stage has BOTH a rate endpoint (e.g. ctDNA clearance as primary gate) AND a
+   time-to-event secondary (e.g. RFS), isTimeToEvent reflects the PRIMARY GATING endpoint ONLY.
+
+12. ENDPOINT RATIONALE — REQUIRED for EACH stage:
+   Set "endpointRationale": a plain-language sentence explaining WHY this endpoint is the
+   right primary readout for this stage.
+   - Current trial: explain why this endpoint is the proof-of-concept or gating readout
+     for this specific stage (e.g. "ctDNA clearance is the proof-of-concept readout for
+     this Phase 2a because in the MRD setting there is no measurable disease for RECIST,
+     and ctDNA clearance is the validated early signal of MRD elimination").
+   - Future/pivotal stage: explain why this endpoint is the expected registration basis.
+
+13. ENDPOINT EVIDENCE BASIS — REQUIRED for EACH stage:
+   Set "endpointEvidenceBasis": "CONFIRMED" if the company has publicly stated this endpoint
+   (e.g. CT.gov primary endpoint, investor presentation, press release). "INFERRED" if you
+   are inferring it from FDA precedent, regulatory convention, or clinical practice — e.g.
+   "Phase 3 modeled on RFS — FDA precedent in adjuvant/MRD settings; not stated by company."
+   NEVER present a convention-based inference as CONFIRMED.
+
+14. COMPARATOR UNCERTAINTY — REQUIRED for each stage:
+   Set "comparatorSigma2": the variance of the historical control / SOC response rate estimate.
+   This reflects how well-established the comparator rate is, NOT the drug's uncertainty.
+   - RCT (concurrent control arm measured in-trial): 0.000 — the control is measured directly
+   - Single-arm vs well-studied SOC (large meta-analysis, 200+ patients, multiple publications):
+     0.002–0.006 (narrow — we know the rate well)
+   - Single-arm vs single reference study (n=50-100): 0.008–0.015
+   - Single-arm vs approximate/informal historical control: 0.015–0.035
+   - Single-arm vs sparse/preliminary data (1-2 small studies, heterogeneous): 0.025–0.050
+   Set "comparatorSource": one sentence describing where the comparator rate comes from
+   (e.g. "ORR 5% from pooled analysis of BSC in 3L+ CRC, Smith et al. JCO 2023").
+   This is DIFFERENT from nullResponseRate (which is the mean) — comparatorSigma2 is
+   the UNCERTAINTY AROUND that mean, reflecting how well we know it.
 
 ABSOLUTE CONSTRAINT: Return EXACTLY 2 stages if currently in Phase 2, or EXACTLY 1 stage if currently in Phase 3. Never return 3 or more stages.
 
@@ -198,6 +244,10 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
       "startupCushionMonths": 8,
       "nullResponseRate": 0.05,
       "isTimeToEvent": false,
+      "endpointRationale": "BCVA and light sensitivity are the primary functional readouts; BCVA is the FDA-accepted endpoint for retinal dystrophy (LUXTURNA precedent).",
+      "endpointEvidenceBasis": "CONFIRMED",
+      "comparatorSigma2": 0.012,
+      "comparatorSource": "Natural history data: ~5% spontaneous BCVA improvement in IRD, from 3 retrospective studies.",
       "isCurrentTrial": true,
       "aiRationale": "One sentence explaining this stage.",
       "trialDesign": {
@@ -222,6 +272,10 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
       "startupCushionMonths": 8,
       "nullResponseRate": 0.05,
       "isTimeToEvent": false,
+      "endpointRationale": "BCVA improvement vs sham control is the registration endpoint — inferred from FDA precedent in inherited retinal disease (LUXTURNA, Spark Therapeutics).",
+      "endpointEvidenceBasis": "INFERRED",
+      "comparatorSigma2": 0.000,
+      "comparatorSource": "Sham injection arm measured in-trial (concurrent control).",
       "isCurrentTrial": false,
       "aiRationale": "One sentence explaining why this stage is needed.",
       "trialDesign": {
@@ -305,6 +359,13 @@ Reason about the full development path. Return the current trial as stage 1 (use
           ? Math.round(s.nullResponseRate * 1000) / 1000  // clamp to 3 decimal places
           : undefined,  // let dev-plan.ts use DEFAULT_NULL_RR
         isTimeToEvent: s.isTimeToEvent === true,
+        endpointRationale: typeof s.endpointRationale === "string" ? s.endpointRationale : undefined,
+        endpointEvidenceBasis: (s.endpointEvidenceBasis === "CONFIRMED" || s.endpointEvidenceBasis === "INFERRED")
+          ? s.endpointEvidenceBasis : "INFERRED",
+        comparatorSigma2: (typeof s.comparatorSigma2 === "number" && s.comparatorSigma2 >= 0 && s.comparatorSigma2 < 0.5)
+          ? Math.round(s.comparatorSigma2 * 10000) / 10000  // 4 decimal places
+          : 0,
+        comparatorSource: typeof s.comparatorSource === "string" ? s.comparatorSource : undefined,
       };
     });
 
