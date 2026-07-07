@@ -443,6 +443,15 @@ export default function HomePage() {
   const [appliedNctIds, setAppliedNctIds] = useState<Set<string>>(new Set());
   const [valuationBrief, setValuationBrief] = useState<ValuationBrief | null>(null);
   const [briefLoading, setBriefLoading] = useState(false);
+  // Governance gate: the valuationBrief MUST govern every valuation. This status
+  // makes a missing/failed brief a hard, visible failure instead of a silent
+  // fallback to the raw CT.gov pipeline (which produced confident-but-wrong numbers).
+  //   idle      — no auto-value run yet (manual entry mode)
+  //   loading   — lead reasoner in flight
+  //   complete  — brief governs this valuation; downstream may run
+  //   failed    — lead reasoner failed after retries; valuation is HALTED
+  const [briefStatus, setBriefStatus] = useState<"idle" | "loading" | "complete" | "failed">("idle");
+  const [briefError, setBriefError] = useState<string | null>(null);
   const [briefSummary, setBriefSummary] = useState<string | null>(null);
   const [expectationAudit, setExpectationAudit] = useState<ExpectationAuditResult | null>(null);
   const { pushToast, ToastHost } = useToast();
@@ -457,7 +466,9 @@ export default function HomePage() {
   );
 
   const devPlan = useMemo<DevPlanResult | null>(() => {
-    if (!devPlanStages || !base) return null;
+    // The valuationBrief GOVERNS the dev plan (it sourced the threshold, the
+    // efficacy-gate trial, and the SOC anchor). No brief → no P(approval)/eNPV.
+    if (!devPlanStages || !base || !valuationBrief) return null;
     const revenuePVM = (out.revenuePV ?? 0) / 1e6;
     const mixture = effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
     return computeDevPlan(
@@ -465,7 +476,7 @@ export default function HomePage() {
       { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0 },
       revenuePVM,
     );
-  }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior]);
+  }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief]);
 
   // ── Expectation smoke detector: fires when devPlan result changes ─────────
   useEffect(() => {
@@ -599,51 +610,98 @@ export default function HomePage() {
     }
   }
 
-  // ── Lead Reasoner: runs FIRST, produces strategic assessment ─────────────
+  // ── Lead Reasoner: runs FIRST, GOVERNS the whole valuation ────────────────
+  // Returns a valid brief or null. On null the caller MUST halt — it must not
+  // fall back to the raw pipeline. Auto-retries transient failures (timeout,
+  // overload, unparseable output) up to 2 times before failing.
   async function onRunLeadReasoner(
     drug: string, sponsor?: string, phase?: string,
     mechanism?: string, indication?: string,
   ): Promise<ValuationBrief | null> {
     setBriefLoading(true);
+    setBriefStatus("loading");
+    setBriefError(null);
     setValuationBrief(null);
     setBriefSummary(null);
     setExpectationAudit(null);
+
+    const MAX_ATTEMPTS = 3;
+    let lastError = "Lead reasoner did not produce an assessment.";
+
     try {
-      const res = await fetch("/api/lead-reasoner", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ drug, sponsor, phase, mechanism, indication }),
-      });
-      const data = await res.json();
-      if (data.brief) {
-        setValuationBrief(data.brief);
-        setBriefSummary(data.summary ?? null);
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const res = await fetch("/api/lead-reasoner", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ drug, sponsor, phase, mechanism, indication }),
+          });
+          const data = await res.json();
 
-        // Apply the brief's findings to the valuation state
-        const brief = data.brief as ValuationBrief;
-        setV((cur) => ({
-          ...cur,
-          phase: brief.true_stage?.value || cur.phase,
-          indication: brief.base_case_indication?.value || cur.indication,
-        }));
+          if (res.ok && data.brief) {
+            setValuationBrief(data.brief);
+            setBriefSummary(data.summary ?? null);
+            setBriefStatus("complete");
 
-        pushToast(
-          `Strategic assessment complete — ${brief.is_low_confidence ? "LOW CONFIDENCE (thin evidence basis)" : "base case framed"}`,
-          brief.is_low_confidence ? "info" : "success",
-          6000,
-        );
-        return brief;
-      } else {
-        pushToast(data.error || "Lead reasoner did not produce an assessment.", "error");
-        return null;
+            const brief = data.brief as ValuationBrief;
+            setV((cur) => ({
+              ...cur,
+              phase: brief.true_stage?.value || cur.phase,
+              indication: brief.base_case_indication?.value || cur.indication,
+            }));
+
+            pushToast(
+              `Strategic assessment complete — ${brief.is_low_confidence ? "LOW CONFIDENCE (thin evidence basis)" : "base case framed"}`,
+              brief.is_low_confidence ? "info" : "success",
+              6000,
+            );
+            return brief;
+          }
+
+          // No valid brief. Credit-balance (402) is not transient — fail fast.
+          lastError = data.error || `Lead reasoner returned no brief (HTTP ${res.status}).`;
+          if (res.status === 402) break;
+          if (attempt < MAX_ATTEMPTS) {
+            pushToast(`Strategic assessment attempt ${attempt} failed — retrying…`, "info", 4000);
+            await new Promise((r) => setTimeout(r, 2000 * attempt));
+          }
+        } catch (e: any) {
+          lastError = e?.message || "network error";
+          console.error(`[lead-reasoner] attempt ${attempt} failed:`, lastError);
+          if (attempt < MAX_ATTEMPTS) await new Promise((r) => setTimeout(r, 2000 * attempt));
+        }
       }
-    } catch (e: any) {
-      console.error("[lead-reasoner] failed:", e?.message);
-      pushToast(`Strategic assessment failed: ${e?.message || "error"}`, "error");
+
+      // All attempts exhausted — HALT. Do not let the pipeline proceed.
+      setBriefStatus("failed");
+      setBriefError(lastError);
       return null;
     } finally {
       setBriefLoading(false);
     }
+  }
+
+  // Retry the governing brief after a failure, then resume the governed pipeline.
+  async function onRetryLeadReasoner() {
+    const drug = v.asset || (v as any).name;
+    if (!drug) return;
+    const brief = await onRunLeadReasoner(drug, v.sponsor, v.phase, v.mechanism, v.indication);
+    if (!brief) {
+      pushToast("Strategic assessment still failed — valuation not run.", "error", 8000);
+      return;
+    }
+    const indication = brief.base_case_indication?.value || v.indications?.[0]?.name || v.indication || "";
+    const phase = brief.true_stage?.value || v.phase || "Phase 2";
+    if (brief.base_case_indication?.value) {
+      setV((cur) => ({
+        ...cur,
+        indication,
+        phase,
+        indications: cur.indications?.map((ind, i) => (i === 0 ? { ...ind, name: indication } : ind)),
+      }));
+    }
+    pushToast("Strategic assessment complete — running valuation…", "success", 6000);
+    onScorePtrs(drug, v.mechanism || "", indication, phase, v.sponsor);
   }
 
   // ── Expectation smoke detector: ACTIVE CLOSED LOOP ──────────────────────
@@ -849,20 +907,34 @@ export default function HomePage() {
         setTimeout(() => onResearchRevenue(autoIndNames, drug), 15000);
       }
 
-      // Wait for the brief to finish (if it hasn't already), then use it
-      // to govern PTRS scoring. The brief runs in parallel with auto-value,
-      // so by the time we reach here, it may already be done.
+      // Wait for the brief — it GOVERNS the valuation. It runs in parallel with
+      // auto-value, so it may already be done by the time we reach here.
       const brief = await briefPromise;
-      const briefIndication = brief?.base_case_indication?.value;
+
+      // ── HARD GATE ────────────────────────────────────────────────────────
+      // If the brief didn't complete, HALT. The old code fell through here with
+      // `brief?.…` optional chaining and ran PTRS/dev-plan on CT.gov defaults,
+      // producing a confident-but-ungoverned P(approval). That is worse than an
+      // error. briefStatus is already "failed" (set by onRunLeadReasoner); the
+      // UI shows the failure state + Retry. Do NOT score PTRS or build a dev plan.
+      if (!brief) {
+        pushToast(
+          "Couldn't complete the strategic assessment — valuation not run. Press Retry in the Strategic Assessment card.",
+          "error", 10000,
+        );
+        return `Loaded trials for **${drug}**, but the strategic assessment did not complete — no probability or eNPV was computed. Retry the strategic assessment to run the valuation.`;
+      }
+
+      const briefIndication = brief.base_case_indication?.value;
       const ptrsIndication = briefIndication || autoIndNames[0] || "";
-      const ptrsPhase = brief?.true_stage?.value || data.phase;
+      const ptrsPhase = brief.true_stage?.value || data.phase;
 
       // Re-apply brief's indication now that both brief and auto-value are done
       if (briefIndication) {
         setV((cur) => ({
           ...cur,
           indication: briefIndication,
-          phase: brief?.true_stage?.value || cur.phase,
+          phase: brief.true_stage?.value || cur.phase,
           indications: cur.indications?.map((ind, i) =>
             i === 0 ? { ...ind, name: briefIndication } : ind
           ),
@@ -997,6 +1069,13 @@ export default function HomePage() {
 
   async function onGenerateDevPlan(drug: string, indication: string, phase: string, sponsor: string | undefined, l2Result: any) {
     if (!l2Result?.trialInputs) return;
+    // Governance gate: the dev plan's thresholds come from the brief's sourced
+    // SOC/registration rate. Without a brief, the threshold collapses and
+    // P(trial success) inflates to ~100% — refuse to build it.
+    if (!valuationBrief) {
+      console.warn("[dev-plan] skipped: no governing valuationBrief");
+      return;
+    }
     setDevPlanLoading(true);
     try {
       const res = await fetch("/api/dev-plan", {
@@ -1372,7 +1451,46 @@ export default function HomePage() {
       <main style={{ maxWidth: 1300, margin: "0 auto", padding: "0 24px 24px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
-          {/* Key Metrics */}
+          {/* Strategic-assessment governance badge — makes a bypassed governing
+              layer catchable at a glance (never invisible again). */}
+          {v.asset && (() => {
+            const s = briefStatus;
+            const cfg = s === "complete"
+              ? { bg: "rgba(16,185,129,0.12)", bd: "rgba(16,185,129,0.4)", dot: "#10b981", text: "Strategic assessment: complete — governing this valuation" }
+              : s === "loading"
+              ? { bg: "rgba(59,130,246,0.12)", bd: "rgba(59,130,246,0.4)", dot: "#3b82f6", text: "Strategic assessment: running…" }
+              : s === "failed"
+              ? { bg: "rgba(239,68,68,0.14)", bd: "rgba(239,68,68,0.5)", dot: "#ef4444", text: "Strategic assessment: NOT RUN — valuation halted" }
+              : { bg: "rgba(148,163,184,0.12)", bd: "rgba(148,163,184,0.35)", dot: "#94a3b8", text: "Strategic assessment: not run — manual entry (no strategic governance)" };
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderRadius: 10, background: cfg.bg, border: `1px solid ${cfg.bd}`, fontSize: 12.5, fontWeight: 600, color: "var(--text)" }}>
+                <span style={{ width: 9, height: 9, borderRadius: "50%", background: cfg.dot, flexShrink: 0, boxShadow: `0 0 8px ${cfg.dot}` }} />
+                <span>{cfg.text}</span>
+                {s === "failed" && (
+                  <button className="btn" onClick={onRetryLeadReasoner} disabled={briefLoading}
+                    style={{ marginLeft: "auto", background: "#ef4444", color: "#fff", fontSize: 12, fontWeight: 700, padding: "4px 12px", borderRadius: 6 }}>
+                    {briefLoading ? "Retrying…" : "↻ Retry"}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Key Metrics — HALTED when the governing brief failed: no P(approval)
+              or eNPV from pipeline defaults. A visible failure beats a false 88%. */}
+          {briefStatus === "failed" ? (
+            <div className="animate-fade-up" style={{ padding: "24px 20px", borderRadius: 14, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.35)", textAlign: "center" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#ef4444", marginBottom: 6 }}>Valuation not run</div>
+              <div style={{ fontSize: 13, color: "var(--text-muted)", maxWidth: 620, margin: "0 auto 14px" }}>
+                The strategic assessment (lead reasoner) didn&apos;t complete, so no probability, eNPV, or development plan was computed. The pipeline will not fall back to un-anchored defaults.
+                {briefError && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>Reason: {briefError}</div>}
+              </div>
+              <button className="btn" onClick={onRetryLeadReasoner} disabled={briefLoading}
+                style={{ background: "#ef4444", color: "#fff", fontWeight: 700, padding: "8px 20px", borderRadius: 8 }}>
+                {briefLoading ? "Retrying…" : "↻ Retry strategic assessment"}
+              </button>
+            </div>
+          ) : (
           <div className="animate-fade-up metrics-grid">
             <MetricCard
               label={devPlan ? "eNPV" : "rNPV"}
@@ -1400,6 +1518,7 @@ export default function HomePage() {
               sub={devPlan ? "eNPV / Expected R&D" : "rNPV / Dev Cost"}
             />
           </div>
+          )}
 
           {/* Inputs */}
           <Card>
