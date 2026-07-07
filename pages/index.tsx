@@ -371,11 +371,12 @@ function PnLTable({ v, out, pApproval, onClose }: { v: Valuation; out: ReturnTyp
 }
 
 // ─── Indication Row ──────────────────────────────────────────────────────────
-function IndicationRow({ ind, globalPtrs, valuation, numIndications, onUpdate, onRemove }: {
+function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, onUpdate, onRemove }: {
   ind: Indication;
   globalPtrs: number;
   valuation: Valuation;
   numIndications: number;
+  halted?: boolean;   // strategic assessment failed → don't show an ungoverned P(appr.)/rNPV verdict
   onUpdate: (id: string, updates: Partial<Indication>) => void;
   onRemove: (id: string) => void;
 }) {
@@ -402,10 +403,10 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, onUpdate, o
       {cellInput("number", ind.peakSales != null ? ind.peakSales / 1e6 : "", String((valuation.peakSales ?? 0) / 1e6), (v) => onUpdate(ind.id, { peakSales: Number(v) * 1e6 }))}
       {cellInput("number", ind.launchYear ?? "", String(valuation.launchYear ?? ""), (v) => onUpdate(ind.id, { launchYear: v ? Number(v) : undefined }))}
       {cellInput("number", ind.loeYear ?? "", String(valuation.loeYear ?? ""), (v) => onUpdate(ind.id, { loeYear: v ? Number(v) : undefined }))}
-      {cellInput("number", ind.ptrs != null ? +(ind.ptrs * 100).toFixed(1) : "", +(effectivePtrs * 100).toFixed(1) + "%", (v) => onUpdate(ind.id, { ptrs: v ? Number(v) / 100 : undefined }))}
+      {cellInput("number", ind.ptrs != null ? +(ind.ptrs * 100).toFixed(1) : "", halted ? "—" : +(effectivePtrs * 100).toFixed(1) + "%", (v) => onUpdate(ind.id, { ptrs: v ? Number(v) / 100 : undefined }))}
       {cellInput("number", ind.devCostPV != null ? ind.devCostPV / 1e6 : "", String(Math.round((valuation.devCostPV ?? 0) / Math.max(1, numIndications) / 1e6)), (v) => onUpdate(ind.id, { devCostPV: v ? Number(v) * 1e6 : undefined }))}
       <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(revenuePV)}</div>
-      <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "var(--font-mono)", textAlign: "right", color: rnpvAfterDev >= 0 ? "var(--accent)" : "var(--danger)" }}>{fmtMoney(rnpvAfterDev)}</div>
+      <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "var(--font-mono)", textAlign: "right", color: halted ? "var(--text-faint)" : (rnpvAfterDev >= 0 ? "var(--accent)" : "var(--danger)") }}>{halted ? "—" : fmtMoney(rnpvAfterDev)}</div>
       <button onClick={() => onRemove(ind.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: 16, lineHeight: 1, padding: 0, textAlign: "center" }}>×</button>
     </div>
   );
@@ -1572,14 +1573,14 @@ export default function HomePage() {
                   ))}
                 </div>
                 {v.indications.map((ind) => (
-                  <IndicationRow key={ind.id} ind={ind} globalPtrs={out.ptrs} valuation={v} numIndications={v.indications!.length} onUpdate={updateIndication} onRemove={removeIndication} />
+                  <IndicationRow key={ind.id} ind={ind} globalPtrs={out.ptrs} valuation={v} numIndications={v.indications!.length} halted={briefStatus === "failed"} onUpdate={updateIndication} onRemove={removeIndication} />
                 ))}
                 {v.indications.length > 1 && (
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 2fr) 90px 68px 68px 64px 80px 80px 80px 24px", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)", gridColumn: "1 / 6" }}>Combined</div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(out.devCostPV)}</div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(out.revenuePV)}</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", textAlign: "right", color: out.rnpv >= 0 ? "var(--accent)" : "var(--danger)" }}>{fmtMoney(out.rnpv)}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", textAlign: "right", color: briefStatus === "failed" ? "var(--text-faint)" : (out.rnpv >= 0 ? "var(--accent)" : "var(--danger)") }}>{briefStatus === "failed" ? "—" : fmtMoney(out.rnpv)}</div>
                     <div />
                   </div>
                 )}
@@ -2487,11 +2488,14 @@ export default function HomePage() {
           )}
 
 
-          {/* Charts */}
-          <Card>
-            <SectionLabel>Valuation Analysis</SectionLabel>
-            <ValuationCharts valuation={display} />
-          </Card>
+          {/* Charts — suppressed when the valuation is halted; a tornado/waterfall
+              off phase-baseline defaults is exactly the ungoverned verdict we halt. */}
+          {briefStatus !== "failed" && (
+            <Card>
+              <SectionLabel>Valuation Analysis</SectionLabel>
+              <ValuationCharts valuation={display} />
+            </Card>
+          )}
 
           {/* Decision Analysis */}
           {v.asset && (
