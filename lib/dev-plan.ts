@@ -184,6 +184,7 @@ export type DevPlanResult = {
 
   // Summary timeline
   totalDurationMonths: number; // sum of stage durationMonths + regStage.reviewMonths
+  impliedLaunchYear: number;   // calendar year of approval: now + totalDurationMonths
 
   // Value outputs
   revenuePVM: number;          // from base context
@@ -206,6 +207,17 @@ const DEFAULT_NULL_RR: Record<string, number> = {
   "Phase 3":     0.20,
   "Filed":       0.20,
 };
+
+/**
+ * Calendar year in which approval (≈ launch) lands if the remaining
+ * development pathway starts now and takes totalDurationMonths
+ * (all trial stages + regulatory review).
+ */
+export function impliedLaunchYear(totalDurationMonths: number, asOf: Date = new Date()): number {
+  const d = new Date(asOf.getTime());
+  d.setMonth(d.getMonth() + Math.round(totalDurationMonths));
+  return d.getFullYear();
+}
 
 // ─── Core computation ─────────────────────────────────────────────────────────
 
@@ -362,6 +374,7 @@ export function computeDevPlan(
     totalNominalCostM,
     totalRiskAdjCostM,
     totalDurationMonths,
+    impliedLaunchYear: impliedLaunchYear(totalDurationMonths),
     revenuePVM,
     eNPVM,
     eROI,

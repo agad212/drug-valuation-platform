@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDevPlan, type DevStageInput } from "../dev-plan";
+import { computeDevPlan, impliedLaunchYear, type DevStageInput } from "../dev-plan";
 import { mixtureFromMssVariance } from "../effect-prior";
 import type { TrialDesignInputs } from "../ptrs-trial";
 
@@ -94,5 +94,29 @@ describe("computeDevPlan — trial duration economics", () => {
     // enrollmentMonths = n / max(enrollmentRatePerMonth, 0.1) = 10 / 0.1 = 100
     expect(plan.stages[0].enrollmentMonths).toBeCloseTo(100, 10);
     expect(plan.stages[0].durationMonths).toBeCloseTo(109, 10);
+  });
+});
+
+describe("impliedLaunchYear — timeline drives launch year", () => {
+  it("adds duration months to the as-of date and returns the calendar year", () => {
+    // 2026-07 + 47 months = 2030-06
+    expect(impliedLaunchYear(47, new Date(2026, 6, 7))).toBe(2030);
+    // 2026-11 + 2 months crosses the year boundary
+    expect(impliedLaunchYear(2, new Date(2026, 10, 15))).toBe(2027);
+    // zero duration = launch this year
+    expect(impliedLaunchYear(0, new Date(2026, 6, 7))).toBe(2026);
+  });
+
+  it("rounds fractional months", () => {
+    // 2026-01 + round(11.6) = 12 months → 2027-01
+    expect(impliedLaunchYear(11.6, new Date(2026, 0, 15))).toBe(2027);
+    // 2026-01 + round(11.4) = 11 months → 2026-12
+    expect(impliedLaunchYear(11.4, new Date(2026, 0, 15))).toBe(2026);
+  });
+
+  it("computeDevPlan carries impliedLaunchYear consistent with totalDurationMonths", () => {
+    const mixture = mixtureFromMssVariance(0.5, 0.2);
+    const plan = computeDevPlan(mixture, 0.1, { stages: [makeStage()], regulatoryContext: "standard" }, 0);
+    expect(plan.impliedLaunchYear).toBe(impliedLaunchYear(plan.totalDurationMonths));
   });
 });

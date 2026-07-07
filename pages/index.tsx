@@ -474,6 +474,27 @@ export default function HomePage() {
     }
   }, [devPlan?.pApproval, valuationBrief]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Timeline → launch year: dev-plan duration drives revenue PV discounting ─
+  // Only depends on the implied year, so a manual launchYear edit afterwards
+  // sticks until the plan's duration actually changes.
+  useEffect(() => {
+    if (!devPlan) return;
+    const implied = devPlan.impliedLaunchYear;
+    const current = v.indications?.[0]?.launchYear ?? v.launchYear;
+    if (current === implied) return;
+    setV((cur) => ({
+      ...cur,
+      launchYear: implied,
+      indications: cur.indications?.length
+        ? cur.indications.map((ind, i) => (i === 0 ? { ...ind, launchYear: implied } : ind))
+        : cur.indications,
+    }));
+    pushToast(
+      `Launch year set to ${implied} from dev plan timeline (${Math.round(devPlan.totalDurationMonths)} months to approval).`,
+      "info", 6000,
+    );
+  }, [devPlan?.impliedLaunchYear]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function updateDevPlanN(id: string, n: number) {
     setDevPlanStages((prev) => prev?.map((s) =>
       s.id === id ? { ...s, n, trialDesign: { ...s.trialDesign, n } } : s

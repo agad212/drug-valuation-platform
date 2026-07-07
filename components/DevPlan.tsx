@@ -541,7 +541,9 @@ function SummaryBanner({ plan }: { plan: DevPlanResult }) {
           <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "var(--font-mono)", lineHeight: 1, color: "#94a3b8" }}>
             {(plan.totalDurationMonths / 12).toFixed(1)} yrs
           </div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{Math.round(plan.totalDurationMonths)} months, trials + review</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+            {Math.round(plan.totalDurationMonths)} months, trials + review · launch ~{plan.impliedLaunchYear}
+          </div>
         </div>
       </div>
 
