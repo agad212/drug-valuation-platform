@@ -18,6 +18,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { ValuationBrief } from "../../lib/valuation-brief";
 
+// The web-search research loop can run 1–3 minutes; give it headroom (and room
+// for a pause_turn continuation) rather than letting Vercel kill it mid-turn.
+export const config = { maxDuration: 300 };
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end();
 
@@ -43,48 +47,84 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userMessage = buildUserMessage(drug, sponsor, phase, mechanism, indication);
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "web-search-2025-03-05",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4096,
-        system: systemPrompt,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }],
-        messages: [{ role: "user", content: userMessage }],
-      }),
-    });
+    // The web-search server tool runs a multi-round loop. Two failure modes made
+    // the model return text with no parseable <valuation_brief> block:
+    //   1. max_tokens: 4096 was too small — the model spent its output budget on
+    //      search narration and got cut off before writing the (large) brief.
+    //   2. The server-side loop hit its iteration cap and returned stop_reason
+    //      "pause_turn" BEFORE the brief was written; the old code never resumed.
+    // Fix: bigger output budget, fewer searches, and a resume loop that
+    // accumulates text across every turn so a brief split across a pause survives.
+    const messages: any[] = [{ role: "user", content: userMessage }];
+    const MAX_TURNS = 3;
+    let combinedText = "";
+    let lastStopReason = "";
+    let lastUsage: any = null;
 
-    if (!r.ok) {
-      const errJson = await r.json().catch(() => ({})) as any;
-      const errMsg = errJson?.error?.message ?? "";
-      if (errMsg.toLowerCase().includes("credit balance")) {
-        return res.status(402).json({ error: "API credits are out — top up at console.anthropic.com." });
+    for (let turn = 0; turn < MAX_TURNS; turn++) {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "web-search-2025-03-05",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 8192,
+          system: systemPrompt,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 6 }],
+          messages,
+        }),
+      });
+
+      if (!r.ok) {
+        const errJson = await r.json().catch(() => ({})) as any;
+        const errMsg = errJson?.error?.message ?? "";
+        if (errMsg.toLowerCase().includes("credit balance")) {
+          return res.status(402).json({ error: "API credits are out — top up at console.anthropic.com." });
+        }
+        return res.status(r.status).json({ error: `API error: ${errMsg || r.status}` });
       }
-      return res.status(r.status).json({ error: `API error: ${errMsg || r.status}` });
+
+      const data = await r.json() as any;
+      lastStopReason = data.stop_reason;
+      lastUsage = data.usage;
+
+      combinedText += "\n" + (data.content ?? [])
+        .filter((c: any) => c.type === "text")
+        .map((c: any) => c.text)
+        .join("\n");
+
+      // pause_turn = server tool loop paused. Resume by echoing the assistant
+      // turn back with no new user message (per API docs). Any other stop_reason
+      // means the turn is complete.
+      if (data.stop_reason === "pause_turn") {
+        messages.push({ role: "assistant", content: data.content });
+        continue;
+      }
+      break;
     }
 
-    const data = await r.json() as any;
-
-    // Extract text blocks from the response (skip web_search_tool_result blocks)
-    const rawText: string = (data.content ?? [])
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text)
-      .join("\n")
-      .trim();
+    const rawText = combinedText.trim();
 
     // Parse the structured valuationBrief from <valuation_brief> tags
     const briefMatch = rawText.match(/<valuation_brief>([\s\S]*?)<\/valuation_brief>/);
     if (!briefMatch) {
+      // Log the exact reason so a persistent failure is diagnosable from the
+      // Vercel function log without guessing (stop_reason distinguishes the cases).
+      console.error(
+        `[lead-reasoner] no brief parsed — stop_reason=${lastStopReason} ` +
+        `output_tokens=${lastUsage?.output_tokens} rawTextLen=${rawText.length} ` +
+        `hasOpenTag=${rawText.includes("<valuation_brief>")}`,
+      );
       return res.status(200).json({
         brief: null,
         summary: sanitize(rawText),
-        error: "Lead reasoner did not produce a structured brief. Re-running may help.",
+        error: lastStopReason === "max_tokens"
+          ? "Lead reasoner ran out of output space before completing the brief. Re-running may help."
+          : "Lead reasoner did not produce a structured brief. Re-running may help.",
       });
     }
 
