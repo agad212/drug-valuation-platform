@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -440,6 +440,10 @@ export default function HomePage() {
   const [devPlanRegContext, setDevPlanRegContext] = useState<RegulatoryContext>("standard");
   const [devPlanReasoning, setDevPlanReasoning] = useState<string | null>(null);
   const [devPlanLoading, setDevPlanLoading] = useState(false);
+  // Surfaces a HALT after the effect prior: if the development-path stage is
+  // reached but can't build, this makes the reason visible instead of silently
+  // omitting the dev path + final metrics.
+  const [devPlanError, setDevPlanError] = useState<string | null>(null);
   const [recommendedNctId, setRecommendedNctId] = useState("");
   const [appliedNctIds, setAppliedNctIds] = useState<Set<string>>(new Set());
   const [valuationBrief, setValuationBrief] = useState<ValuationBrief | null>(null);
@@ -456,6 +460,15 @@ export default function HomePage() {
   const [briefSummary, setBriefSummary] = useState<string | null>(null);
   const [expectationAudit, setExpectationAudit] = useState<ExpectationAuditResult | null>(null);
   const { pushToast, ToastHost } = useToast();
+
+  // The downstream valuation chain (PTRS → Layer 2 → dev plan) is scheduled via
+  // setTimeout from onAutoValue, so those callbacks close over `valuationBrief`
+  // as it was when Auto-Valuate was CLICKED (null) — not the brief that arrived
+  // seconds later. Reading a ref instead of the stale closure lets the async
+  // chain see the CURRENT brief. (Regression fix: without this the dev-plan
+  // governance gate always saw null and silently skipped the whole dev plan.)
+  const valuationBriefRef = useRef<ValuationBrief | null>(null);
+  useEffect(() => { valuationBriefRef.current = valuationBrief; }, [valuationBrief]);
 
   useEffect(() => setSaved(loadAll()), []);
 
@@ -855,6 +868,7 @@ export default function HomePage() {
     setPtrsResult(null);
     setDevPlanStages(null);
     setDevPlanReasoning(null);
+    setDevPlanError(null);
 
     // ── Lead Reasoner fires IN PARALLEL with auto-value ───────────────────
     // The brief governs downstream modules. It runs alongside auto-value
@@ -1072,11 +1086,15 @@ export default function HomePage() {
     if (!l2Result?.trialInputs) return;
     // Governance gate: the dev plan's thresholds come from the brief's sourced
     // SOC/registration rate. Without a brief, the threshold collapses and
-    // P(trial success) inflates to ~100% — refuse to build it.
-    if (!valuationBrief) {
+    // P(trial success) inflates to ~100% — refuse to build it. Read the ref, not
+    // the stale closure (this runs ~45s after the click, when the brief exists).
+    const brief = valuationBriefRef.current;
+    if (!brief) {
       console.warn("[dev-plan] skipped: no governing valuationBrief");
+      setDevPlanError("Development path not built: the strategic brief wasn't available when the engine reached this stage. Retry the strategic assessment.");
       return;
     }
+    setDevPlanError(null);
     setDevPlanLoading(true);
     try {
       const res = await fetch("/api/dev-plan", {
@@ -1094,7 +1112,7 @@ export default function HomePage() {
       if (!res.ok) throw new Error(`API error ${res.status}`);
       const data = await res.json();
       // Override stage nullResponseRate with the brief's sourced SOC rate when available
-      const briefSocRR = valuationBrief?.soc_response_rate?.value;
+      const briefSocRR = brief.soc_response_rate?.value;
       const stages = (data.stages as DevStageInput[]).map((s) => ({
         ...s,
         nullResponseRate: s.nullResponseRate ?? briefSocRR,
@@ -1104,6 +1122,7 @@ export default function HomePage() {
       setDevPlanReasoning(data.reasoning ?? null);
     } catch (e: any) {
       console.error("[dev-plan] auto-generate failed:", e?.message);
+      setDevPlanError(`Development path could not be built: ${e?.message || "unknown error"}. The final value metrics need this stage — retry.`);
     } finally {
       setDevPlanLoading(false);
     }
@@ -1118,7 +1137,8 @@ export default function HomePage() {
       // Use the brief's efficacy gate trial when available (the lead reasoner has
       // already identified which trial is the REAL efficacy gate, excluding substudies).
       // Falls back to the old heuristic: pick a trial matching the drug's phase.
-      const briefNctId = valuationBrief?.efficacy_gate_trial?.trial_id;
+      // Read via ref — this runs ~45s after the click, past the stale closure.
+      const briefNctId = valuationBriefRef.current?.efficacy_gate_trial?.trial_id;
       let nctId: string | undefined = briefNctId || undefined;
       if (!nctId) {
         const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
@@ -1497,13 +1517,19 @@ export default function HomePage() {
               label={devPlan ? "eNPV" : "rNPV"}
               value={fmtMoney(devPlan ? devPlan.eNPVM * 1e6 : out.rnpv)}
               gradient="linear-gradient(135deg, #059669, #10b981)"
-              sub={devPlan ? `Dev plan · P(approval) ${fmtPct(devPlan.pApproval)}` : (rnpvPositive ? "Risk-adjusted NPV" : "Negative — check inputs")}
+              sub={devPlan ? `Dev plan · P(approval) ${fmtPct(devPlan.pApproval)}`
+                : briefStatus === "complete"
+                  ? (devPlanLoading ? "Baseline — computing full analysis…" : "⚠ Baseline placeholder — dev path incomplete")
+                  : (rnpvPositive ? "Risk-adjusted NPV" : "Negative — check inputs")}
             />
             <MetricCard
               label="P(approval)"
               value={devPlan ? fmtPct(devPlan.pApproval) : fmtPct(out.ptrs)}
               gradient="linear-gradient(135deg, #1d4ed8, #3b82f6)"
-              sub={devPlan ? `${fmtPct(devPlan.pAllTrialsSuccess)} trials × ${fmtPct(devPlan.regStage.pApproval)} reg` : (out.mechLabel || `Phase baseline · ${v.phase}`)}
+              sub={devPlan ? `${fmtPct(devPlan.pAllTrialsSuccess)} trials × ${fmtPct(devPlan.regStage.pApproval)} reg`
+                : briefStatus === "complete"
+                  ? (devPlanLoading ? "Computing development path…" : "⚠ Baseline placeholder — not the propagated number")
+                  : (out.mechLabel || `Phase baseline · ${v.phase}`)}
             />
             <MetricCard label="Revenue PV" value={fmtMoney(out.revenuePV)} gradient="linear-gradient(135deg, #7c3aed, #a855f7)" sub="Full Revenue PV (before probability)" />
             <MetricCard
@@ -2198,6 +2224,33 @@ export default function HomePage() {
             <Card>
               <EffectPriorChain effectPrior={effectPrior} loading={effectPriorLoading} ptrsResult={ptrsResult} />
             </Card>
+          )}
+
+          {/* Development-path HALT — the engine reached this stage but couldn't
+              build it. Surface the reason instead of silently omitting the dev
+              path + final value metrics (same principle as the governance halt). */}
+          {devPlanError && !devPlanStages && !devPlanLoading && v.asset && briefStatus !== "failed" && (
+            <div style={{ padding: "18px 20px", borderRadius: 12, background: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.4)" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#f59e0b", marginBottom: 4 }}>Development path not built — value metrics incomplete</div>
+              <div style={{ fontSize: 12.5, color: "var(--text-muted)", maxWidth: 640 }}>
+                The effect prior built, but the engine stopped before the stage-by-stage development path, so there is no propagated P(approval), eNPV, or eROI for this run. The headline figures below fall back to a phase-baseline placeholder — they are NOT the full analysis.
+                <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{devPlanError}</div>
+              </div>
+              <button className="btn" onClick={() => {
+                if (!v.asset) return;
+                const ind = v.indication || v.indications?.[0]?.name || "";
+                // If Layer 2 already succeeded, only the dev-plan stage needs
+                // re-running (fast). Otherwise re-run the whole scoring chain.
+                if (layer2Result?.trialInputs) {
+                  onGenerateDevPlan(v.asset, ind, v.phase || "Phase 2", v.sponsor, layer2Result);
+                } else {
+                  onScorePtrs(v.asset, v.mechanism || "", ind, v.phase || "Phase 2", v.sponsor);
+                }
+              }} disabled={devPlanLoading || ptrsLoading || layer2Loading}
+                style={{ marginTop: 12, background: "#f59e0b", color: "#111", fontWeight: 700, padding: "6px 16px", borderRadius: 8 }}>
+                ↻ Re-run development path
+              </button>
+            </div>
           )}
 
           {/* Development Path — auto-generated after Layer 2, drives headline metrics */}
