@@ -469,6 +469,12 @@ export default function HomePage() {
   // governance gate always saw null and silently skipped the whole dev plan.)
   const valuationBriefRef = useRef<ValuationBrief | null>(null);
   useEffect(() => { valuationBriefRef.current = valuationBrief; }, [valuationBrief]);
+  // Same stale-closure hazard: the timer-scheduled chain reads the trial list to
+  // pick an anchoring NCT, but the closure captured it as null (pre-fetch). Read
+  // the ref so Layer 2's fallback trial + the effect prior's anchor see the
+  // trials that actually loaded during this run.
+  const trialResultsRef = useRef<CtgovTrial[] | null>(null);
+  useEffect(() => { trialResultsRef.current = trialResults; }, [trialResults]);
 
   useEffect(() => setSaved(loadAll()), []);
 
@@ -1055,9 +1061,10 @@ export default function HomePage() {
     try {
       // Same NCT-matching logic as onScoreLayer2 — gives the "own clinical
       // evidence" discovery step a trial to anchor to, when available.
+      // Ref, not closure: this runs ~45s after the click, past the stale capture.
       const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
       const drugPhaseNum = phaseNum(phase);
-      const matchingTrial = trialResults?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
+      const matchingTrial = trialResultsRef.current?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
       const nctId = matchingTrial?.nctId ?? undefined;
 
       const res = await fetch("/api/effect-prior", {
@@ -1143,7 +1150,7 @@ export default function HomePage() {
       if (!nctId) {
         const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
         const drugPhaseNum = phaseNum(phase);
-        const matchingTrial = trialResults?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
+        const matchingTrial = trialResultsRef.current?.find((t) => phaseNum(t.phase || "") >= drugPhaseNum);
         nctId = matchingTrial?.nctId ?? undefined;
       }
       const res = await fetch("/api/ptrs-layer2", {
