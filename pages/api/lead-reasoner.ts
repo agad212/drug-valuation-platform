@@ -17,6 +17,7 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { ValuationBrief } from "../../lib/valuation-brief";
+import { parseJsonLoose } from "../../lib/extractJson";
 
 // The web-search research loop can run 1–3 minutes; give it headroom (and room
 // for a pause_turn continuation) rather than letting Vercel kill it mid-turn.
@@ -132,14 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // line of prose inside the tags, or leave a trailing comma — all of which
     // break a naive JSON.parse. Extract the outermost object and repair the
     // common issues before giving up.
-    const rawBrief = briefMatch[1];
-    const candidate = extractJsonObject(rawBrief);
-    let brief: ValuationBrief | null = null;
-    let parseErr = "";
-    for (const attempt of [candidate, repairJson(candidate)]) {
-      try { brief = JSON.parse(attempt) as ValuationBrief; break; }
-      catch (e: any) { parseErr = e?.message || "parse error"; }
-    }
+    const { value: brief, error: parseErr, candidate } = parseJsonLoose<ValuationBrief>(briefMatch[1]);
     if (!brief) {
       // Log the raw content head so the exact malformation is diagnosable from
       // the Vercel log instead of guessing.
@@ -155,14 +149,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Validate critical fields
-    brief = validateBrief(brief, drug, sponsor);
+    const validatedBrief = validateBrief(brief, drug, sponsor);
 
     // Extract the human-readable summary (everything outside the JSON block)
     const summary = sanitize(
       rawText.replace(/<valuation_brief>[\s\S]*?<\/valuation_brief>/g, ""),
     );
 
-    return res.status(200).json({ brief, summary });
+    return res.status(200).json({ brief: validatedBrief, summary });
 
   } catch (e: any) {
     console.error("[lead-reasoner] Failed:", e?.message);
@@ -171,25 +165,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
-
-// Pull the JSON object out of whatever the model wrapped it in: strip ```json
-// code fences, then slice from the first "{" to the last "}" so any prose the
-// model wrote inside the tags ("Here is the brief:") is dropped.
-function extractJsonObject(s: string): string {
-  let t = s.trim();
-  t = t.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-  const first = t.indexOf("{");
-  const last = t.lastIndexOf("}");
-  if (first >= 0 && last > first) t = t.slice(first, last + 1);
-  return t;
-}
-
-// Repair the most common JSON defects models emit that strict JSON.parse rejects:
-// trailing commas before a closing brace/bracket. (Kept conservative — does not
-// touch string content, so it can't corrupt legitimate text.)
-function repairJson(s: string): string {
-  return s.replace(/,(\s*[}\]])/g, "$1");
-}
 
 function sanitize(text: string): string {
   return text

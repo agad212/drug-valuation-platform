@@ -1116,7 +1116,12 @@ export default function HomePage() {
           currentTrialName: drug,
         }),
       });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
+      if (!res.ok) {
+        // Surface the endpoint's real reason (e.g. malformed JSON, credit balance)
+        // instead of an opaque status code, so the halt banner is diagnosable.
+        const errBody = await res.json().catch(() => ({} as any));
+        throw new Error(errBody.error || `API error ${res.status}`);
+      }
       const data = await res.json();
       // Override stage nullResponseRate with the brief's sourced SOC rate when available
       const briefSocRR = brief.soc_response_rate?.value;

@@ -17,6 +17,7 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
+import { parseJsonLoose } from "../../lib/extractJson";
 import type {
   EndpointType,
   DesignType,
@@ -309,7 +310,9 @@ Reason about the full development path. Return the current trial as stage 1 (use
       model: "claude-haiku-4-5-20251001",
       system: systemPrompt,
       userMessage,
-      maxTokens: 1200,
+      // 1200 was too tight for two fully-populated stages (~15 fields each,
+      // several full sentences) — the JSON truncated mid-object and parse threw.
+      maxTokens: 3000,
       maxSearches: 0,
       serperQueries: [
         `${drug} phase 3 registration study design ${indication}`,
@@ -317,9 +320,15 @@ Reason about the full development path. Return the current trial as stage 1 (use
       ],
     });
 
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON in Claude response");
-    const parsed = JSON.parse(jsonMatch[0]);
+    // Robust parse: tolerate code fences, surrounding prose, and trailing commas.
+    const { value: parsed, error: parseErr, candidate } = parseJsonLoose<any>(raw);
+    if (!parsed) {
+      console.error(
+        `[dev-plan] malformed JSON — ${parseErr} | rawLen=${raw.length} ` +
+        `head=${JSON.stringify(candidate.slice(0, 500))}`,
+      );
+      throw new Error(`Model did not return valid development-plan JSON (${parseErr}).`);
+    }
 
     // Validate and clean each stage
     const stages: StageOutput[] = (parsed.stages ?? []).map((s: any, i: number) => {
@@ -385,7 +394,11 @@ Reason about the full development path. Return the current trial as stage 1 (use
     });
 
   } catch (e: any) {
-    console.error("[dev-plan] Failed:", e?.message);
-    return res.status(500).json({ error: e?.message ?? "Dev plan generation failed" });
+    const msg = e?.message ?? "Dev plan generation failed";
+    console.error("[dev-plan] Failed:", msg);
+    if (msg.toLowerCase().includes("credit balance")) {
+      return res.status(402).json({ error: "API credits are out — top up at console.anthropic.com." });
+    }
+    return res.status(500).json({ error: msg });
   }
 }
