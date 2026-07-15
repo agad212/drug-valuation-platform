@@ -103,13 +103,22 @@ export default function SurveyAdminPage() {
   const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
-    const saved = sessionStorage.getItem(KEY_STORE);
+    const saved = localStorage.getItem(KEY_STORE);
     if (saved) {
       setKey(saved);
       void load(saved);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function lock() {
+    localStorage.removeItem(KEY_STORE);
+    setKey("");
+    setUnlocked(false);
+    setResponses([]);
+    setAnalysis("");
+    setError("");
+  }
 
   async function load(k: string) {
     setLoading(true);
@@ -124,12 +133,12 @@ export default function SurveyAdminPage() {
       if (!r.ok) {
         setError(data.error || "Could not load responses.");
         setUnlocked(false);
-        sessionStorage.removeItem(KEY_STORE);
+        localStorage.removeItem(KEY_STORE);
         return;
       }
       setResponses(data.responses || []);
       setUnlocked(true);
-      sessionStorage.setItem(KEY_STORE, k);
+      localStorage.setItem(KEY_STORE, k);
     } catch {
       setError("Network error — try again.");
     } finally {
@@ -210,6 +219,9 @@ export default function SurveyAdminPage() {
                 {responses.length} response{responses.length === 1 ? "" : "s"}
               </span>
               <div className="toolbar-btns">
+                <button className="btn-secondary" onClick={lock} title="Forget the key on this device">
+                  Lock
+                </button>
                 <button className="btn-secondary" onClick={() => void load(key)} disabled={loading}>
                   {loading ? "Refreshing…" : "Refresh"}
                 </button>
