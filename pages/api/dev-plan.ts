@@ -18,6 +18,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
 import { parseJsonLoose } from "../../lib/extractJson";
+import { pinComparator, pinPhase3Endpoint } from "../../lib/indication-benchmarks";
 import type {
   EndpointType,
   DesignType,
@@ -382,6 +383,32 @@ Reason about the full development path. Return the current trial as stage 1 (use
     // Prevents Claude hallucinating regulatory activities as clinical trials.
     const maxStages = (phase || "").includes("3") ? 1 : 2;
     const cappedStages = stages.slice(0, maxStages);
+
+    // ── Pin literature/precedent inputs (deterministic, per-indication) ───────
+    // Overrides the LLM's per-run guesses for the two inputs that were swinging
+    // the waterfall: the Phase-3 registrable endpoint and the Phase-2a comparator.
+    for (const st of cappedStages) {
+      // (1) Phase-3 endpoint: pin to the FDA-registrable endpoint from precedent
+      //     (e.g. DFS/RFS for MRD+ adjuvant CRC). Apply FIRST — it can flip a
+      //     stage to time-to-event, which then excludes it from the rate comparator.
+      if (!st.isCurrentTrial) {
+        const epPin = pinPhase3Endpoint(indication || "", st.phase);
+        if (epPin) {
+          st.isTimeToEvent = epPin.isTimeToEvent;
+          st.endpointRationale = epPin.endpointRationale;
+          st.endpointEvidenceBasis = "INFERRED"; // precedent-based, not company-stated
+          st.trialDesign.endpointDescription = epPin.endpointDescription;
+        }
+      }
+      // (2) Comparator: pin the historical-control RATE (ctDNA clearance) + honest σ²
+      //     for rate-endpoint stages only.
+      const cmpPin = pinComparator(indication || "", st.isTimeToEvent !== true);
+      if (cmpPin) {
+        st.nullResponseRate = cmpPin.nullResponseRate;
+        st.comparatorSigma2 = cmpPin.comparatorSigma2;
+        st.comparatorSource = cmpPin.source;
+      }
+    }
 
     const regulatoryContext: RegulatoryContext = VALID_REG.includes(parsed.regulatoryContext)
       ? parsed.regulatoryContext

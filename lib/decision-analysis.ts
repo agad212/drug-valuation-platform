@@ -224,6 +224,47 @@ const POPULATION_PEAK_SALES_MULT: Record<PopulationType, number> = {
   broad:              1.15,
 };
 
+// ─── Label-breadth difficulty ───────────────────────────────────────────────
+//
+// The dev-plan engine computes per-option P(success) from trial design + effect
+// prior and is structurally blind to how much HARDER a broader regulatory label
+// is to win. This restores that signal — the one the removed LLM ptrsOverride
+// used to carry — but COMPUTES it from attributes the engine already has, not a
+// guess. Magnitudes are chosen from regulatory reasoning, NOT tuned to a ranking.
+//
+//   - Pan-tumor basket design (×0.60): a tumor-agnostic MRD label has no approval
+//     precedent; efficacy must hold across heterogeneous histologies and one null
+//     cohort can sink the filing — materially harder than a single tumor type.
+//   - Broadened / unselected population vs a selected base (×0.80): loss of
+//     biomarker enrichment widens and dilutes the population.
+//   - Loss of orphan designation, orphan → non-orphan (×0.88): removes a real
+//     regulatory tailwind (endpoint flexibility, smaller-n acceptance).
+//
+// A single tightly-defined indication trips none of these → mult 1.0.
+export function labelBreadthMultiplier(
+  trialDesign: TrialDesignInputs,
+  base: BaseContext,
+): { mult: number; reasons: string[] } {
+  let mult = 1.0;
+  const reasons: string[] = [];
+
+  if (trialDesign.designType === "basket") {
+    mult *= 0.60;
+    reasons.push("pan-tumor basket — no tumor-agnostic MRD precedent (×0.60)");
+  }
+  if (trialDesign.populationType === "broad" && base.baseTrialDesign.populationType !== "broad") {
+    mult *= 0.80;
+    reasons.push("broadened/unselected population (×0.80)");
+  }
+  const baseOrphan = base.baseTrialDesign.regulatoryContext.includes("orphan");
+  const optOrphan = trialDesign.regulatoryContext.includes("orphan");
+  if (baseOrphan && !optOrphan) {
+    mult *= 0.88;
+    reasons.push("orphan designation lost (×0.88)");
+  }
+  return { mult, reasons };
+}
+
 // ─── Core Calculation ─────────────────────────────────────────────────────────
 
 export function computeOption(
@@ -303,6 +344,18 @@ export function computeOption(
     const l2 = scoreLayer2(mixture, base.ptrsLayer1, base.ciHalfWidth, trialDesign);
     ptrs = l2.ptrsCombined;
     ptrsCI = l2.ptrsCI;
+  }
+
+  // ── Step 2b: Label-breadth difficulty ─────────────────────────────────────
+  // The engine's trial-design P(success) is blind to REGULATORY difficulty of a
+  // broader label (it only sees n / design / prior). Restore that signal — the
+  // one the now-removed LLM ptrsOverride used to carry — but COMPUTE it from the
+  // option's own attributes, not a guess. A single tightly-defined indication is
+  // untouched; a pan-tumor basket / broadened / de-orphaned ask is penalized.
+  const breadth = labelBreadthMultiplier(trialDesign, base);
+  if (!option.isBaseline && breadth.mult < 1) {
+    ptrs = clamp01(ptrs * breadth.mult);
+    ptrsCI = ciBand(ptrs);
   }
 
   // ── Step 3: Adjusted peak sales ───────────────────────────────────────────
@@ -500,6 +553,9 @@ export function computeOption(
 
   if (Math.abs(ptrsDiff) > 0.005) {
     keyDrivers.push(`P(approval) ${ptrsDiff >= 0 ? "+" : ""}${(ptrsDiff * 100).toFixed(1)}% vs Option A`);
+  }
+  if (!option.isBaseline && breadth.mult < 1) {
+    keyDrivers.push(`Label-breadth: ${breadth.reasons.join(", ")}`);
   }
   if (option.designType && option.designType !== base.baseTrialDesign.designType) {
     const from = base.baseTrialDesign.designType.replace("_", " ");
