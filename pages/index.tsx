@@ -1602,7 +1602,7 @@ export default function HomePage() {
             <div className="form-grid-3" style={{ marginBottom: 16 }}>
               <FieldNumber label="Peak Sales" value={v.peakSales} onChange={(x) => update("peakSales", x)} hint="USD" />
               <FieldNumber label="Discount Rate" value={v.discountRate} onChange={(x) => update("discountRate", x)} isPct hint="%" />
-              <FieldNumber label="Dev Cost PV" value={v.devCostPV} onChange={(x) => update("devCostPV", x)} hint="USD" />
+              <FieldNumber label="Dev Cost PV" value={v.devCostPV} onChange={(x) => update("devCostPV", x)} hint={devPlan ? "USD · not used — dev-plan risk-adj cost drives eNPV" : "USD"} />
               <FieldNumber label="COGS %" value={v.cogsPct} onChange={(x) => update("cogsPct", x)} isPct hint="%" />
               <FieldNumber label="Tax Rate" value={v.taxRate} onChange={(x) => update("taxRate", x)} isPct hint="%" />
               <FieldNumber label="Working Capital %" value={v.workingCapitalPct} onChange={(x) => update("workingCapitalPct", x)} isPct hint="%" />

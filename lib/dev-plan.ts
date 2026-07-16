@@ -259,8 +259,20 @@ export function computeDevPlan(
   const stages: DevStage[] = [];
   let currentMixture: EffectPriorMixture = mixture;
   let cumPriorSuccess = 1.0; // P(all prior stages succeeded); starts at 1 (nothing has failed yet)
+  let prevStage: DevStageInput | null = null;
 
   for (const stageInput of inputs.stages) {
+
+    // ── Surrogate-translation penalty (Part 4) ────────────────────────────────
+    // If the previous stage gated on a RATE surrogate (e.g. ctDNA clearance) and
+    // THIS stage gates on a harder time-to-event endpoint (e.g. RFS), the
+    // molecular-surrogate → clinical-endpoint link is not fully validated in this
+    // setting. Widen the incoming prior's variance so a low-information surrogate
+    // win does NOT fully de-risk the hard-endpoint trial. Additive penalty,
+    // analogous to the cross-setting penalty in the own-clinical evidence step.
+    if (prevStage && prevStage.isTimeToEvent === false && stageInput.isTimeToEvent === true) {
+      currentMixture = addMixtureVariance(currentMixture, SURROGATE_TRANSLATION_SIGMA2);
+    }
 
     const { mss: currentMSS, variance: currentVariance } = mixtureMoments(currentMixture);
 
@@ -364,6 +376,7 @@ export function computeDevPlan(
     // Advance drug truth for next stage: assume this stage succeeds
     currentMixture  = mixtureIfSuccess;
     cumPriorSuccess = cumSuccessProb;
+    prevStage       = stageInput;
   }
 
   // ── Regulatory stage ──────────────────────────────────────────────────────
@@ -406,6 +419,17 @@ export function computeDevPlan(
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Added to each mixture component's variance when a stage gating on a rate
+// surrogate is followed by one gating on a hard time-to-event endpoint (Part 4).
+// Moderate: reflects a real, not-fully-validated surrogate→hard translation
+// without cratering the harder stage.
+const SURROGATE_TRANSLATION_SIGMA2 = 0.15;
+
+function addMixtureVariance(mixture: EffectPriorMixture, add: number): EffectPriorMixture {
+  return mixture.map((c) => ({ ...c, sigma2: c.sigma2 + add }));
+}
+
 function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }
 function round1(x: number)  { return Math.round(x * 10) / 10; }
 function round2(x: number)  { return Math.round(x * 100) / 100; }

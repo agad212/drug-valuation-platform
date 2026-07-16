@@ -125,7 +125,11 @@ ${SCALE_CALIBRATION}
 
 YOUR TASK (three explicit steps):
 
-STEP 1 — IDENTIFY CANDIDATES: search for OTHER drugs (approved, failed, or in development) that share meaningful biological overlap with this drug's mechanism — ideally the same molecular target, but same-pathway/different-target can count too. Consider both successes AND failures — a track record of failures in this target class is just as informative.
+STEP 1 — IDENTIFY CANDIDATES in a FIXED, DETERMINISTIC order. You MUST evaluate ALL THREE tiers every time — do NOT stop after tier 1, and do NOT let "no same-target drug exists" end the search. This determinism matters: the same drug must produce the same evidence set on every run.
+  TIER 1 — SAME MOLECULAR TARGET: other drugs against the identical target (e.g. other anti-miR-10b agents).
+  TIER 2 — SAME MODALITY-CLASS (REQUIRED, even if tier 1 is empty): all drugs of the same therapeutic modality in oncology, regardless of the specific target — e.g. for an anti-miRNA/antisense-oligonucleotide anti-cancer drug, this means the ENTIRE anti-miRNA / therapeutic-oligonucleotide oncology class (Cobomarsen/anti-miR-155, MRX34/miR-34a mimic, and any other miRNA-directed cancer programs). A first-in-class TARGET is NOT a first-in-class MODALITY — the modality-class track record is ADMISSIBLE and REQUIRED evidence.
+  TIER 3 — SAME BROAD PATHWAY: same-pathway/different-target drugs.
+Consider both successes AND failures at every tier — a track record of failures in the modality-class is just as informative as successes.
 
 STEP 2 — SCORE RELEVANCE of each candidate on three axes: target (same target > same pathway > same broad class), indication (same disease > related pathophysiology > different), modality (same drug type — small molecule/mAb/ADC/gene therapy — > related > very different).
 
@@ -147,10 +151,10 @@ STEP 3 — SYNTHESIZE:
   CRITICAL: A class graveyard with 4+ documented Phase 2+ failures must NOT get sigma2 0.6.
   Your confidence in that negative signal is HIGH, so sigma2 must be LOW (0.08-0.15).
 
-found: false IS APPROPRIATE WHEN:
-- No drugs with meaningful target/pathway overlap have reached a stage with clinical outcome data (genuinely first-in-class target).
-- The only "analogs" share nothing beyond the broadest category (e.g. "also a kinase inhibitor") with no real mechanistic connection — reporting these would be noise.
-Do NOT force a finding just to have something to report — "no track record yet" is itself useful information (it means the drug's own clinical data carries relatively more weight).
+found: false IS APPROPRIATE ONLY WHEN ALL THREE tiers are genuinely empty — no same-target drug, no same-modality-class drug, and no same-pathway drug has ANY clinical outcome data. This is rare.
+- CRITICAL: do NOT report found:false on the grounds that "no SAME-TARGET analog exists" (tier 1 empty) if the MODALITY-CLASS (tier 2) has clinical programs. If the drug is an anti-miRNA/oligonucleotide oncology agent and ANY miRNA-directed cancer program has clinical data (e.g. Cobomarsen, MRX34), found MUST be true and reflect that class track record. "First-in-class target" is NOT grounds for found:false when the modality-class has a track record.
+- found:false is reserved for a drug whose modality-class itself has never entered the clinic in oncology.
+Do NOT force a finding from an unrelated category (e.g. "also injectable") with no mechanistic connection — that is noise. But a real modality-class track record is signal and MUST be reported.
 
 Use web_search before answering.
 
@@ -223,6 +227,16 @@ INDICATION/ENDPOINT MISMATCH — ALWAYS REASON ABOUT THIS:
 
   STATE EXPLICITLY whether a mismatch exists, what it is, and how it changed your sigma2/mu.
 
+EFFICACY SIGNAL CLASSIFICATION — REQUIRED (this label deterministically bounds the score downstream):
+- "null_negative": zero objective responses (ORR=0) in a trial where objective response was an
+  efficacy readout, OR no separation from control, OR stable-disease-only where responses were the
+  readout. STABLE DISEASE IS NOT AN OBJECTIVE RESPONSE — "0 ORR, 64% stable disease" is null_negative,
+  NOT positive and NOT "no data." A cross-setting/endpoint mismatch does NOT change this label (it may
+  add some sigma2, but a null efficacy result is still null_negative).
+- "positive": objective responses (PR/CR) observed, clear separation from control, or a positive
+  time-to-event / biomarker-clearance result.
+- "not_measurable_yet": only safety/PK/tolerability reported, no efficacy readout at all (also set found:false).
+
 found: false IS APPROPRIATE WHEN:
 - No clinical efficacy data reported yet (still Phase 1 dose-escalation with only safety/PK/tolerability, or Preclinical).
 - Reported data is purely PK/PD/target-engagement with NO clinical efficacy readout — set found:false even if PK data exists. (This keeps "own clinical efficacy" cleanly separate from mechanism/animal evidence, which already cover target-engagement signals.)
@@ -233,6 +247,7 @@ RESPOND WITH ONLY THIS JSON:
 {
   "found": true | false,
   "label": "e.g. 'Own clinical data: Phase 1b efficacy (n=24)'",
+  "efficacySignal": "positive" | "null_negative" | "not_measurable_yet",
   "mu": 0.0,
   "sigma2": 0.0,
   "reasoning": "2-4 sentences: what trial/data (phase, n, endpoint, result), and why this mu/sigma2 — or why no efficacy data exists yet."
@@ -361,8 +376,33 @@ export async function discoverOwnClinicalEvidence(
         serperQueries: [`${ctx.drug} clinical trial results efficacy data`],
       })
     );
-    return toEvidenceStep(source, defaultLabel, parseDiscoveryResponse(raw));
+    const parsed = parseDiscoveryResponse(raw);
+    return boundNullNegativeSignal(toEvidenceStep(source, defaultLabel, parsed), parsed);
   } catch (e) {
     return degradedStep(source, defaultLabel, e);
   }
+}
+
+/**
+ * Deterministic enforcement of the own-clinical asymmetry rule. The prose rule
+ * (a null/negative efficacy result is INFORMATION, not uncertainty) did not bind
+ * at runtime — the model kept regressing mu to the base rate and inflating sigma2
+ * to ~0.52 via the setting-mismatch, neutralizing a zero-ORR result. When the
+ * model classifies the signal as null_negative, we CLAMP it here to a bounded
+ * informative-negative range: mu ∈ [0.30, 0.45] (a real downward pull, but not
+ * cratered — stable disease is real and ctDNA was unmeasured), sigma2 ∈ [0.25,
+ * 0.42] (the mismatch cannot inflate it into "no information"). This preserves
+ * displayed==consumed: the clamped sigma2 is the one stored on the step and shown.
+ */
+export function boundNullNegativeSignal(step: EvidenceStepInput, parsed: any): EvidenceStepInput {
+  if (step.found && step.signal && parsed?.efficacySignal === "null_negative") {
+    return {
+      ...step,
+      signal: {
+        mu: clamp(step.signal.mu, 0.30, 0.45),
+        sigma2: clamp(step.signal.sigma2, 0.25, 0.42),
+      },
+    };
+  }
+  return step;
 }

@@ -268,9 +268,12 @@ Pivoting to a large-market RCT (n=400, hard endpoint) does NOT automatically mea
 If the new indication is harder, set ptrsOverride lower than the baseline.
 
 RULE 3 — "changesSummary" IS REQUIRED ON EVERY NON-BASELINE OPTION.
-Each non-baseline option must include a "changesSummary" string field: one line listing what changed and why.
-Example: "changesSummary": "Larger indication (AMD), n 40→400, RCT hard endpoint, lost orphan status. Peak sales $350M→$1.2B but P(approval) drops 42%→25%."
-This is displayed to the user so they can see what drove each option's numbers.
+Each non-baseline option must include a "changesSummary" string field: one QUALITATIVE line listing what changed and why.
+CRITICAL: do NOT quote specific P(approval), dev-cost, eNPV, or peak-sales NUMBERS in changesSummary. The
+engine computes those and displays them on the option cards; any number you write here will CONTRADICT the
+card (your ptrsOverride/devCostMOverride are inputs the engine may override). Describe the change and its
+DIRECTION only.
+Example: "changesSummary": "Larger indication (AMD), n 40→400, RCT hard endpoint, lost orphan status — broader market but a harder regulatory bar." (No numbers.)
 
 RULE 4 — Option A (first element) MUST always be the baseline with "isBaseline": true and NO parameter overrides.
 
@@ -334,5 +337,15 @@ User asks about KIO-301 indication expansion from RP (orphan) to larger retinal 
 ]
 </options_json>
 
-After the JSON block, explain each option, key trade-offs, and your recommendation. Be direct.`;
+After the JSON block, explain each option and its key trade-offs QUALITATIVELY. Be direct, but:
+- Do NOT state specific P(approval), dev-cost, eNPV, or peak-sales numbers, and do NOT build a summary
+  table of them. The engine computes those and shows them on the cards; any number you write will
+  contradict the cards. Refer the reader to the cards for exact figures and describe DIRECTION and
+  reasoning only ("broader label, higher market, but a harder regulatory bar").
+- If two options have the SAME trial design (e.g. an expansion whose pivotal is identical to another
+  option's), say so plainly — "these compute identically in-model; the expansion's value is post-approval
+  and not captured here." Do NOT invent a blended probability or combined peak-sales figure to make them
+  look different.
+- Do NOT declare a single recommended option with numbers — the app marks the highest-eNPV option from the
+  engine. You may discuss which strategy fits which goal, qualitatively.`;
 }

@@ -101,13 +101,29 @@ export function scoreMechanism(factors: MechanismFactors): MechanismScoreResult 
   // Mechanism Signal Strength — simple average of IPS and TRS
   // Simple average preserves intuition: two 60-point components → 60 MSS.
   // Geometric mean and multiplication were penalizing moderate-but-real signals.
-  const mss = clamp01(0.5 * ips + 0.5 * trs);
+  const mssBase = clamp01(0.5 * ips + 0.5 * trs);
+
+  // ── Unvalidated-first-in-class gate (Part 3) ──────────────────────────────
+  // When the target has NO human validation (targetValidation capped ≤0.35 by
+  // the scorer's rubric) AND the class has NO approved precedent (translationRate
+  // ≤0.25), a strong indication-fit or modality-fit must NOT be able to average
+  // the composite back up to "moderate". A strong indication-fit for a target
+  // nobody has validated in humans is not evidence the drug works. Target
+  // validation GATES the composite: the mechanism signal cannot materially exceed
+  // the target-validation ceiling (+ a small margin). Fires ONLY under this
+  // condition — validated-target / approved-class assets are untouched.
+  const unvalidatedGate =
+    factors.targetValidation.score <= 0.35 && factors.translationRate.score <= 0.25;
+  const mss = unvalidatedGate
+    ? Math.min(mssBase, factors.targetValidation.score + 0.12)
+    : mssBase;
 
   // Divergence flag: IPS and TRS disagree by more than 25 points
   // (pharmacologically strong but biologically weak, or vice versa)
   const divergence = Math.abs(ips - trs) > 0.25;
 
-  // Variance — increases with unknown factors, high-variance flags, and divergence
+  // Variance — increases with unknown factors, high-variance flags, divergence,
+  // and the unvalidated gate (an unvalidated target/class is genuinely higher-uncertainty).
   const allFactors = Object.values(factors);
   const unknownCount = allFactors.filter(f => f.confidence === "unknown").length;
   const highVarianceCount = allFactors.filter(f => f.highVariance).length;
@@ -115,7 +131,8 @@ export function scoreMechanism(factors: MechanismFactors): MechanismScoreResult 
     0.05 +
     (unknownCount / allFactors.length) * 0.35 +
     (highVarianceCount / allFactors.length) * 0.25 +
-    (divergence ? 0.10 : 0)
+    (divergence ? 0.10 : 0) +
+    (unvalidatedGate ? 0.08 : 0)
   );
 
   // Confidence interval half-width (in probability units, e.g. 0.10 = ±10%)
