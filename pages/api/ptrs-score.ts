@@ -124,6 +124,12 @@ How well validated is this target in this disease?
 - 0.5–0.7: Strong preclinical validation (multiple animal models, human tissue data)
 - 0.3–0.5: Hypothesis-driven (association data, single model)
 - 0.1–0.3: Novel/uncharacterized target, first-in-class limited validation
+CRITICAL — PRECLINICAL IS NOT VALIDATION: if NO drug against this target has ever shown
+clinical efficacy in humans AND there is no approved drug in the mechanistic class, this factor
+is CAPPED at 0.35 and highVariance=true, no matter how strong the animal/cell-line/"master
+regulator" data are. Compelling biology is a HYPOTHESIS, not validation. Only human genetic
+validation or an approved same-target/same-class drug earns a score above 0.5. Do not award the
+0.5–0.7 "strong preclinical" band to a target with zero human validation.
 
 FACTOR 2B — INDICATION-MECHANISM FIT (weight 30%):
 How central is this target to the disease pathology being treated?
@@ -149,6 +155,16 @@ What is the historical success rate of this drug class/mechanism translating fro
 - 0.3–0.5: Class has 15–30% success rate; multiple high-profile Phase 3 failures in this indication
 - 0.1–0.3: Class has <15% success rate; poor historical translation (e.g., Alzheimer's amyloid, Phase 3 sepsis trials)
 - Use 0.4 if no data exists for this mechanism×indication combination
+- UNPRECEDENTED CLASS: if the mechanistic class (e.g., anti-miRNA / therapeutic antisense oligo in
+  solid tumors) has ZERO approved drugs anywhere and no positive pivotal readout, score 0.10–0.25
+  and highVariance=true — an unprecedented class has no demonstrated translation to earn more.
+
+CALIBRATION — UNVALIDATED FIRST-IN-CLASS: when BOTH (a) the target has no human efficacy validation
+and (b) the class has no approved precedent, the translational factors (2A target validation, 2D
+translation rate) MUST anchor LOW with highVariance=true. This is a HIGH-UNCERTAINTY start, not a
+moderate-confidence one. Strong preclinical potency/safety lives in the IPS factors and is scored
+separately — do NOT let it inflate the translational (TRS) factors. If the biology is compelling but
+unproven in humans and the class is unproven, the honest posture is "wide uncertainty, low anchor."
 
 Use web_search to research this drug before scoring. Search for:
 - Published PK/PD data, IC50, selectivity profile, target engagement studies

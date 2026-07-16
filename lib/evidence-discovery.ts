@@ -180,20 +180,34 @@ REASONING GUIDANCE:
       positive at best, near-negative in most regulatory contexts. Score it accordingly.
   * Flat/null/wrong-direction: mu 0.10-0.35
 
+ASYMMETRY — A NULL/NEGATIVE EFFICACY SIGNAL IS INFORMATION, NOT UNCERTAINTY:
+  If the drug's OWN trial produced a null or negative efficacy result — zero objective responses in
+  an ORR-gated setting, no separation from control, stable-disease-only where responses were the
+  readout — that is INFORMATIVE-NEGATIVE evidence, not "we don't know." Keep mu LOW (0.25-0.45) and
+  sigma2 MODERATE (0.20-0.40) so it produces a REAL downward pull on the prior. Do NOT regress mu UP
+  toward the base rate, and do NOT inflate sigma2 to 0.55-0.70 — that would treat a negative result
+  as mere uncertainty and neutralize it, which is exactly wrong. (Same principle as class-graveyard
+  analog evidence: a consistent negative = HIGH confidence in the negative = LOW sigma2 = strong pull.)
+
 - sigma2 reflects sample size/maturity AND any translation gap (see below):
   * Large/mature/controlled trial → sigma2 0.10-0.25
   * Small early cohort (n<30, short follow-up) → sigma2 0.40-0.65
+  * BUT a null/negative efficacy signal overrides the "small cohort = high sigma2" default per the
+    ASYMMETRY rule above — a negative result from a small trial is still informative-negative.
 
 INDICATION/ENDPOINT MISMATCH — ALWAYS REASON ABOUT THIS:
   Compare the setting and endpoint of the evidence you found to the indication being VALUED.
-  If they differ, the translation gap MUST widen sigma2 AND pull mu toward the base rate (≈0.7-0.9).
+  The mismatch rules below apply to a POSITIVE cross-setting result (a good result elsewhere is
+  uncertain here → regress mu toward base rate, widen sigma2). They do NOT apply to a NEGATIVE
+  result — a negative signal stays negative (see ASYMMETRY above); a mismatch may add at most
+  +0.10-0.15 sigma2 (somewhat less determinative cross-setting) but never flips it to "no information."
 
-  HIGH translation gap (large sigma2 penalty + mu regression):
-  - Evidence: RECIST response (PR/SD/PD) or ORR in measurable METASTATIC disease
+  HIGH translation gap for a POSITIVE result (large sigma2 penalty + mu regression):
+  - Evidence: a POSITIVE RECIST response / ORR in measurable METASTATIC disease
     Indication valued: ctDNA clearance / MRD negativity / biomarker clearance in POST-SURGERY
     minimal-residual-disease setting (no measurable disease, RECIST doesn't apply)
     → sigma2 += 0.25-0.35 (push sigma2 to 0.55-0.70 even for small n).
-      mu → pull toward 0.6-0.85 (these settings have different biology; the metastatic ORR
+      mu → pull toward 0.6-0.85 (these settings have different biology; a positive metastatic ORR
       tells you little about whether the drug can clear microscopic residual disease).
   - Evidence: any mixed-histology basket cohort
     Indication valued: single specific tumor type

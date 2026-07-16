@@ -127,6 +127,11 @@ export type BaseContext = {
   // with the Development Path display).
   devPlanPApproval?: number | null;
 
+  // Cached risk-adjusted dev cost ($M) from the base dev plan — used as Option
+  // A's cost so the baseline reproduces the headline eNPV. The engine (not the
+  // stale devCostPV or the LLM's per-option guesses) is the source of truth.
+  devPlanRiskAdjCostM?: number | null;
+
   // From layer2Result (Layer 2) — the current trial design
   baseTrialDesign: TrialDesignInputs;
 
@@ -240,40 +245,38 @@ export function computeOption(
     enrollmentNote:     base.baseTrialDesign.enrollmentNote,
   };
 
-  // ── Step 2: Adjusted PTRS ─────────────────────────────────────────────────
+  // ── Step 2: Adjusted PTRS (+ per-option engine cost) ──────────────────────
+  // When a dev plan governs, the ENGINE is the single source of truth for BOTH
+  // P(approval) and risk-adjusted cost, computed per this option's design. The
+  // LLM's ptrsOverride / devCostMOverride are ignored in that path — they were
+  // guesses that made the advisor diverge from the headline. peakSalesMOverride
+  // is still honored (market size is the revenue model's job, not the engine's).
   let ptrs: number;
   let ptrsCI: { lower: number; upper: number };
+  let enginePlanCostM: number | null = null;  // per-option risk-adjusted cost when the engine ran
+  const hasDevPlan = !!base.devPlanInputs?.stages?.length;
+  const ciBand = (p: number) => ({
+    lower: Math.max(0.01, p - base.ciHalfWidth),
+    upper: Math.min(0.99, p + base.ciHalfWidth),
+  });
 
-  if (option.ptrsOverride != null) {
-    // Explicit override — use as-is
+  if (option.ptrsOverride != null && !hasDevPlan) {
+    // No dev plan → honor the explicit override.
     ptrs = clamp01(option.ptrsOverride);
-    ptrsCI = {
-      lower: Math.max(0.01, ptrs - base.ciHalfWidth),
-      upper: Math.min(0.99, ptrs + base.ciHalfWidth),
-    };
+    ptrsCI = ciBand(ptrs);
   } else if (option.isBaseline && base.devPlanPApproval != null) {
-    // Option A: use the dev plan's full multi-stage P(approval) so the
-    // probability here matches the Development Path display exactly.
+    // Option A: reuse the headline dev plan's P(approval) AND its risk-adjusted
+    // cost, so the baseline reproduces the Development Path eNPV exactly.
     ptrs = base.devPlanPApproval;
-    ptrsCI = {
-      lower: Math.max(0.01, ptrs - base.ciHalfWidth),
-      upper: Math.min(0.99, ptrs + base.ciHalfWidth),
-    };
-  } else if (option.isBaseline) {
-    // Fallback when dev plan not yet computed — use stored combined PTRS.
-    ptrs = base.ptrs;
-    ptrsCI = {
-      lower: Math.max(0.01, ptrs - base.ciHalfWidth),
-      upper: Math.min(0.99, ptrs + base.ciHalfWidth),
-    };
-  } else if (base.devPlanInputs?.stages?.length) {
+    ptrsCI = ciBand(ptrs);
+    enginePlanCostM = base.devPlanRiskAdjCostM ?? null;
+  } else if (hasDevPlan) {
     // Re-run the full multi-stage development plan with this option's trial
-    // design replacing stage 0. This gives the correct multi-stage P(approval)
-    // — P(Ph2 success) × P(Ph3 success | Ph2 success) × P(reg approval) —
-    // rather than a single-stage Layer 2 score.
+    // design replacing stage 0 — the correct multi-stage P(approval) AND the
+    // bottom-up risk-adjusted cost for THIS option's design.
     const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
     const stage0Override: DevStageInput = {
-      ...(base.devPlanInputs.stages[0] as DevStageInput),
+      ...(base.devPlanInputs!.stages[0] as DevStageInput),
       n: trialDesign.n,
       trialDesign,
     };
@@ -281,26 +284,23 @@ export function computeOption(
       mixture,
       base.ciHalfWidth,
       {
-        stages: [stage0Override, ...base.devPlanInputs.stages.slice(1)],
-        regulatoryContext: base.devPlanInputs.regulatoryContext,
-        regCostM: base.devPlanInputs.regCostM,
+        stages: [stage0Override, ...base.devPlanInputs!.stages.slice(1)],
+        regulatoryContext: base.devPlanInputs!.regulatoryContext,
+        regCostM: base.devPlanInputs!.regCostM,
       },
-      0, // revenuePVM not needed — we only use pApproval from this result
+      0, // revenuePVM not needed — we use pApproval + totalRiskAdjCostM
     );
     ptrs = fullPlan.pApproval;
-    ptrsCI = {
-      lower: Math.max(0.01, ptrs - base.ciHalfWidth),
-      upper: Math.min(0.99, ptrs + base.ciHalfWidth),
-    };
+    ptrsCI = ciBand(ptrs);
+    enginePlanCostM = fullPlan.totalRiskAdjCostM;
+  } else if (option.isBaseline) {
+    // Fallback when dev plan not yet computed — use stored combined PTRS.
+    ptrs = base.ptrs;
+    ptrsCI = ciBand(ptrs);
   } else {
     // Fallback: single-stage Layer 2 score (used when dev plan not available)
     const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
-    const l2 = scoreLayer2(
-      mixture,
-      base.ptrsLayer1,
-      base.ciHalfWidth,
-      trialDesign,
-    );
+    const l2 = scoreLayer2(mixture, base.ptrsLayer1, base.ciHalfWidth, trialDesign);
     ptrs = l2.ptrsCombined;
     ptrsCI = l2.ptrsCI;
   }
@@ -373,7 +373,11 @@ export function computeOption(
     );
   }
 
-  if (option.devCostMOverride != null) {
+  if (enginePlanCostM != null) {
+    // Dev-plan engine ran for this option → use its risk-adjusted cost (single
+    // source of truth, reconciles with the headline). Ignores devCostMOverride.
+    devCostM = enginePlanCostM;
+  } else if (option.devCostMOverride != null) {
     devCostM = option.devCostMOverride;
   } else if (base.resolverEconomics) {
     // Per-patient cost model: CPP × n for the current trial stage,
@@ -391,8 +395,9 @@ export function computeOption(
     devCostM = fixedCost + variableCost * nScale * complexityAdjust;
   }
 
-  // Ownership adjustment (applies to both override and computed cost)
-  if (option.devCostMOverride == null) {
+  // Ownership adjustment applies to computed costs (engine or per-patient), not
+  // to an explicit dollar override (which is assumed to already reflect it).
+  if (enginePlanCostM != null || option.devCostMOverride == null) {
     if (option.ownershipPct != null) {
       devCostM *= option.ownershipPct / 100;
     } else if (option.isOutlicensed) {
@@ -621,11 +626,14 @@ export function buildBaseContext(
     effectPrior:        effectPrior ?? null,
     resolverEconomics,
     devPlanInputs,
-    devPlanPApproval:   devPlan?.pApproval ?? null,
+    devPlanPApproval:     devPlan?.pApproval ?? null,
+    devPlanRiskAdjCostM:  devPlan?.totalRiskAdjCostM ?? null,
     baseTrialDesign,
     ptrs:         out.ptrs,
     peakSalesM:   peakSalesRaw / 1e6,
-    devCostM:     devCostRaw / 1e6,
+    // Prefer the dev-plan engine's risk-adjusted cost over the stale devCostPV
+    // full-program default, so option costs reconcile with the headline.
+    devCostM:     devPlan?.totalRiskAdjCostM ?? (devCostRaw / 1e6),
     launchYear:   v.indications?.[0]?.launchYear ?? v.launchYear ?? currentYear + 5,
     loeYear:      v.indications?.[0]?.loeYear    ?? v.loeYear    ?? currentYear + 15,
     discountRate:         v.discountRate         ?? 0.12,

@@ -376,6 +376,18 @@ function StepCard({ step, index, ptrsResult }: { step: ChainStep; index: number;
         </div>
       )}
 
+      {/* Signal vs posterior clarity: the σ² the update CONSUMED for this
+          evidence (step.signal.sigma2) is a different quantity from the running
+          estimate's σ² after combining. Showing only the latter made the
+          reasoning ("σ² widened to 0.72") look contradictory with the card. */}
+      {!isFirst && step.found && step.signal && (
+        <div style={{ fontSize: 10, color: "var(--text-faint)", fontFamily: "var(--font-mono)", marginTop: 2, lineHeight: 1.5 }}>
+          This evidence: strength {strengthScore(step.signal.mu)} · signal σ² {step.signal.sigma2.toFixed(2)}
+          <span style={{ opacity: 0.7 }}> (the uncertainty this update used)</span> → running estimate σ² {before ? `${before.variance.toFixed(2)} → ` : ""}{after.variance.toFixed(2)}
+          <span style={{ opacity: 0.7 }}> after combining</span>
+        </div>
+      )}
+
       {/* Reasoning */}
       {step.found && step.reasoning && (
         <div>

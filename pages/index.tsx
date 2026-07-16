@@ -371,12 +371,14 @@ function PnLTable({ v, out, pApproval, onClose }: { v: Valuation; out: ReturnTyp
 }
 
 // ─── Indication Row ──────────────────────────────────────────────────────────
-function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, onUpdate, onRemove }: {
+function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isPrimary, governedDevCostM, onUpdate, onRemove }: {
   ind: Indication;
   globalPtrs: number;
   valuation: Valuation;
   numIndications: number;
   halted?: boolean;   // strategic assessment failed → don't show an ungoverned P(appr.)/rNPV verdict
+  isPrimary?: boolean;            // first indication — the one the dev plan governs
+  governedDevCostM?: number | null; // dev plan's risk-adjusted cost ($M); overrides devCostPV for the primary row
   onUpdate: (id: string, updates: Partial<Indication>) => void;
   onRemove: (id: string) => void;
 }) {
@@ -387,14 +389,17 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, onU
     launchYear: ind.launchYear ?? valuation.launchYear,
     loeYear: ind.loeYear ?? valuation.loeYear,
   }), [ind.peakSales, ind.launchYear, ind.loeYear, valuation]);
-  const rnpv = Math.round(effectivePtrs * revenuePV);
 
   const cellInput = (type: "text" | "number", val: string | number | undefined, placeholder: string, onChange: (v: string) => void) => (
     <input type={type} className="input-base" style={{ fontSize: 12, padding: "4px 8px", minWidth: 0 }}
       value={val ?? ""} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
   );
 
-  const effectiveDevCost = ind.devCostPV ?? 0;
+  // Dev plan is the single source of truth for the primary indication's dev cost
+  // (risk-adjusted), so the rNPV here reconciles with the headline eNPV instead
+  // of using the stale full-program devCostPV.
+  const governed = isPrimary && governedDevCostM != null;
+  const effectiveDevCost = governed ? governedDevCostM * 1e6 : (ind.devCostPV ?? 0);
   const rnpvAfterDev = Math.round(effectivePtrs * revenuePV - effectiveDevCost);
 
   return (
@@ -404,7 +409,9 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, onU
       {cellInput("number", ind.launchYear ?? "", String(valuation.launchYear ?? ""), (v) => onUpdate(ind.id, { launchYear: v ? Number(v) : undefined }))}
       {cellInput("number", ind.loeYear ?? "", String(valuation.loeYear ?? ""), (v) => onUpdate(ind.id, { loeYear: v ? Number(v) : undefined }))}
       {cellInput("number", ind.ptrs != null ? +(ind.ptrs * 100).toFixed(1) : "", halted ? "—" : +(effectivePtrs * 100).toFixed(1) + "%", (v) => onUpdate(ind.id, { ptrs: v ? Number(v) / 100 : undefined }))}
-      {cellInput("number", ind.devCostPV != null ? ind.devCostPV / 1e6 : "", String(Math.round((valuation.devCostPV ?? 0) / Math.max(1, numIndications) / 1e6)), (v) => onUpdate(ind.id, { devCostPV: v ? Number(v) * 1e6 : undefined }))}
+      {governed
+        ? <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }} title="Risk-adjusted expected R&D from the development plan">{Math.round(governedDevCostM!)}</div>
+        : cellInput("number", ind.devCostPV != null ? ind.devCostPV / 1e6 : "", String(Math.round((valuation.devCostPV ?? 0) / Math.max(1, numIndications) / 1e6)), (v) => onUpdate(ind.id, { devCostPV: v ? Number(v) * 1e6 : undefined }))}
       <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(revenuePV)}</div>
       <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "var(--font-mono)", textAlign: "right", color: halted ? "var(--text-faint)" : (rnpvAfterDev >= 0 ? "var(--accent)" : "var(--danger)") }}>{halted ? "—" : fmtMoney(rnpvAfterDev)}</div>
       <button onClick={() => onRemove(ind.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: 16, lineHeight: 1, padding: 0, textAlign: "center" }}>×</button>
@@ -497,6 +504,21 @@ export default function HomePage() {
       revenuePVM,
     );
   }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief]);
+
+  // Single source of truth for the displayed P(approval): a genuine user
+  // override wins, else the dev plan governs, else the phase baseline. Used by
+  // the indications table + tornado so they can't diverge from the headline.
+  const governedPtrs = v.ptrs ?? devPlan?.pApproval ?? out.ptrs;
+
+  // Chart/tornado valuation: same as `display` but with the governed P(approval)
+  // and the dev plan's risk-adjusted cost, so the tornado reconciles to the
+  // headline eNPV. Kept separate from `display` (which feeds `base` → `devPlan`)
+  // to avoid a compute cycle. Defined AFTER devPlan for the same reason.
+  const chartValuation: Valuation = useMemo(() => ({
+    ...display,
+    ptrs: governedPtrs,
+    ...(devPlan ? { devCostPV: Math.round(devPlan.totalRiskAdjCostM * 1e6) } : {}),
+  }), [display, governedPtrs, devPlan]);
 
   // ── Expectation smoke detector: fires when devPlan result changes ─────────
   useEffect(() => {
@@ -1037,8 +1059,10 @@ export default function HomePage() {
       setPtrsResult(data);
       setPtrsOverrides({});   // clear any previous manual overrides
       setLayer2Result(null);  // clear stale Layer 2 while new one loads
-      // Auto-apply the mechanistic PTRS to the valuation
-      setV((cur) => ({ ...cur, ptrs: data.ptrs }));
+      // NOTE: do NOT write the computed PTRS into v.ptrs — that field is the
+      // USER's "Override P(approval)" input. Writing here leaked a computed
+      // number into the override and made the indications table use it instead
+      // of the dev plan's governed P(approval). The result lives in ptrsResult.
       pushToast(`Mechanism scored: MSS ${Math.round(data.mss * 100)} → P(approval) prior ${(data.ptrs * 100).toFixed(1)}% — analyzing trial design…`, "success", 6000);
       // Auto-trigger Layer 2 (45s delay — well clear of the 60s rate-limit window)
       setTimeout(() => onScoreLayer2(drug, indication, phase, sponsor, data), 45000);
@@ -1176,8 +1200,9 @@ export default function HomePage() {
       if (!res.ok) throw new Error("Layer 2 scoring failed");
       const data = await res.json();
       setLayer2Result(data);
-      // Apply the combined PTRS (Layer 1 + 2) to the valuation
-      setV((cur) => ({ ...cur, ptrs: data.ptrsCombined }));
+      // Do NOT write into v.ptrs (the user override field) — see onScorePtrs.
+      // The combined PTRS lives in layer2Result; the dev plan produces the
+      // governed P(approval) the headline and table display.
       pushToast(`P(approval): ${(data.ptrsCombined * 100).toFixed(1)}% (mechanism + trial design) — building dev plan…`, "success", 6000);
       // Auto-generate development plan immediately after layer2
       onGenerateDevPlan(drug, indication, phase, sponsor, data);
@@ -1210,7 +1235,7 @@ export default function HomePage() {
       if (!res.ok) throw new Error("Rescore failed");
       const data = await res.json();
       setPtrsResult(data);
-      setV((cur) => ({ ...cur, ptrs: data.ptrs }));
+      // Result lives in ptrsResult; v.ptrs stays reserved for the user override.
       pushToast(`PTRS recalculated: ${(data.ptrs * 100).toFixed(1)}%`, "success", 4000);
     } catch (e: any) {
       console.error("[ptrs] rescore failed:", e?.message);
@@ -1610,8 +1635,8 @@ export default function HomePage() {
                     <div key={i} style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", fontFamily: "var(--font-mono)" }}>{h}</div>
                   ))}
                 </div>
-                {v.indications.map((ind) => (
-                  <IndicationRow key={ind.id} ind={ind} globalPtrs={out.ptrs} valuation={v} numIndications={v.indications!.length} halted={briefStatus === "failed"} onUpdate={updateIndication} onRemove={removeIndication} />
+                {v.indications.map((ind, i) => (
+                  <IndicationRow key={ind.id} ind={ind} globalPtrs={governedPtrs} valuation={v} numIndications={v.indications!.length} halted={briefStatus === "failed"} isPrimary={i === 0} governedDevCostM={devPlan?.totalRiskAdjCostM ?? null} onUpdate={updateIndication} onRemove={removeIndication} />
                 ))}
                 {v.indications.length > 1 && (
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 2fr) 90px 68px 68px 64px 80px 80px 80px 24px", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
@@ -1723,7 +1748,7 @@ export default function HomePage() {
                         <div style={{ fontSize: 12, color: "var(--text-muted)", display: "flex", gap: 12, flexWrap: "wrap", marginBottom: t.claudeReason ? 6 : 0 }}>
                           {t.sponsor && <span>🏢 {t.sponsor}</span>}
                           {t.conditions?.[0] && <span>🎯 {t.conditions[0]}</span>}
-                          {t.estimatedLaunchYear && <span>🚀 Est. launch ~{t.estimatedLaunchYear}</span>}
+                          {t.estimatedLaunchYear && <span title="Rough estimate from this trial's completion date. The modeled launch year (used in the eNPV) comes from the full development-plan timeline and may be later.">🚀 Trial-based launch ~{t.estimatedLaunchYear} (pre-plan)</span>}
                           {(t.primaryCompletionDate || t.completionDate) && (
                             <span>✓ Ends {(t.completionDate || t.primaryCompletionDate || "").slice(0, 7)}</span>
                           )}
@@ -2558,7 +2583,7 @@ export default function HomePage() {
           {briefStatus !== "failed" && (
             <Card>
               <SectionLabel>Valuation Analysis</SectionLabel>
-              <ValuationCharts valuation={display} />
+              <ValuationCharts valuation={chartValuation} />
             </Card>
           )}
 
