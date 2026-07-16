@@ -737,26 +737,40 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
               </div>
             )}
 
-            {/* Previous conversation summary (collapsed) */}
-            {chatHistory.length > 0 && (
-              <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ fontSize: 11, color: "var(--text-faint)" }}>
-                  {Math.floor(chatHistory.length / 2)} question{chatHistory.length > 2 ? "s" : ""} asked
-                  {options.length > 0 && ` · ${options.length} options generated`}
+            {/* Conversation transcript — keep the user's questions visible after
+                the advisor answers (the input clears on send). */}
+            {chatHistory.length > 0 && (() => {
+              const questions = chatHistory.filter((m) => m.role === "user");
+              return (
+                <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: questions.length > 0 ? 8 : 0 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-faint)" }}>
+                      {questions.length} question{questions.length !== 1 ? "s" : ""} asked
+                      {options.length > 0 && ` · ${options.length} options generated`}
+                    </div>
+                    <button
+                      onClick={() => {
+                        setChatHistory([]);
+                        setOptions([]);
+                        setAiSummary(null);
+                        setChatError(null);
+                      }}
+                      style={{ fontSize: 11, color: "var(--text-faint)", background: "none", border: "none", cursor: "pointer" }}
+                    >
+                      Clear ×
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {questions.map((m, i) => (
+                      <div key={i} style={{ fontSize: 12.5, color: "var(--text)", background: "var(--surface-2)", borderRadius: 8, padding: "8px 12px", lineHeight: 1.5 }}>
+                        <span style={{ color: "var(--text-faint)", fontWeight: 700, marginRight: 6, whiteSpace: "nowrap" }}>You asked:</span>
+                        {m.content}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <button
-                  onClick={() => {
-                    setChatHistory([]);
-                    setOptions([]);
-                    setAiSummary(null);
-                    setChatError(null);
-                  }}
-                  style={{ fontSize: 11, color: "var(--text-faint)", background: "none", border: "none", cursor: "pointer" }}
-                >
-                  Clear ×
-                </button>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Text input */}
             <div style={{ display: "flex", gap: 0, alignItems: "flex-end" }}>
