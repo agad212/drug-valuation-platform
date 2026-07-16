@@ -96,3 +96,43 @@ describe("Part 4 — surrogate→hard-endpoint translation penalty", () => {
     expect(ph3WithShift).toBeLessThan(ph3NoShift);
   });
 });
+
+describe("Part-final — modality meta-risk haircut (class-conditioned)", () => {
+  const design: TrialDesignInputs = {
+    n: 45, endpointType: "surrogate", designType: "single_arm",
+    populationType: "biomarker_selected", placeboResponse: "low", regulatoryContext: "orphan",
+  };
+  function planFor(classStatus: "graveyard" | "precedent" | undefined) {
+    const stages: DevStageInput[] = [
+      { id: "s1", name: "Ph2a", phase: "Phase 2", n: 45, cpp: 150000, trialDesign: design,
+        isCurrentTrial: true, enrollmentRatePerMonth: 3, treatmentObsMonths: 6, startupCushionMonths: 7,
+        isTimeToEvent: false, nullResponseRate: 0.05 },
+      { id: "s2", name: "Ph3", phase: "Phase 3", n: 200, cpp: 300000, isCurrentTrial: false,
+        enrollmentRatePerMonth: 5, treatmentObsMonths: 12, startupCushionMonths: 8,
+        isTimeToEvent: true, nullResponseRate: 0.20,
+        trialDesign: { ...design, n: 200, designType: "rct", populationType: "rare_small" } },
+    ];
+    return computeDevPlan(mixtureFromMssVariance(0.35, 0.15), 0.1,
+      { stages, regulatoryContext: "orphan", modalityClassStatus: classStatus }, 0);
+  }
+
+  it("FIRES for a graveyard class: haircuts each trial-success stage and compounds", () => {
+    const graveyard = planFor("graveyard");
+    for (const st of graveyard.stages) {
+      expect(st.modalityHaircut).toBeCloseTo(0.80, 6);
+      expect(st.trialSuccessProb).toBeCloseTo(st.trialSuccessProbRaw * 0.80, 6);
+    }
+    // Compounds: overall P(approval) is strictly below the no-haircut baseline.
+    expect(graveyard.pApproval).toBeLessThan(planFor(undefined).pApproval);
+  });
+
+  it("does NOT fire for a validated (precedent) class — the tau guard", () => {
+    const precedent = planFor("precedent");
+    const none = planFor(undefined);
+    for (const st of precedent.stages) {
+      expect(st.modalityHaircut).toBe(1.0);
+      expect(st.trialSuccessProb).toBeCloseTo(st.trialSuccessProbRaw, 9);
+    }
+    expect(precedent.pApproval).toBeCloseTo(none.pApproval, 9);
+  });
+});

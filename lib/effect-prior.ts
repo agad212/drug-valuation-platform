@@ -60,6 +60,18 @@ export type EvidenceSignal = {
 };
 
 /**
+ * Modality/target-class status, determined by the ANALOG step (Step 3). Read
+ * downstream (dev plan) so a "graveyard" class base rate can haircut the stage
+ * probabilities too — not just the effect prior. Same determination the effect
+ * prior already used, surfaced structurally so it isn't re-classified elsewhere.
+ *   graveyard  — zero approved drugs in the class AND a documented failure pattern
+ *   precedent  — the class has approved/precedented members
+ *   mixed      — some successes, some failures
+ *   none       — no usable class read (first-in-modality, no analogs at all)
+ */
+export type ClassStatus = "graveyard" | "precedent" | "mixed" | "none";
+
+/**
  * One evidence-chain step as supplied by the caller (in a future step, this
  * comes from AI-driven evidence discovery + reasoning).
  *
@@ -75,6 +87,8 @@ export type EvidenceStepInput = {
   found: boolean;
   /** Required iff found === true. */
   signal?: EvidenceSignal;
+  /** Set by the ANALOG step only — the modality/target-class determination. */
+  classStatus?: ClassStatus;
   /** Free-text explanation of where this signal came from and why — passed through unchanged. */
   reasoning: string;
 };
@@ -94,6 +108,8 @@ export type ChainStep = {
   mixtureAfter: EffectPriorMixture;
   /** "n/a" only when found === false (nothing to agree or disagree with). */
   agreement: "agree" | "disagree" | "n/a";
+  /** Set by the ANALOG step only — the modality/target-class determination. */
+  classStatus?: ClassStatus;
   reasoning: string;
 };
 
@@ -408,6 +424,7 @@ export function buildEffectPrior(steps: EvidenceStepInput[]): EffectPrior {
         label: step.label,
         found: step.found,
         signal: step.signal,
+        classStatus: step.classStatus,
         mixtureBefore,
         mixtureAfter: cloneMixture(running),
         agreement: "n/a",
@@ -423,6 +440,7 @@ export function buildEffectPrior(steps: EvidenceStepInput[]): EffectPrior {
       label: step.label,
       found: step.found,
       signal: step.signal,
+      classStatus: step.classStatus,
       mixtureBefore,
       mixtureAfter: cloneMixture(running),
       agreement,

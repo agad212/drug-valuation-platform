@@ -183,6 +183,11 @@ function StageCard({
             <div style={{ fontSize: 24, fontWeight: 800, color: probC, fontFamily: "var(--font-display)", lineHeight: 1 }}>
               {fmtPct(stage.trialSuccessProb)}
             </div>
+            {stage.modalityHaircut != null && stage.modalityHaircut < 1 && (
+              <div title="Modality-class base rate: zero approved drugs in this class + documented failures" style={{ fontSize: 9, color: "#f59e0b", marginTop: 3, maxWidth: 150, lineHeight: 1.3 }}>
+                incl. modality-class risk ×{stage.modalityHaircut.toFixed(2)} (was {fmtPct(stage.trialSuccessProbRaw)})
+              </div>
+            )}
           </div>
         </div>
 

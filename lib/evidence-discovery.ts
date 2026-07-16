@@ -13,7 +13,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { callClaudeWithSearch } from "./claudeSearch";
-import type { EvidenceStepInput, EvidenceSourceType } from "./effect-prior";
+import type { EvidenceStepInput, EvidenceSourceType, ClassStatus } from "./effect-prior";
 
 export type EvidenceContext = {
   drug: string;
@@ -156,12 +156,21 @@ found: false IS APPROPRIATE ONLY WHEN ALL THREE tiers are genuinely empty — no
 - found:false is reserved for a drug whose modality-class itself has never entered the clinic in oncology.
 Do NOT force a finding from an unrelated category (e.g. "also injectable") with no mechanistic connection — that is noise. But a real modality-class track record is signal and MUST be reported.
 
+CLASS STATUS — REQUIRED. Classify the modality/target class overall (this label is read
+downstream to price class base-rate risk on the development path, so be consistent with your mu):
+- "graveyard": the class has ZERO approved drugs AND a documented pattern of clinical
+  failures/terminations across multiple programs (the same situation that drives a low mu here).
+- "precedent": the class has approved or precedented members (successful clinical track record).
+- "mixed": some successes AND some failures in the class.
+- "none": no usable class analogs at all (genuinely first-in-modality, nothing to compare).
+
 Use web_search before answering.
 
 RESPOND WITH ONLY THIS JSON:
 {
   "found": true | false,
   "label": "e.g. 'Same-target analogs: <Drug A>, <Drug B> clinical outcomes'",
+  "classStatus": "graveyard" | "precedent" | "mixed" | "none",
   "mu": 0.0,
   "sigma2": 0.0,
   "reasoning": "3-5 sentences: which analog(s), their relevance (target/indication/modality match), their outcomes, and how that became this mu/sigma2."
@@ -353,7 +362,13 @@ export async function discoverAnalogEvidence(ctx: EvidenceContext, anthropicKey:
         ],
       })
     );
-    return toEvidenceStep(source, defaultLabel, parseDiscoveryResponse(raw));
+    const parsed = parseDiscoveryResponse(raw);
+    const step = toEvidenceStep(source, defaultLabel, parsed);
+    // Capture the analog step's modality/target-class determination so the dev
+    // plan can price the class base rate on the stage probabilities too.
+    const VALID: ReadonlyArray<ClassStatus> = ["graveyard", "precedent", "mixed", "none"];
+    step.classStatus = VALID.includes(parsed?.classStatus) ? parsed.classStatus : undefined;
+    return step;
   } catch (e) {
     return degradedStep(source, defaultLabel, e);
   }

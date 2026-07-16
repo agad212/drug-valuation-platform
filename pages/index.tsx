@@ -498,9 +498,12 @@ export default function HomePage() {
     if (!devPlanStages || !base || !valuationBrief) return null;
     const revenuePVM = (out.revenuePV ?? 0) / 1e6;
     const mixture = effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
+    // Reuse the analog step's class determination (Step 3) — a "graveyard" class
+    // haircuts the stage probabilities too, not just the effect prior.
+    const modalityClassStatus = effectPrior?.chain?.find((s) => s.source === "analog")?.classStatus;
     return computeDevPlan(
       mixture, base.ciHalfWidth,
-      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0 },
+      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0, modalityClassStatus },
       revenuePVM,
     );
   }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief]);

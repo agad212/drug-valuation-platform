@@ -31,7 +31,7 @@ import type {
   EndpointType,
   RegulatoryContext,
 } from "./ptrs-trial";
-import { mixtureMoments, type EffectPriorMixture } from "./effect-prior";
+import { mixtureMoments, type EffectPriorMixture, type ClassStatus } from "./effect-prior";
 import {
   computeStageRR,
   gridToGaussianMixture,
@@ -128,7 +128,9 @@ export type DevStage = DevStageInput & {
   mixtureIfSuccess: EffectPriorMixture;
 
   // Layer 2 result
-  trialSuccessProb: number; // Σ wᵢ·Φ(zᵢ) — P(this trial detects effect)
+  trialSuccessProb: number; // Σ wᵢ·Φ(zᵢ) — P(this trial detects effect), AFTER modality haircut
+  trialSuccessProbRaw: number; // before the modality-class haircut
+  modalityHaircut: number;     // 1.0 = none; <1 = class-graveyard haircut applied to this stage
   layer2Multiplier: number;
   sigma2Trial: number;
   riskFlags: TrialRiskFlag[];
@@ -190,6 +192,9 @@ export type DevPlanResult = {
   revenuePVM: number;          // from base context
   eNPVM: number;               // pApproval × revenuePVM − totalRiskAdjCostM
   eROI: number | null;         // eNPVM / totalRiskAdjCostM
+
+  // Echoed so downstream (decision-analysis per-option plans) applies the same haircut
+  modalityClassStatus?: ClassStatus;
 };
 
 // Inputs for the full plan computation
@@ -197,6 +202,9 @@ export type DevPlanInputs = {
   stages: DevStageInput[];
   regulatoryContext: RegulatoryContext; // drives reg approval probability
   regCostM?: number;                   // override default $1M
+  // Modality/target-class status from the analog step (Step 3). "graveyard"
+  // applies the modality meta-risk haircut to trial-success stages.
+  modalityClassStatus?: ClassStatus;
 };
 
 // Default null/control response rates by phase (when AI doesn't provide one)
@@ -320,7 +328,19 @@ export function computeDevPlan(
       stageInput.comparatorSigma2 ?? 0,
     );
 
-    const trialSuccessProb = rrResult.trialSuccessProb;
+    // ── Modality meta-risk haircut (class base rate on the GATE) ──────────────
+    // The effect prior already carries the class-graveyard signal on effect SIZE
+    // (analog step). This is a DISTINCT quantity: given whatever effect the drug
+    // has, a modality class with zero approvals and a documented failure pattern
+    // (fatal tox terminations, delivery failures, PD-not-translating) is less
+    // likely to CLEAR each efficacy gate than the drug's own per-stage evidence
+    // implies. Applied to trial-success stages only (not reg, not the prior), it
+    // compounds across the multi-gate path — a graveyard modality is more likely
+    // to fail SOMEWHERE. Not double-counting: prior = effect size; haircut =
+    // gate-completion odds given that effect (tolerability/translation/execution).
+    const modalityHaircut = inputs.modalityClassStatus === "graveyard" ? MODALITY_META_RISK_HAIRCUT : 1.0;
+    const trialSuccessProbRaw = rrResult.trialSuccessProb;
+    const trialSuccessProb = clamp01(trialSuccessProbRaw * modalityHaircut);
 
     // Convert the posterior grid back to a Gaussian mixture for the next stage
     const mixtureIfSuccess = gridToGaussianMixture(
@@ -350,6 +370,8 @@ export function computeDevPlan(
       mixtureInput:      currentMixture,
       mixtureIfSuccess,
       trialSuccessProb,
+      trialSuccessProbRaw,
+      modalityHaircut,
       layer2Multiplier:  l2.layer2Multiplier,
       sigma2Trial:       l2.sigma2Trial,
       riskFlags:         l2.riskFlags,
@@ -412,6 +434,7 @@ export function computeDevPlan(
     totalRiskAdjCostM,
     totalDurationMonths,
     impliedLaunchYear: impliedLaunchYear(totalDurationMonths),
+    modalityClassStatus: inputs.modalityClassStatus,
     revenuePVM,
     eNPVM,
     eROI,
@@ -425,6 +448,14 @@ export function computeDevPlan(
 // Moderate: reflects a real, not-fully-validated surrogate→hard translation
 // without cratering the harder stage.
 const SURROGATE_TRANSLATION_SIGMA2 = 0.15;
+
+// Per-trial-success-stage multiplier applied when the modality/target class is a
+// "graveyard" (zero approvals + documented failure pattern). ~20% relative
+// increase in per-gate failure risk from the class base rate — the class-level
+// tolerability/translation/execution risk NOT captured by the effect-size prior.
+// Gentle because the effect prior already carries the class effect on effect SIZE;
+// this compounds across gates (0.80 × 0.80 on a 2-gate path).
+const MODALITY_META_RISK_HAIRCUT = 0.80;
 
 function addMixtureVariance(mixture: EffectPriorMixture, add: number): EffectPriorMixture {
   return mixture.map((c) => ({ ...c, sigma2: c.sigma2 + add }));

@@ -26,7 +26,7 @@ import type {
   PlaceboResponse,
   RegulatoryContext,
 } from "./ptrs-trial";
-import type { EffectPrior } from "./effect-prior";
+import type { EffectPrior, ClassStatus } from "./effect-prior";
 import type { DevPlanResult, DevStageInput } from "./dev-plan";
 import type { Valuation } from "./types";
 
@@ -120,6 +120,7 @@ export type BaseContext = {
     stages: DevStageInput[];
     regulatoryContext: RegulatoryContext;
     regCostM?: number;
+    modalityClassStatus?: ClassStatus;
   } | null;
 
   // Cached overall P(approval) from the base dev plan — used as Option A's
@@ -328,6 +329,7 @@ export function computeOption(
         stages: [stage0Override, ...base.devPlanInputs!.stages.slice(1)],
         regulatoryContext: base.devPlanInputs!.regulatoryContext,
         regCostM: base.devPlanInputs!.regCostM,
+        modalityClassStatus: base.devPlanInputs!.modalityClassStatus,
       },
       0, // revenuePVM not needed — we use pApproval + totalRiskAdjCostM
     );
@@ -671,6 +673,7 @@ export function buildBaseContext(
         stages:             devPlan.stages as unknown as DevStageInput[],
         regulatoryContext:  devPlan.regStage.regulatoryContext,
         regCostM:           devPlan.regStage.costM,
+        modalityClassStatus: devPlan.modalityClassStatus,
       }
     : null;
 
