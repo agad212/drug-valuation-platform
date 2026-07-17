@@ -49,6 +49,14 @@ export default function SurveyPage() {
       setStatus("error");
       return;
     }
+    if (!(answers.q0 || "").trim()) {
+      setErrorMsg("Please fill in your name, role, and organization at the top — generic is fine.");
+      setStatus("error");
+      const el = document.getElementById("q0");
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      (el as HTMLInputElement | null)?.focus({ preventScroll: true });
+      return;
+    }
     setStatus("sending");
     setErrorMsg("");
     try {

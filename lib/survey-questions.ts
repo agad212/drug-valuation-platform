@@ -25,9 +25,8 @@ export const SURVEY_QUESTIONS: SurveyQuestion[] = [
     label: "Your name, role, and organization",
     short: "Name / role / organization",
     kind: "text",
-    optional: true,
-    placeholder: "e.g., Director of Portfolio Strategy at a mid-size biotech",
-    hint: "Only so I can follow up or credit the conversation — feel free to skip.",
+    placeholder: "e.g., Development Program Lead at top 10 pharma",
+    hint: "Feel free to be generic if more comfortable — such as “Development Program Lead at top 10 pharma”.",
     part: 0,
   },
   {
@@ -122,6 +121,7 @@ export const SURVEY_QUESTIONS: SurveyQuestion[] = [
       "Who else in the organization feels this pain most directly — portfolio strategy, finance, BD, commercial, clinical development, someone else? Is there someone you think I should speak with to understand this workflow better?",
     short: "Who else feels this pain / referrals",
     kind: "textarea",
+    optional: true,
     part: 2,
   },
 ];
