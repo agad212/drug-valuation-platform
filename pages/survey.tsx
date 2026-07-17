@@ -171,7 +171,7 @@ export default function SurveyPage() {
           </div>
         ) : (
           <>
-            <span className="eyebrow">Research interview &middot; ~8 minutes</span>
+            <span className="eyebrow">Research interview &middot; ~5 minutes</span>
             <h1>How biopharma teams make value-driven R&amp;D decisions</h1>
             <p className="intro">
               Thanks for your time. <strong>I&rsquo;m not pitching anything</strong> — I&rsquo;m trying to understand
@@ -194,14 +194,14 @@ export default function SurveyPage() {
             {intro.map(renderQuestion)}
 
             <div className="part-header">
-              <span className="eyebrow">Part 1 &middot; About 5 minutes</span>
+              <span className="eyebrow">Part 1 &middot; About 2.5 minutes</span>
               <h2>The real decision</h2>
               <p>Product-agnostic — just how a recent decision actually happened.</p>
             </div>
             {part1.map(renderQuestion)}
 
             <div className="part-header">
-              <span className="eyebrow">Part 2 &middot; About 3 minutes</span>
+              <span className="eyebrow">Part 2 &middot; About 2.5 minutes</span>
               <h2>Concept fit</h2>
               <p>Quick context on what I&rsquo;m building, then a few questions.</p>
             </div>
