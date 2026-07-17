@@ -128,8 +128,9 @@ export type DevStage = DevStageInput & {
   mixtureIfSuccess: EffectPriorMixture;
 
   // Layer 2 result
-  trialSuccessProb: number; // Σ wᵢ·Φ(zᵢ) — P(this trial detects effect), AFTER modality haircut
-  trialSuccessProbRaw: number; // before the modality-class haircut
+  trialSuccessProb: number; // final — after base-rate ceiling AND modality haircut
+  trialSuccessProbRaw: number; // raw integral, before ceiling or haircut
+  successCeilingBound: number | null; // the base-rate ceiling that clamped this stage, if any
   modalityHaircut: number;     // 1.0 = none; <1 = class-graveyard haircut applied to this stage
   layer2Multiplier: number;
   sigma2Trial: number;
@@ -328,6 +329,22 @@ export function computeDevPlan(
       stageInput.comparatorSigma2 ?? 0,
     );
 
+    const trialSuccessProbRaw = rrResult.trialSuccessProb;
+
+    // ── Base-rate ceilings (Part B) — GENERAL, all assets, applied before the
+    //    class haircut. Decouples statistical DETECTION from clinical SUCCESS.
+    // A tight comparator / large n raises the power to DETECT a difference, but
+    // detection is not success — no trial's outcome is near-certain (execution,
+    // safety halts, an effect that isn't real). Cap any single stage (general
+    // ceiling), and cap a CONFIRMATORY (Phase 3 / pivotal) stage lower to reflect
+    // the documented Phase-3 base-rate failure hazard (effect-size shrinkage /
+    // winner's curse, population broadening, replication) that persists even after
+    // a positive earlier stage. NOT class-conditioned, NOT tuned to any expectation.
+    const isConfirmatory = /3|registration|pivotal/i.test(stageInput.phase);
+    const successCeiling = isConfirmatory ? LATE_PHASE_SUCCESS_CEILING : STAGE_SUCCESS_CEILING;
+    const cappedTrialSuccessProb = Math.min(trialSuccessProbRaw, successCeiling);
+    const successCeilingBound = cappedTrialSuccessProb < trialSuccessProbRaw ? successCeiling : null;
+
     // ── Modality meta-risk haircut (class base rate on the GATE) ──────────────
     // The effect prior already carries the class-graveyard signal on effect SIZE
     // (analog step). This is a DISTINCT quantity: given whatever effect the drug
@@ -339,8 +356,7 @@ export function computeDevPlan(
     // to fail SOMEWHERE. Not double-counting: prior = effect size; haircut =
     // gate-completion odds given that effect (tolerability/translation/execution).
     const modalityHaircut = inputs.modalityClassStatus === "graveyard" ? MODALITY_META_RISK_HAIRCUT : 1.0;
-    const trialSuccessProbRaw = rrResult.trialSuccessProb;
-    const trialSuccessProb = clamp01(trialSuccessProbRaw * modalityHaircut);
+    const trialSuccessProb = clamp01(cappedTrialSuccessProb * modalityHaircut);
 
     // Convert the posterior grid back to a Gaussian mixture for the next stage
     const mixtureIfSuccess = gridToGaussianMixture(
@@ -371,6 +387,7 @@ export function computeDevPlan(
       mixtureIfSuccess,
       trialSuccessProb,
       trialSuccessProbRaw,
+      successCeilingBound,
       modalityHaircut,
       layer2Multiplier:  l2.layer2Multiplier,
       sigma2Trial:       l2.sigma2Trial,
@@ -456,6 +473,16 @@ const SURROGATE_TRANSLATION_SIGMA2 = 0.15;
 // Gentle because the effect prior already carries the class effect on effect SIZE;
 // this compounds across gates (0.80 × 0.80 on a 2-gate path).
 const MODALITY_META_RISK_HAIRCUT = 0.80;
+
+// Base-rate ceilings on P(trial success). Detection ≠ success: a tight comparator
+// or large n makes a difference easy to DETECT but does not make clinical success
+// near-certain. No single trial's outcome is ~certain, so cap any stage; and cap a
+// confirmatory (Phase 3 / pivotal) stage lower for the documented late-phase base-
+// rate failure hazard. Sourced from clinical phase-transition data (BIO/Informa /
+// Wong et al.): Phase-3→approval ~55-65% overall (lower in CNS); even a strong
+// positive Phase 2 rarely implies a single pivotal above ~80%. General, all assets.
+const STAGE_SUCCESS_CEILING = 0.90;       // any single stage
+const LATE_PHASE_SUCCESS_CEILING = 0.80;  // confirmatory / Phase 3 stage
 
 function addMixtureVariance(mixture: EffectPriorMixture, add: number): EffectPriorMixture {
   return mixture.map((c) => ({ ...c, sigma2: c.sigma2 + add }));

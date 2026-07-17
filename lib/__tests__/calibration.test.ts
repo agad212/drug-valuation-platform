@@ -91,8 +91,9 @@ describe("Part 4 — surrogate→hard-endpoint translation penalty", () => {
   it("lowers Phase 3 P(success) when a rate surrogate is followed by a TTE endpoint", () => {
     const withShift = plan(true);   // ctDNA (rate) → RFS (TTE): penalty applies
     const noShift = plan(false);    // both rate endpoints: no penalty
-    const ph3WithShift = withShift.stages[1].trialSuccessProb;
-    const ph3NoShift = noShift.stages[1].trialSuccessProb;
+    // Compare RAW (pre-ceiling) so the surrogate-penalty effect is isolated from the ceiling.
+    const ph3WithShift = withShift.stages[1].trialSuccessProbRaw;
+    const ph3NoShift = noShift.stages[1].trialSuccessProbRaw;
     expect(ph3WithShift).toBeLessThan(ph3NoShift);
   });
 });
@@ -120,7 +121,9 @@ describe("Part-final — modality meta-risk haircut (class-conditioned)", () => 
     const graveyard = planFor("graveyard");
     for (const st of graveyard.stages) {
       expect(st.modalityHaircut).toBeCloseTo(0.80, 6);
-      expect(st.trialSuccessProb).toBeCloseTo(st.trialSuccessProbRaw * 0.80, 6);
+      // final = (raw capped at the base-rate ceiling) × haircut
+      const capped = st.successCeilingBound ?? st.trialSuccessProbRaw;
+      expect(st.trialSuccessProb).toBeCloseTo(capped * 0.80, 6);
     }
     // Compounds: overall P(approval) is strictly below the no-haircut baseline.
     expect(graveyard.pApproval).toBeLessThan(planFor(undefined).pApproval);
@@ -131,8 +134,47 @@ describe("Part-final — modality meta-risk haircut (class-conditioned)", () => 
     const none = planFor(undefined);
     for (const st of precedent.stages) {
       expect(st.modalityHaircut).toBe(1.0);
-      expect(st.trialSuccessProb).toBeCloseTo(st.trialSuccessProbRaw, 9);
+      const capped = st.successCeilingBound ?? st.trialSuccessProbRaw;
+      expect(st.trialSuccessProb).toBeCloseTo(capped, 9);
     }
     expect(precedent.pApproval).toBeCloseTo(none.pApproval, 9);
+  });
+});
+
+describe("Part-final — base-rate ceilings + stage-integral stability (general)", () => {
+  const tightDesign: TrialDesignInputs = {
+    n: 600, endpointType: "surrogate", designType: "rct",
+    populationType: "biomarker_selected", placeboResponse: "low", regulatoryContext: "btd",
+  };
+  // A well-powered RCT with a strong effect vs a tight, well-studied comparator —
+  // the saturation setup that produced tau's non-credible 96%.
+  function saturatingPlan(mss: number, phase: "Phase 2" | "Phase 3") {
+    const stages: DevStageInput[] = [
+      { id: "s1", name: "cur", phase, n: 600, cpp: 200000, trialDesign: tightDesign,
+        isCurrentTrial: true, enrollmentRatePerMonth: 10, treatmentObsMonths: 12, startupCushionMonths: 5,
+        isTimeToEvent: false, nullResponseRate: 0.20, comparatorSigma2: 0.004 },
+    ];
+    return computeDevPlan(mixtureFromMssVariance(mss, 0.08), 0.1, { stages, regulatoryContext: "btd" }, 0);
+  }
+
+  it("(i) a tight-comparator stage no longer saturates above the general ceiling", () => {
+    const plan = saturatingPlan(0.75, "Phase 2");
+    const st = plan.stages[0];
+    expect(st.trialSuccessProbRaw).toBeGreaterThan(0.9); // raw integral WOULD saturate
+    expect(st.trialSuccessProb).toBeLessThanOrEqual(0.90 + 1e-9); // capped
+    expect(st.successCeilingBound).toBe(0.90);
+  });
+
+  it("(i-b) a confirmatory (Phase 3) stage is capped at the lower late-phase ceiling", () => {
+    const st = saturatingPlan(0.75, "Phase 3").stages[0];
+    expect(st.trialSuccessProb).toBeLessThanOrEqual(0.80 + 1e-9);
+    expect(st.successCeilingBound).toBe(0.80);
+  });
+
+  it("(ii) a small prior perturbation produces only a small stage-probability change (no knife-edge)", () => {
+    // Same fixture, effect prior nudged 2 points — compare the RAW integral (pre-ceiling).
+    const a = saturatingPlan(0.50, "Phase 2").stages[0].trialSuccessProbRaw;
+    const b = saturatingPlan(0.52, "Phase 2").stages[0].trialSuccessProbRaw;
+    expect(Math.abs(a - b)).toBeLessThan(0.10); // smooth, not a cliff
   });
 });
