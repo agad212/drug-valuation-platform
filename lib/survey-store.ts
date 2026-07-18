@@ -1,5 +1,6 @@
 import type { NextApiRequest } from "next";
 import { getDb } from "./db";
+import { DEFAULT_SEGMENT, isSegmentId, type SegmentId } from "./survey-questions";
 
 /**
  * Survey response store — Neon Postgres when DATABASE_URL is set.
@@ -10,6 +11,7 @@ import { getDb } from "./db";
 export type SurveyResponse = {
   id: string;
   createdAt: string;
+  segment: SegmentId;
   answers: Record<string, string>;
 };
 
@@ -35,10 +37,14 @@ async function ensureSurveyTable() {
   `;
 }
 
-export async function insertSurveyResponse(answers: Record<string, string>): Promise<SurveyResponse> {
+export async function insertSurveyResponse(
+  segment: SegmentId,
+  answers: Record<string, string>
+): Promise<SurveyResponse> {
   const resp: SurveyResponse = {
     id: cryptoId(),
     createdAt: new Date().toISOString(),
+    segment,
     answers,
   };
 
@@ -47,7 +53,7 @@ export async function insertSurveyResponse(answers: Record<string, string>): Pro
     await ensureSurveyTable();
     await sql`
       INSERT INTO survey_responses (id, data, created_at)
-      VALUES (${resp.id}, ${JSON.stringify({ answers })}, ${resp.createdAt})
+      VALUES (${resp.id}, ${JSON.stringify({ segment, answers })}, ${resp.createdAt})
     `;
     return resp;
   }
@@ -69,6 +75,7 @@ export async function listSurveyResponses(): Promise<SurveyResponse[]> {
     return rows.map((r: any) => ({
       id: r.id,
       createdAt: new Date(r.created_at).toISOString(),
+      segment: isSegmentId(r.data?.segment) ? r.data.segment : DEFAULT_SEGMENT,
       answers: (r.data && r.data.answers) || {},
     }));
   }

@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import Head from "next/head";
-import { SURVEY_QUESTIONS } from "../lib/survey-questions";
+import { SEGMENTS, QUESTIONS_BY_SEGMENT, DEFAULT_SEGMENT, isSegmentId, type SegmentId } from "../lib/survey-questions";
 
-type SurveyResponse = { id: string; createdAt: string; answers: Record<string, string> };
+type SurveyResponse = { id: string; createdAt: string; segment?: SegmentId; answers: Record<string, string> };
 
 const KEY_STORE = "rd-survey-admin-key";
-const SHORT_BY_ID = new Map(SURVEY_QUESTIONS.map((q) => [q.id, q.short]));
+
+function segmentOf(r: SurveyResponse): SegmentId {
+  return isSegmentId(r.segment) ? r.segment : DEFAULT_SEGMENT;
+}
 
 // ─── Minimal markdown → HTML (headings, lists, tables, bold, code) ────────────
 function escapeHtml(s: string): string {
@@ -256,29 +259,48 @@ export default function SurveyAdminPage() {
               <p className="empty">No responses yet. Share the survey link and check back.</p>
             ) : null}
 
-            {responses.map((r, idx) => {
-              const n = responses.length - idx; // newest first → highest number
-              const who = r.answers.q0 || "Anonymous";
-              const open = !!expanded[r.id];
+            {SEGMENTS.map((seg) => {
+              const segResponses = responses.filter((r) => segmentOf(r) === seg.id);
               return (
-                <div className="panel resp" key={r.id}>
-                  <button className="resp-head" onClick={() => setExpanded((p) => ({ ...p, [r.id]: !open }))}>
-                    <span className="resp-tag">R{n}</span>
-                    <span className="resp-who">{who}</span>
-                    <span className="resp-date">{r.createdAt.slice(0, 10)}</span>
-                    <span className="resp-caret">{open ? "▾" : "▸"}</span>
-                  </button>
-                  {open ? (
-                    <dl className="resp-body">
-                      {SURVEY_QUESTIONS.filter((q) => r.answers[q.id]).map((q) => (
-                        <div key={q.id} className="qa">
-                          <dt>{SHORT_BY_ID.get(q.id)}</dt>
-                          <dd>{r.answers[q.id]}</dd>
+                <section key={seg.id} className="seg-section">
+                  <div className="seg-head">
+                    <h2>{seg.label}</h2>
+                    <span className="seg-product">{seg.product} product</span>
+                    <span className="seg-count">
+                      {segResponses.length} response{segResponses.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  {segResponses.length === 0 ? (
+                    <p className="empty seg-empty">None yet.</p>
+                  ) : (
+                    segResponses.map((r, idx) => {
+                      const n = segResponses.length - idx; // newest first → highest number
+                      const who = r.answers.q0 || "Anonymous";
+                      const open = !!expanded[r.id];
+                      const questions = QUESTIONS_BY_SEGMENT[seg.id];
+                      return (
+                        <div className="panel resp" key={r.id}>
+                          <button className="resp-head" onClick={() => setExpanded((p) => ({ ...p, [r.id]: !open }))}>
+                            <span className="resp-tag">{seg.tagPrefix}{n}</span>
+                            <span className="resp-who">{who}</span>
+                            <span className="resp-date">{r.createdAt.slice(0, 10)}</span>
+                            <span className="resp-caret">{open ? "▾" : "▸"}</span>
+                          </button>
+                          {open ? (
+                            <dl className="resp-body">
+                              {questions.filter((q) => r.answers[q.id]).map((q) => (
+                                <div key={q.id} className="qa">
+                                  <dt>{q.short}</dt>
+                                  <dd>{r.answers[q.id]}</dd>
+                                </div>
+                              ))}
+                            </dl>
+                          ) : null}
                         </div>
-                      ))}
-                    </dl>
-                  ) : null}
-                </div>
+                      );
+                    })
+                  )}
+                </section>
               );
             })}
           </>
@@ -387,6 +409,19 @@ export default function SurveyAdminPage() {
 
         .rdadm .error { color: var(--danger); font-size: 0.92rem; margin: 10px 0 0; }
         .rdadm .empty { color: var(--muted); margin-top: 24px; }
+
+        .rdadm .seg-section { margin-top: 36px; }
+        .rdadm .seg-head {
+          display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+          padding-bottom: 8px; border-bottom: 2px solid var(--accent);
+        }
+        .rdadm .seg-head h2 { font-size: 1.15rem; }
+        .rdadm .seg-product {
+          font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+          color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 8px;
+        }
+        .rdadm .seg-count { margin-left: auto; color: var(--muted); font-size: 0.88rem; }
+        .rdadm .seg-empty { margin-top: 12px; font-size: 0.92rem; }
 
         .rdadm .resp { padding: 0; overflow: hidden; }
         .rdadm .resp-head {

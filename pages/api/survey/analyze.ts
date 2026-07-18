@@ -1,38 +1,47 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { checkAdminKey, listSurveyResponses } from "../../../lib/survey-store";
-import { SURVEY_QUESTIONS } from "../../../lib/survey-questions";
+import { SEGMENTS, QUESTIONS_BY_SEGMENT } from "../../../lib/survey-questions";
 
 export const config = { maxDuration: 300 };
 
-const SYSTEM_PROMPT = `You are a customer-discovery analyst working for a solo founder. The founder interviewed biopharma R&D / portfolio / BD professionals about how strategic R&D decisions with value implications actually get made, and about concept fit for a product idea: an AI platform that builds defensible, sourced asset valuations (preclinical to LCM) with traceable reasoning and lets users compare strategic options (indication sequencing, trial design, partnering, go/no-go) via plain-language prompts.
+const SYSTEM_PROMPT = `You are a customer-discovery analyst working for a solo founder. The founder is interviewing three audiences about how high-stakes biopharma decisions actually get made, and about concept fit for products under development:
 
-You will receive the raw survey responses. Produce a rigorous synthesis in GitHub-flavored markdown with these sections:
+1. Biopharma companies — shown the STRATEGIC ADVISOR concept: an AI platform that builds defensible, sourced asset valuations (preclinical to LCM) with traceable reasoning and compares strategic options (indication sequencing, trial design, partnering, go/no-go) via plain-language prompts.
+2. VC / Private equity investors — shown the same STRATEGIC ADVISOR concept, framed around deal diligence and follow-on scenarios.
+3. Hedge fund / public equities investors — shown the VALUATION-ONLY concept: defensible, sourced, probability-adjusted valuations of pipeline assets and whole companies, instantly re-runnable on new events. No strategic-options advisor.
+
+You will receive the raw survey responses, grouped by audience segment, with respondent tags like [B1] (biopharma), [V1] (VC/PE), [H1] (hedge fund). Produce a rigorous synthesis in GitHub-flavored markdown:
 
 ## Executive summary
-3-6 bullets: the strongest signals, stated plainly. Note the sample size and how much weight it can bear.
+3-6 bullets: the strongest signals across all audiences, stated plainly. Note per-segment sample sizes and how much weight they can bear.
 
-## How these decisions happen today
-Decision types seen; tools/analyses/people teams actually lean on; where the process is slowest or most contested; how well analyses survive challenge; analyses teams wanted but couldn't produce; whether this is recurring or one-off work.
+Then ONE SECTION PER SEGMENT THAT HAS RESPONSES (skip empty segments with a single line "No responses yet."):
 
-## Concept fit
-Would-use signal (count leans yes / maybe / no and be skeptical of politeness); where it would plug into their process; stated objections or reasons to not bother; what it must prove to be trusted in leadership-facing decisions; build-internally vs outsource lean; every price anchor mentioned, verbatim.
+## Biopharma companies (n=X)
+## VC / PE investors (n=X)
+## Hedge funds / public equities (n=X)
 
-## People map
-Roles said to feel this pain most; any named or implied referrals worth chasing.
+Within each segment section cover, with subheadings:
+- **How these decisions happen today** — decision types seen; tools/analyses/people actually used; slowest or most contested steps; how analyses survive challenge; analyses wanted but not produced; recurring vs one-off.
+- **Concept fit** — would-use signal (count leans yes / maybe / no; be skeptical of politeness); where it would plug in; stated objections; what it must prove to be trusted; build-internally vs buy lean; every price anchor mentioned, verbatim.
+- **People map** — roles said to feel this pain most; named or implied referrals worth chasing.
+
+## Cross-segment synthesis
+Where the audiences agree or diverge; which segment shows the strongest pull and why; implications for which product to lead with.
 
 ## Verbatim worth keeping
-Up to 8 short quotes that carry signal, each attributed as [R1], [R2], ... with role if given.
+Up to 8 short quotes that carry signal, each attributed by tag ([B1], [V2], ...) with role if given.
 
 ## Per-respondent snapshot
-A markdown table: respondent, role/org (if given), decision discussed, sharpest pain, concept-fit lean, price anchor, referral.
+One markdown table across all segments: tag, segment, role/org (if given), decision discussed, sharpest pain, concept-fit lean, price anchor, referral.
 
 ## Cautions and contradictions
-Where answers conflict, where enthusiasm looks polite rather than real (e.g., no budget owner, vague plug-in point), and what is still unknown.
+Where answers conflict, where enthusiasm looks polite rather than real (no budget owner, vague plug-in point), and what is still unknown.
 
 ## Recommended next moves
 3-5 concrete actions for the founder.
 
-Rules: use ONLY the provided responses — never invent respondents, quotes, or numbers. If a section has no data, say so in one line. With a small sample, say "n=X" rather than percentages.`;
+Rules: use ONLY the provided responses — never invent respondents, quotes, or numbers. With small samples, say "n=X" rather than percentages.`;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -59,15 +68,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "No responses yet — nothing to analyze." });
   }
 
-  const labelById = new Map(SURVEY_QUESTIONS.map((q) => [q.id, q.short]));
-  const transcript = responses
-    .map((r, i) => {
+  // Group by segment; tag numbering matches the admin view (newest first → highest number).
+  const sections: string[] = [];
+  for (const seg of SEGMENTS) {
+    const segResponses = responses.filter((r) => r.segment === seg.id);
+    if (segResponses.length === 0) continue;
+    const labelById = new Map(QUESTIONS_BY_SEGMENT[seg.id].map((q) => [q.id, q.short]));
+    const blocks = segResponses.map((r, idx) => {
+      const tag = `${seg.tagPrefix}${segResponses.length - idx}`;
       const lines = Object.entries(r.answers)
         .map(([qid, val]) => `${labelById.get(qid) || qid}: ${val}`)
         .join("\n");
-      return `### [R${i + 1}] — submitted ${r.createdAt.slice(0, 10)}\n${lines}`;
-    })
-    .join("\n\n");
+      return `### [${tag}] — submitted ${r.createdAt.slice(0, 10)}\n${lines}`;
+    });
+    sections.push(`## SEGMENT: ${seg.label} (${seg.product} concept) — ${segResponses.length} response(s)\n\n${blocks.join("\n\n")}`);
+  }
 
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -79,12 +94,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       body: JSON.stringify({
         model: "claude-sonnet-5",
-        max_tokens: 6000,
+        max_tokens: 8000,
         system: SYSTEM_PROMPT,
         messages: [
           {
             role: "user",
-            content: `Here are all ${responses.length} survey responses:\n\n${transcript}\n\nProduce the synthesis.`,
+            content: `Here are all ${responses.length} survey responses, grouped by segment:\n\n${sections.join("\n\n---\n\n")}\n\nProduce the synthesis.`,
           },
         ],
       }),

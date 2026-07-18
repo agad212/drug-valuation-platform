@@ -1,49 +1,80 @@
 import { useEffect, useMemo, useState } from "react";
 import Head from "next/head";
-import { SURVEY_QUESTIONS, PROGRESS_IDS, CONCEPT_TEXT, type SurveyQuestion } from "../lib/survey-questions";
+import {
+  SEGMENTS,
+  QUESTIONS_BY_SEGMENT,
+  CONCEPT_BY_SEGMENT,
+  progressIds,
+  numberingFor,
+  isSegmentId,
+  type SegmentId,
+  type SurveyQuestion,
+} from "../lib/survey-questions";
 
-const STORE_KEY = "rd-survey-v1";
-const NUMBERING: Record<string, number> = {
-  q1: 1, q2: 2, q3: 3, q4: 4, q5: 5, q6: 6, q7: 7, q8: 8, q9: 9, q10: 10, q11: 11,
-};
+const STORE_KEY = "rd-survey-v2";
 
 type Status = "idle" | "sending" | "done" | "error";
+type AnswerMap = Record<string, string>;
 
 export default function SurveyPage() {
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [segment, setSegment] = useState<SegmentId | "">("");
+  const [answersBySegment, setAnswersBySegment] = useState<Partial<Record<SegmentId, AnswerMap>>>({});
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Restore autosaved answers
+  const answers: AnswerMap = (segment && answersBySegment[segment]) || {};
+
+  // Restore autosaved state
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
-      if (saved && typeof saved === "object") setAnswers(saved);
+      if (saved && typeof saved === "object") {
+        if (isSegmentId(saved.segment)) setSegment(saved.segment);
+        if (saved.answersBySegment && typeof saved.answersBySegment === "object") {
+          setAnswersBySegment(saved.answersBySegment);
+        }
+      }
     } catch {
       /* private mode — continue without persistence */
     }
   }, []);
 
+  function persist(seg: SegmentId | "", all: Partial<Record<SegmentId, AnswerMap>>) {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ segment: seg, answersBySegment: all }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function pickSegment(value: string) {
+    const seg = isSegmentId(value) ? value : "";
+    setSegment(seg);
+    setStatus("idle");
+    setErrorMsg("");
+    persist(seg, answersBySegment);
+  }
+
   function setAnswer(id: string, value: string) {
-    setAnswers((prev) => {
-      const next = { ...prev, [id]: value };
-      try {
-        localStorage.setItem(STORE_KEY, JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
+    if (!segment) return;
+    setAnswersBySegment((prev) => {
+      const next = { ...prev, [segment]: { ...(prev[segment] || {}), [id]: value } };
+      persist(segment, next);
       return next;
     });
   }
 
   const progress = useMemo(() => {
-    const answered = PROGRESS_IDS.filter((id) => (answers[id] || "").trim()).length;
-    return Math.round((answered / PROGRESS_IDS.length) * 100);
-  }, [answers]);
+    if (!segment) return 0;
+    const ids = progressIds(segment);
+    const answered = ids.filter((id) => (answers[id] || "").trim()).length;
+    return Math.round((answered / ids.length) * 100);
+  }, [segment, answers]);
 
   const hasAny = useMemo(() => Object.values(answers).some((v) => (v || "").trim()), [answers]);
 
   async function submit() {
+    if (!segment) return;
     if (!hasAny) {
       setErrorMsg("Please answer at least one question first.");
       setStatus("error");
@@ -63,7 +94,7 @@ export default function SurveyPage() {
       const r = await fetch("/api/survey/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers }),
+        body: JSON.stringify({ segment, answers }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -89,8 +120,10 @@ export default function SurveyPage() {
     el.style.height = Math.max(el.scrollHeight + 2, 64) + "px";
   }
 
+  const numbering = segment ? numberingFor(segment) : {};
+
   function renderQuestion(q: SurveyQuestion) {
-    const num = NUMBERING[q.id];
+    const num = numbering[q.id];
     if (q.kind === "choice") {
       return (
         <div className="question" key={q.id}>
@@ -133,7 +166,7 @@ export default function SurveyPage() {
         ) : (
           <textarea
             {...shared}
-            style={q.id === "q6detail" || q.id === "q10" ? { minHeight: 64 } : undefined}
+            style={q.sub || q.id === "q10" ? { minHeight: 64 } : undefined}
             onChange={(e) => {
               setAnswer(q.id, e.target.value);
               autogrow(e.target);
@@ -144,9 +177,11 @@ export default function SurveyPage() {
     );
   }
 
-  const part1 = SURVEY_QUESTIONS.filter((q) => q.part === 1);
-  const part2 = SURVEY_QUESTIONS.filter((q) => q.part === 2);
-  const intro = SURVEY_QUESTIONS.filter((q) => q.part === 0);
+  const qs = segment ? QUESTIONS_BY_SEGMENT[segment] : [];
+  const intro = qs.filter((q) => q.part === 0);
+  const part1 = qs.filter((q) => q.part === 1);
+  const part2 = qs.filter((q) => q.part === 2);
+  const concept = segment ? CONCEPT_BY_SEGMENT[segment] : [];
 
   return (
     <div className="rdsvy">
@@ -172,12 +207,12 @@ export default function SurveyPage() {
         ) : (
           <>
             <span className="eyebrow">Research interview &middot; ~5 minutes</span>
-            <h1>How biopharma teams make value-driven R&amp;D decisions</h1>
+            <h1>How biopharma teams and investors make value-driven decisions</h1>
             <p className="intro">
               Thanks for your time. <strong>I&rsquo;m not pitching anything</strong> — I&rsquo;m trying to understand
-              how biopharma teams actually make strategic R&amp;D decisions where an asset&rsquo;s value or
-              risk-adjusted value drives the call, and where that process breaks down today. Totally candid answers
-              are the most useful thing you can give me.
+              how biopharma teams and their investors actually make high-stakes decisions where a drug asset&rsquo;s
+              value or risk-adjusted value drives the call, and where that process breaks down today. Totally candid
+              answers are the most useful thing you can give me.
             </p>
 
             <div className="privacy-note">
@@ -191,39 +226,61 @@ export default function SurveyPage() {
               </span>
             </div>
 
-            {intro.map(renderQuestion)}
-
-            <div className="part-header">
-              <span className="eyebrow">Part 1 &middot; About 2.5 minutes</span>
-              <h2>The real decision</h2>
-              <p>Product-agnostic — just how a recent decision actually happened.</p>
-            </div>
-            {part1.map(renderQuestion)}
-
-            <div className="part-header">
-              <span className="eyebrow">Part 2 &middot; About 2.5 minutes</span>
-              <h2>Concept fit</h2>
-              <p>Quick context on what I&rsquo;m building, then a few questions.</p>
-            </div>
-            <div className="concept">
-              {CONCEPT_TEXT.map((t, i) => (
-                <p key={i}>{t}</p>
-              ))}
-            </div>
-            {part2.map(renderQuestion)}
-
-            <div className="send-panel">
-              <h2>Submit your answers</h2>
-              <p>Answers go straight to the researcher — nothing else is collected.</p>
-              <button type="button" className="btn-primary" onClick={submit} disabled={status === "sending"}>
-                {status === "sending" ? "Submitting…" : "Submit answers"}
-              </button>
-              <div className="status-line" role="status" aria-live="polite">
-                {status === "error" ? errorMsg : ""}
-              </div>
+            <div className="question">
+              <label className="q-label" htmlFor="segment">
+                First — which best describes you?
+              </label>
+              <select id="segment" value={segment} onChange={(e) => pickSegment(e.target.value)}>
+                <option value="" disabled>
+                  Select one…
+                </option>
+                {SEGMENTS.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <p className="autosave-note">Your answers save automatically in this browser, so you can leave and come back.</p>
+            {segment ? (
+              <>
+                {intro.map(renderQuestion)}
+
+                <div className="part-header">
+                  <span className="eyebrow">Part 1 &middot; About 2.5 minutes</span>
+                  <h2>The real decision</h2>
+                  <p>Product-agnostic — just how a recent decision actually happened.</p>
+                </div>
+                {part1.map(renderQuestion)}
+
+                <div className="part-header">
+                  <span className="eyebrow">Part 2 &middot; About 2.5 minutes</span>
+                  <h2>Concept fit</h2>
+                  <p>Quick context on what I&rsquo;m building, then a few questions.</p>
+                </div>
+                <div className="concept">
+                  {concept.map((t, i) => (
+                    <p key={i}>{t}</p>
+                  ))}
+                </div>
+                {part2.map(renderQuestion)}
+
+                <div className="send-panel">
+                  <h2>Submit your answers</h2>
+                  <p>Answers go straight to the researcher — nothing else is collected.</p>
+                  <button type="button" className="btn-primary" onClick={submit} disabled={status === "sending"}>
+                    {status === "sending" ? "Submitting…" : "Submit answers"}
+                  </button>
+                  <div className="status-line" role="status" aria-live="polite">
+                    {status === "error" ? errorMsg : ""}
+                  </div>
+                </div>
+
+                <p className="autosave-note">
+                  Your answers save automatically in this browser, so you can leave and come back.
+                </p>
+              </>
+            ) : null}
           </>
         )}
       </main>
@@ -366,7 +423,7 @@ export default function SurveyPage() {
           margin-left: 8px;
         }
 
-        .rdsvy textarea, .rdsvy input[type="text"] {
+        .rdsvy textarea, .rdsvy input[type="text"], .rdsvy select {
           width: 100%;
           background: var(--surface);
           color: var(--ink);
@@ -375,10 +432,10 @@ export default function SurveyPage() {
           padding: 12px 14px;
           font: inherit;
           font-size: 1rem;
-          resize: vertical;
         }
-        .rdsvy textarea { min-height: 92px; }
-        .rdsvy textarea:focus-visible, .rdsvy input:focus-visible, .rdsvy button:focus-visible {
+        .rdsvy textarea { min-height: 92px; resize: vertical; }
+        .rdsvy select { appearance: auto; cursor: pointer; }
+        .rdsvy textarea:focus-visible, .rdsvy input:focus-visible, .rdsvy select:focus-visible, .rdsvy button:focus-visible {
           outline: 2px solid var(--focus);
           outline-offset: 2px;
         }
