@@ -72,6 +72,19 @@ export type EvidenceSignal = {
 export type ClassStatus = "graveyard" | "precedent" | "mixed" | "none";
 
 /**
+ * Structured, FACTUAL analog-class findings from the ANALOG step — the counts and
+ * booleans that are stable run-to-run (unlike the gestalt classStatus LABEL, which
+ * flips). lib/class-risk.ts turns these into a deterministic p(graveyard) and the
+ * classStatus label, so the modality haircut stops swinging. Optional: when absent,
+ * the pipeline falls back to the LLM's classStatus label (backward-compatible).
+ */
+export type ClassEvidence = {
+  sameTargetFailures: number;                 // documented same-target/same-class clinical failures (Ph2+)
+  approvedInClass: number;                     // approved / precedented members in the class
+  differentiatedSubMechanismWithPOC: boolean;  // a distinct sub-mechanism with its own human POC
+};
+
+/**
  * One evidence-chain step as supplied by the caller (in a future step, this
  * comes from AI-driven evidence discovery + reasoning).
  *
@@ -89,6 +102,8 @@ export type EvidenceStepInput = {
   signal?: EvidenceSignal;
   /** Set by the ANALOG step only — the modality/target-class determination. */
   classStatus?: ClassStatus;
+  /** Set by the ANALOG step only — structured class facts (drives deterministic p_graveyard). */
+  classEvidence?: ClassEvidence;
   /** Free-text explanation of where this signal came from and why — passed through unchanged. */
   reasoning: string;
 };
@@ -110,6 +125,8 @@ export type ChainStep = {
   agreement: "agree" | "disagree" | "n/a";
   /** Set by the ANALOG step only — the modality/target-class determination. */
   classStatus?: ClassStatus;
+  /** Set by the ANALOG step only — structured class facts (drives deterministic p_graveyard). */
+  classEvidence?: ClassEvidence;
   reasoning: string;
 };
 
@@ -425,6 +442,7 @@ export function buildEffectPrior(steps: EvidenceStepInput[]): EffectPrior {
         found: step.found,
         signal: step.signal,
         classStatus: step.classStatus,
+        classEvidence: step.classEvidence,
         mixtureBefore,
         mixtureAfter: cloneMixture(running),
         agreement: "n/a",
@@ -441,6 +459,7 @@ export function buildEffectPrior(steps: EvidenceStepInput[]): EffectPrior {
       found: step.found,
       signal: step.signal,
       classStatus: step.classStatus,
+      classEvidence: step.classEvidence,
       mixtureBefore,
       mixtureAfter: cloneMixture(running),
       agreement,

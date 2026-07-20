@@ -156,13 +156,18 @@ found: false IS APPROPRIATE ONLY WHEN ALL THREE tiers are genuinely empty — no
 - found:false is reserved for a drug whose modality-class itself has never entered the clinic in oncology.
 Do NOT force a finding from an unrelated category (e.g. "also injectable") with no mechanistic connection — that is noise. But a real modality-class track record is signal and MUST be reported.
 
-CLASS STATUS — REQUIRED. Classify the modality/target class overall (this label is read
-downstream to price class base-rate risk on the development path, so be consistent with your mu):
-- "graveyard": the class has ZERO approved drugs AND a documented pattern of clinical
-  failures/terminations across multiple programs (the same situation that drives a low mu here).
-- "precedent": the class has approved or precedented members (successful clinical track record).
-- "mixed": some successes AND some failures in the class.
-- "none": no usable class analogs at all (genuinely first-in-modality, nothing to compare).
+CLASS FACTS — REQUIRED. Report the STRUCTURED, COUNTABLE facts about the class (these
+are read downstream by a DETERMINISTIC rule that prices class base-rate risk — report
+FACTS, not a gestalt judgment, so the same evidence always yields the same risk):
+- classFailures: integer count of DOCUMENTED same-target/same-class clinical FAILURES or
+  terminations at Phase 2 or later across all sponsors (0 if none).
+- classApprovals: integer count of APPROVED or clearly precedented members of the class (0 if none).
+- differentiatedSubMechanismWithPOC: true ONLY if THIS drug uses a mechanistically
+  DISTINCT sub-mechanism (e.g. a different epitope/target domain than the failed analogs)
+  AND that sub-mechanism has its own human proof-of-concept / target-engagement signal;
+  false otherwise. Be conservative — a mere "novel" claim without human POC is false.
+Also give classStatus as your gestalt label ("graveyard"|"precedent"|"mixed"|"none") for
+readability, but the FACTS above are what drive the math. Be consistent with your mu.
 
 Use web_search before answering.
 
@@ -171,9 +176,12 @@ RESPOND WITH ONLY THIS JSON:
   "found": true | false,
   "label": "e.g. 'Same-target analogs: <Drug A>, <Drug B> clinical outcomes'",
   "classStatus": "graveyard" | "precedent" | "mixed" | "none",
+  "classFailures": 0,
+  "classApprovals": 0,
+  "differentiatedSubMechanismWithPOC": true | false,
   "mu": 0.0,
   "sigma2": 0.0,
-  "reasoning": "3-5 sentences: which analog(s), their relevance (target/indication/modality match), their outcomes, and how that became this mu/sigma2."
+  "reasoning": "3-5 sentences: which analog(s), their relevance (target/indication/modality match), their outcomes, the failure/approval COUNTS, whether this drug is a differentiated sub-mechanism with POC, and how that became this mu/sigma2."
 }
 If found is false, explain which candidates you considered and why none were usable.`;
 
@@ -368,6 +376,18 @@ export async function discoverAnalogEvidence(ctx: EvidenceContext, anthropicKey:
     // plan can price the class base rate on the stage probabilities too.
     const VALID: ReadonlyArray<ClassStatus> = ["graveyard", "precedent", "mixed", "none"];
     step.classStatus = VALID.includes(parsed?.classStatus) ? parsed.classStatus : undefined;
+    // Part 2: capture the STRUCTURED class facts (drive the deterministic p_graveyard).
+    // Only attach when at least one countable fact is present, so a model that omits
+    // them cleanly falls back to the classStatus label downstream.
+    const failures = Number(parsed?.classFailures);
+    const approvals = Number(parsed?.classApprovals);
+    if (Number.isFinite(failures) || Number.isFinite(approvals)) {
+      step.classEvidence = {
+        sameTargetFailures: Number.isFinite(failures) ? Math.max(0, Math.trunc(failures)) : 0,
+        approvedInClass: Number.isFinite(approvals) ? Math.max(0, Math.trunc(approvals)) : 0,
+        differentiatedSubMechanismWithPOC: parsed?.differentiatedSubMechanismWithPOC === true,
+      };
+    }
     return step;
   } catch (e) {
     return degradedStep(source, defaultLabel, e);

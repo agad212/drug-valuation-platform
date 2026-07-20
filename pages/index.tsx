@@ -18,6 +18,7 @@ import { buildBaseContext } from "../lib/decision-analysis";
 import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, computeLoeYear } from "../lib/financial-pins";
+import { classGraveyardProbability } from "../lib/class-risk";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
 
@@ -512,16 +513,22 @@ export default function HomePage() {
     if (!devPlanStages || !base || !valuationBrief) return null;
     const revenuePVM = (out.revenuePV ?? 0) / 1e6;
     const mixture = effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
-    // Reuse the analog step's class determination (Step 3) — a "graveyard" class
-    // haircuts the stage probabilities too, not just the effect prior.
-    const modalityClassStatus = effectPrior?.chain?.find((s) => s.source === "analog")?.classStatus;
+    // Class base-rate risk from the analog step (Step 3), haircutting the stage
+    // probabilities too — not just the effect prior. Part 2: when the analog step
+    // reported STRUCTURED facts, derive p_graveyard + the classStatus label from
+    // the deterministic rule (class-risk.ts) so the haircut stops flipping with a
+    // coin-flip graveyard/mixed LABEL; otherwise fall back to the LLM's label.
+    const analogStep = effectPrior?.chain?.find((s) => s.source === "analog");
+    const classRisk = analogStep?.classEvidence ? classGraveyardProbability(analogStep.classEvidence) : null;
+    const modalityClassStatus = classRisk?.classStatus ?? analogStep?.classStatus;
+    const classGraveyardProb = classRisk?.pGraveyard;
     // Fix #2: therapeutic area keys the pinned cost-per-patient benchmark.
     const therapeuticArea = inferTherapeuticArea(valuationBrief?.base_case_indication?.value || v.indication);
     // Fix B: orphan benefits apply only when confirmed for the base-case indication.
     const orphanConfirmedForIndication = layer2Result?.orphanConfirmedForIndication === true;
     return computeDevPlan(
       mixture, base.ciHalfWidth,
-      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0, modalityClassStatus, therapeuticArea, orphanConfirmedForIndication },
+      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0, modalityClassStatus, classGraveyardProbability: classGraveyardProb, therapeuticArea, orphanConfirmedForIndication },
       revenuePVM,
     );
   }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief, v.indication, layer2Result]);
@@ -2224,7 +2231,7 @@ export default function HomePage() {
                 const DESIGN_LABEL: Record<string, string> = { rct: "Randomized Controlled", single_arm: "Single Arm", basket: "Basket / Umbrella" };
                 const POP_LABEL: Record<string, string> = { biomarker_selected: "Biomarker Selected", broad: "Broad / Unselected", rare_small: "Rare / Small Pool" };
                 const PLACEBO_LABEL: Record<string, string> = { low: "Low", moderate: "Moderate", high: "High" };
-                const REG_LABEL: Record<string, string> = { standard: "Standard", btd: "Breakthrough Therapy", orphan: "Orphan Drug", btd_orphan: "BTD + Orphan", accelerated: "Accelerated Approval", confirmatory: "Confirmatory (post-AA)" };
+                const REG_LABEL: Record<string, string> = { standard: "Standard", fast_track: "Fast Track (rolling review only)", btd: "Breakthrough Therapy", orphan: "Orphan Drug", btd_orphan: "BTD + Orphan", accelerated: "Accelerated Approval", confirmatory: "Confirmatory (post-AA)" };
 
                 return (
                   <div>

@@ -19,6 +19,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
 import { parseJsonLoose } from "../../lib/extractJson";
 import { pinComparator, pinPhase3Endpoint } from "../../lib/indication-benchmarks";
+import { resolveRegulatoryContext } from "../../lib/regulatory-pins";
 import type {
   EndpointType,
   DesignType,
@@ -163,7 +164,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const VALID_DESIGN: DesignType[]             = ["rct", "single_arm", "basket"];
   const VALID_POP: PopulationType[]            = ["biomarker_selected", "broad", "rare_small"];
   const VALID_PLACEBO: PlaceboResponse[]       = ["low", "moderate", "high"];
-  const VALID_REG: RegulatoryContext[]         = ["standard", "btd", "orphan", "btd_orphan", "accelerated", "confirmatory"];
+  const VALID_REG: RegulatoryContext[]         = ["standard", "fast_track", "btd", "orphan", "btd_orphan", "accelerated", "confirmatory"];
 
   const currentDesignSummary = [
     `n=${currentTrialDesign.n}`,
@@ -436,13 +437,24 @@ Reason about the full development path. Return the current trial as stage 1 (use
       }
     }
 
-    const regulatoryContext: RegulatoryContext = VALID_REG.includes(parsed.regulatoryContext)
-      ? parsed.regulatoryContext
-      : (currentTrialDesign.regulatoryContext ?? "standard");
+    // ── Pin the regulatory context deterministically (Part 1) ────────────────
+    // A drug's FDA designations are FACTS; they must not flip run-to-run (tau swung
+    // btd↔standard, applying a bar-ease it never earned — it has Fast Track, not
+    // BTD). Resolve from the factual designation registry (regulatory-pins.ts);
+    // an unconfirmed asset defaults to "standard" (no unearned benefit). This
+    // OVERRIDES the LLM's per-run guess. Applied to the top level AND every stage
+    // (each stage's trialDesign.regulatoryContext drives the per-stage Z_ALPHA bar).
+    const regPin = resolveRegulatoryContext({ asset: drug });
+    const regulatoryContext: RegulatoryContext = regPin.context;
+    for (const st of cappedStages) {
+      if (st.trialDesign) st.trialDesign.regulatoryContext = regulatoryContext;
+    }
 
     return res.status(200).json({
       stages: cappedStages,
       regulatoryContext,
+      regulatoryProvenance: regPin.provenance,
+      regulatoryDesignations: regPin.designations,
       reasoning: parsed.reasoning || "",
     });
 

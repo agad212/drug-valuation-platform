@@ -48,6 +48,9 @@ export type PlaceboResponse = "low" | "moderate" | "high";
 
 export type RegulatoryContext =
   | "standard"
+  | "fast_track"   // Fast Track: rolling review only — does NOT lower the statistical
+                   // bar or the approval probability (engine-equivalent to standard,
+                   // just a modestly faster review). Distinct from BTD/Accelerated.
   | "btd"
   | "orphan"
   | "btd_orphan"
@@ -120,6 +123,7 @@ const PLACEBO_NOISE: Record<PlaceboResponse, number> = {
 // Confirmatory (post-AA) raises it because FDA wants robust proof.
 const THRESHOLD_ADJUSTMENT: Record<RegulatoryContext, number> = {
   standard:     0.00,
+  fast_track:   0.00,  // Fast Track does NOT lower the evidentiary threshold (== standard).
   btd:         -0.08,
   orphan:      -0.06,
   btd_orphan:  -0.13,
@@ -216,6 +220,7 @@ export function scoreLayer2(
   if (placeboResponse === "high") riskFlags.push({ severity: "high", message: "High placebo response indication — CNS/pain trials have historically failed due to placebo effect overwhelming drug signal." });
   else if (placeboResponse === "moderate") riskFlags.push({ severity: "medium", message: "Moderate placebo response — ensure adequate powering to separate drug effect from placebo." });
 
+  if (regulatoryContext === "fast_track") riskFlags.push({ severity: "info", message: "Fast Track: enables rolling review (faster submission-to-decision) but does NOT lower the statistical bar or raise the approval probability." });
   if (regulatoryContext === "btd" || regulatoryContext === "btd_orphan") riskFlags.push({ severity: "info", message: "Breakthrough Therapy Designation lowers evidentiary threshold and enables accelerated approval pathway." });
   if (regulatoryContext === "orphan" || regulatoryContext === "btd_orphan") riskFlags.push({ severity: "info", message: "Orphan Drug Designation: smaller n is acceptable; FDA is more flexible on endpoint surrogates." });
   if (regulatoryContext === "confirmatory") riskFlags.push({ severity: "high", message: "Confirmatory study (post-accelerated approval): higher evidentiary bar — traditional endpoints required." });
@@ -225,7 +230,7 @@ export function scoreLayer2(
 
   // Summary
   const designLabel = designType === "rct" ? "RCT" : designType === "single_arm" ? "single-arm" : "basket/umbrella";
-  const regLabel = { standard: "", btd: " + BTD", orphan: " + Orphan", btd_orphan: " + BTD + Orphan", accelerated: " + Accelerated Approval", confirmatory: " + Confirmatory" }[regulatoryContext];
+  const regLabel = { standard: "", fast_track: " + Fast Track", btd: " + BTD", orphan: " + Orphan", btd_orphan: " + BTD + Orphan", accelerated: " + Accelerated Approval", confirmatory: " + Confirmatory" }[regulatoryContext];
   const summary =
     `Trial design: ${designLabel}, n=${n}, ${endpointType} endpoint, ${populationType.replace("_", " ")} population${regLabel}. ` +
     `Trial noise (σ²=${sigma2Trial.toFixed(2)}), P(trial success)=${(trialSuccessProb * 100).toFixed(0)}%. ` +

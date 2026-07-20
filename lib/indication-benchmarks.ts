@@ -30,6 +30,14 @@ export function isColorectalMRD(indication: string): boolean {
   return crc && mrd;
 }
 
+/** Early (MCI / mild) Alzheimer's disease — the CDR-SB-gated disease-modification setting. */
+export function isEarlyAlzheimers(indication: string): boolean {
+  const s = (indication || "").toLowerCase();
+  const ad = /alzheimer|\bad\b|amyloid|\btau\b/.test(s);
+  const early = /early|prodromal|\bmci\b|mild|cdr|preclinical|amyloid[- ]confirmed|biomarker[- ]confirmed/.test(s);
+  return ad && early;
+}
+
 /**
  * Phase-2a surrogate comparator (ctDNA-clearance historical control) for MRD+ CRC.
  *
@@ -51,6 +59,20 @@ export function pinComparator(indication: string, endpointIsRate: boolean): Comp
       nullResponseRate: 0.05,
       comparatorSigma2: 0.025,
       source: "CIRCULATE-Japan GALAXY (Nat Med 2024): spontaneous ctDNA clearance in untreated MRD+ CRC ~1.9% sustained; ~5% central across assays/definitions (wide σ²).",
+    };
+  }
+  if (isEarlyAlzheimers(indication)) {
+    // Early-AD CDR-SB responder comparator. The placebo arm's clinical course is
+    // well characterized: CLARITY-AD (lecanemab, NEJM 2023) and TRAILBLAZER-ALZ2
+    // (donanemab, JAMA 2023) show placebo CDR-SB decline ≈ 1.5–2.0 pts / 18 mo, i.e.
+    // a LOW rate of placebo patients meeting a clinically-meaningful non-decline /
+    // responder threshold (~10%). σ² is honest-wide (0.010) for the responder-
+    // threshold and cross-trial heterogeneity — replacing the LLM's per-run guess
+    // that swung 0.08–0.35 across identical runs.
+    return {
+      nullResponseRate: 0.10,
+      comparatorSigma2: 0.010,
+      source: "CLARITY-AD (lecanemab, NEJM 2023) + TRAILBLAZER-ALZ2 (donanemab, JAMA 2023): placebo CDR-SB decline ~1.5–2.0 pts/18mo → ~10% placebo responder rate; honest σ² for responder-threshold/cross-trial heterogeneity.",
     };
   }
   return null;

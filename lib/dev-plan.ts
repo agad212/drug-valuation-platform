@@ -33,6 +33,7 @@ import type {
 } from "./ptrs-trial";
 import { mixtureMoments, type EffectPriorMixture, type ClassStatus } from "./effect-prior";
 import { pinCostPerPatient, type TherapeuticArea } from "./financial-pins";
+import { graveyardHaircut } from "./class-risk";
 import {
   computeStageRR,
   gridToGaussianMixture,
@@ -53,6 +54,7 @@ import {
 
 const REG_APPROVAL_PROB: Record<RegulatoryContext, number> = {
   standard:      0.85,
+  fast_track:    0.85,  // Fast Track does NOT raise the approval probability (== standard)
   btd:           0.92,
   orphan:        0.90,
   btd_orphan:    0.94,
@@ -64,6 +66,7 @@ const REG_APPROVAL_PROB: Record<RegulatoryContext, number> = {
 // Typical FDA review duration (months), submission to decision, by pathway.
 const REVIEW_MONTHS_BY_REG_CONTEXT: Record<RegulatoryContext, number> = {
   standard:      12,
+  fast_track:    10,  // rolling review shortens submission-to-decision (timeline ONLY, not probability)
   btd:            8,
   orphan:        10,
   btd_orphan:     8,
@@ -223,6 +226,8 @@ export type DevPlanResult = {
 
   // Echoed so downstream (decision-analysis per-option plans) applies the same haircut
   modalityClassStatus?: ClassStatus;
+  // Part 2: the blended p_graveyard actually used for the haircut (echoed for UI/audit).
+  classGraveyardProbability?: number;
   // Fix B: true when an orphan/btd_orphan context was downgraded for engine purposes
   // because it wasn't confirmed for the base-case indication (audit/UI signal).
   orphanGatedOff?: boolean;
@@ -236,6 +241,10 @@ export type DevPlanInputs = {
   // Modality/target-class status from the analog step (Step 3). "graveyard"
   // applies the modality meta-risk haircut to trial-success stages.
   modalityClassStatus?: ClassStatus;
+  // Part 2: deterministic P(class is a graveyard) ∈ [0,1] from the class-risk rule
+  // (class-risk.ts). When present it drives the haircut as a BLEND (1−0.20·p);
+  // when absent the binary modalityClassStatus is used (backward-compatible).
+  classGraveyardProbability?: number;
   therapeuticArea?: TherapeuticArea; // Fix #2: keys the pinned cost-per-patient benchmark
   // Fix B: orphan designation only earns engine benefits (easier significance bar +
   // reg-approval uplift) if it is confirmed FOR THE BASE-CASE INDICATION. Default-deny:
@@ -399,7 +408,17 @@ export function computeDevPlan(
     // compounds across the multi-gate path — a graveyard modality is more likely
     // to fail SOMEWHERE. Not double-counting: prior = effect size; haircut =
     // gate-completion odds given that effect (tolerability/translation/execution).
-    const modalityHaircut = inputs.modalityClassStatus === "graveyard" ? MODALITY_META_RISK_HAIRCUT : 1.0;
+    // Class base-rate risk as a deterministic BLEND over p_graveyard (Part 2):
+    // graveyard-certain → full haircut, validated → none, genuinely-split → the
+    // weighted value between — so the haircut stops flipping with a coin-flip
+    // graveyard/mixed LABEL. p_graveyard comes from the deterministic class-risk
+    // rule (class-risk.ts, fed by structured analog facts). Falls back to the
+    // binary label when no probability is supplied, preserving prior behavior
+    // exactly (graveyard → 0.80, else 1.0). The stage-success FORMULA is unchanged;
+    // only how modalityHaircut is derived changed.
+    const pGraveyard = inputs.classGraveyardProbability
+      ?? (inputs.modalityClassStatus === "graveyard" ? 1 : 0);
+    const modalityHaircut = graveyardHaircut(pGraveyard, MODALITY_META_RISK_HAIRCUT);
     const trialSuccessProb = clamp01(cappedTrialSuccessProb * modalityHaircut);
 
     // Convert the posterior grid back to a Gaussian mixture for the next stage
@@ -561,6 +580,8 @@ export function computeDevPlan(
     totalDurationMonths,
     impliedLaunchYear: impliedLaunchYear(totalDurationMonths),
     modalityClassStatus: inputs.modalityClassStatus,
+    classGraveyardProbability: inputs.classGraveyardProbability
+      ?? (inputs.modalityClassStatus === "graveyard" ? 1 : 0),
     orphanGatedOff,
     revenuePVM,
     eNPVM,

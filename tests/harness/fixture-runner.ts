@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import { buildEffectPrior, mixtureMoments, type EvidenceStepInput, type EffectPrior } from "../../lib/effect-prior";
 import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../../lib/dev-plan";
+import { classGraveyardProbability } from "../../lib/class-risk";
 import { computeRevenuePV } from "../../lib/cashflow";
 import {
   anchorPeakSales, computeLoeYear,
@@ -102,13 +103,19 @@ export function loadFixture(fileName: string): Fixture {
  */
 export function runDeterministicChain(fx: Fixture): ChainResult {
   const effectPrior = buildEffectPrior(fx.chainSteps);
-  const modalityClassStatus = effectPrior.chain.find((s) => s.source === "analog")?.classStatus;
+  // Part 2: derive p_graveyard + the classStatus label deterministically from the
+  // analog step's STRUCTURED facts when present (mirrors index.tsx); else fall back
+  // to the LLM classStatus label (backward-compatible — pre-Part-2 fixtures).
+  const analogStep = effectPrior.chain.find((s) => s.source === "analog");
+  const classRisk = analogStep?.classEvidence ? classGraveyardProbability(analogStep.classEvidence) : null;
+  const modalityClassStatus = classRisk?.classStatus ?? analogStep?.classStatus;
 
   const devPlanInputs = {
     stages: fx.devPlan.stages,
     regulatoryContext: fx.devPlan.regulatoryContext,
     regCostM: fx.devPlan.regCostM ?? 1.0,
     modalityClassStatus,
+    classGraveyardProbability: classRisk?.pGraveyard,
     therapeuticArea: fx.financial?.therapeuticArea,
     orphanConfirmedForIndication: fx.devPlan.orphanConfirmedForIndication,
   };

@@ -140,6 +140,7 @@ async function main() {
     source: s.source, label: s.label, found: s.found,
     ...(s.found && s.signal ? { signal: { mu: s.signal.mu, sigma2: s.signal.sigma2 } } : {}),
     ...(s.classStatus ? { classStatus: s.classStatus } : {}),
+    ...(s.classEvidence ? { classEvidence: s.classEvidence } : {}), // Part 2: structured class facts
     reasoning: s.reasoning ?? "",
   }));
   console.log(`  ✓ effect-prior: ${chainSteps.length} steps, analog classStatus="${chainSteps.find((s) => s.source === "analog")?.classStatus ?? "—"}"`);

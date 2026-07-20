@@ -204,12 +204,14 @@ function StageCard({
               </div>
             )}
             {stage.modalityHaircut != null && stage.modalityHaircut < 1 && (
-              <div title="Modality-class base rate: zero approved drugs in this class + documented failures" style={{ fontSize: 9, color: "#f59e0b", marginTop: 3, maxWidth: 190, lineHeight: 1.3 }}>
+              <div title="Modality-class base-rate risk, applied as a deterministic blend over the class-graveyard probability" style={{ fontSize: 9, color: "#f59e0b", marginTop: 3, maxWidth: 190, lineHeight: 1.3 }}>
                 incl. modality-class risk ×{stage.modalityHaircut.toFixed(2)}
+                {" "}(class-graveyard {fmtPct(Math.round(((1 - stage.modalityHaircut) / 0.2) * 100) / 100)})
                 <div style={{ color: "var(--text-faint)", fontWeight: 400, marginTop: 2 }}>
-                  Class execution/regulatory risk — the odds of CLEARING this gate. Separate
-                  from the effect-size hit (that's already in the effect prior), so the class
-                  evidence is not double-counted.
+                  Class execution/regulatory risk — the odds of CLEARING this gate — blended
+                  over the class-graveyard probability (haircut = 1 − 0.20·p). Separate from the
+                  effect-size hit (already in the effect prior), so the class evidence is not
+                  double-counted.
                 </div>
               </div>
             )}

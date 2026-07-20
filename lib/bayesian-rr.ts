@@ -134,6 +134,7 @@ const Z_ALPHA: Record<RegulatoryContext, number> = {
   btd_orphan: 1.28,
   accelerated: 1.28,
   standard: 1.645,     // α = 0.05 one-sided
+  fast_track: 1.645,   // Fast Track does NOT ease the statistical bar (== standard)
   confirmatory: 1.96,  // α = 0.025 one-sided
 };
 
