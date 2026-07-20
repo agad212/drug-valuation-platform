@@ -4,20 +4,22 @@ import { SEGMENTS, QUESTIONS_BY_SEGMENT } from "../../../lib/survey-questions";
 
 export const config = { maxDuration: 300 };
 
-const SYSTEM_PROMPT = `You are a customer-discovery analyst working for a solo founder. The founder is interviewing three audiences about how high-stakes biopharma decisions actually get made, and about concept fit for products under development:
+const SYSTEM_PROMPT = `You are a customer-discovery analyst working for a solo founder. The founder is interviewing four audiences about how high-stakes biopharma decisions actually get made, and about concept fit for products under development:
 
-1. Biopharma companies — shown the STRATEGIC ADVISOR concept: an AI platform that builds defensible, sourced asset valuations (preclinical to LCM) with traceable reasoning and compares strategic options (indication sequencing, trial design, partnering, go/no-go) via plain-language prompts.
-2. VC / Private equity investors — shown the same STRATEGIC ADVISOR concept, framed around deal diligence and follow-on scenarios.
-3. Hedge fund / public equities investors — shown the VALUATION-ONLY concept: defensible, sourced, probability-adjusted valuations of pipeline assets and whole companies, instantly re-runnable on new events. No strategic-options advisor.
+1. Biopharma R&D decision makers — shown the STRATEGIC ADVISOR concept: an AI platform that builds defensible, sourced asset valuations (preclinical to LCM) with traceable reasoning and compares strategic options (indication sequencing, trial design, partnering, go/no-go) via plain-language prompts.
+2. Biopharma M&A / BD professionals — shown the VALUATION-ONLY concept: defensible, sourced, probability-adjusted valuations of any asset or company, traceable to sources, instantly re-runnable as deal terms or data change. No strategic-options advisor.
+3. VC / Private equity investors — shown the STRATEGIC ADVISOR concept, framed around deal diligence and follow-on scenarios.
+4. Hedge fund / public equities investors — shown the VALUATION-ONLY concept, framed around positions and catalysts.
 
-You will receive the raw survey responses, grouped by audience segment, with respondent tags like [B1] (biopharma), [V1] (VC/PE), [H1] (hedge fund). Produce a rigorous synthesis in GitHub-flavored markdown:
+You will receive the raw survey responses, grouped by audience segment, with respondent tags like [B1] (biopharma R&D), [M1] (biopharma M&A/BD), [V1] (VC/PE), [H1] (hedge fund). Produce a rigorous synthesis in GitHub-flavored markdown:
 
 ## Executive summary
 3-6 bullets: the strongest signals across all audiences, stated plainly. Note per-segment sample sizes and how much weight they can bear.
 
 Then ONE SECTION PER SEGMENT THAT HAS RESPONSES (skip empty segments with a single line "No responses yet."):
 
-## Biopharma companies (n=X)
+## Biopharma R&D decision makers (n=X)
+## Biopharma M&A / BD (n=X)
 ## VC / PE investors (n=X)
 ## Hedge funds / public equities (n=X)
 

@@ -4,12 +4,13 @@
  * so segment ids, question ids, and labels stay consistent everywhere.
  *
  * Segment → product mapping:
- *   biopharma  → Strategic Advisor product
- *   vc_pe      → Strategic Advisor product
- *   hedge_fund → Valuation product only
+ *   biopharma       → Strategic Advisor product (R&D decision makers)
+ *   biopharma_ma_bd → Valuation product only (M&A / BD)
+ *   vc_pe           → Strategic Advisor product
+ *   hedge_fund      → Valuation product only
  */
 
-export type SegmentId = "biopharma" | "vc_pe" | "hedge_fund";
+export type SegmentId = "biopharma" | "biopharma_ma_bd" | "vc_pe" | "hedge_fund";
 
 export type Segment = {
   id: SegmentId;
@@ -22,7 +23,8 @@ export type Segment = {
 };
 
 export const SEGMENTS: Segment[] = [
-  { id: "biopharma", label: "Biopharma company", product: "Strategic Advisor", tagPrefix: "B" },
+  { id: "biopharma", label: "Biopharma R&D Decision Maker", product: "Strategic Advisor", tagPrefix: "B" },
+  { id: "biopharma_ma_bd", label: "Biopharma M&A / BD", product: "Valuation", tagPrefix: "M" },
   { id: "vc_pe", label: "VC / Private equity investor", product: "Strategic Advisor", tagPrefix: "V" },
   { id: "hedge_fund", label: "Hedge fund / public equities investor", product: "Valuation", tagPrefix: "H" },
 ];
@@ -152,6 +154,100 @@ const BIOPHARMA_QUESTIONS: SurveyQuestion[] = [
     id: "q11",
     label:
       "Who else in the organization feels this pain most directly — portfolio strategy, finance, BD, commercial, clinical development, someone else? Is there someone you think I should speak with to understand this workflow better?",
+    short: "Who else feels this pain / referrals",
+    kind: "textarea",
+    optional: true,
+    part: 2,
+  },
+];
+
+// ─── Biopharma M&A / BD (Valuation product only) — shell draft ────────────────
+const BIOPHARMA_MA_BD_QUESTIONS: SurveyQuestion[] = [
+  Q0,
+  {
+    id: "q1",
+    label:
+      "Think of a real in-licensing, out-licensing, acquisition, or partnering evaluation in the last year or so where the asset's value or risk-adjusted value drove the call. What was the deal decision?",
+    short: "What was the deal decision?",
+    kind: "textarea",
+    part: 1,
+  },
+  {
+    id: "q2",
+    label:
+      "How did the team actually get to a number — internal valuation models, bankers or consultants, committee input, something else?",
+    short: "How did the team get to a number?",
+    kind: "textarea",
+    part: 1,
+  },
+  {
+    id: "q3",
+    label: "What was hardest, slowest, or most debated in agreeing on the asset's value?",
+    short: "Hardest / slowest / most debated",
+    kind: "textarea",
+    part: 1,
+  },
+  {
+    id: "q4",
+    label:
+      "When the assumptions were challenged — your own leadership, the deal committee, or the other side of the table — how well did the valuation hold up? Could you re-run it fast, or was it fragile?",
+    short: "How did the valuation hold up when challenged?",
+    kind: "textarea",
+    part: 1,
+  },
+  {
+    id: "q5",
+    label:
+      "Were there analyses the team wanted but did not have time, data, or confidence to produce before the deal decision?",
+    short: "Analyses wanted but not produced",
+    kind: "textarea",
+    part: 1,
+  },
+  {
+    id: "q6",
+    label: "Is this kind of evaluation a one-off, or does your team face some version of it regularly?",
+    short: "One-off or regular?",
+    kind: "choice",
+    choices: ["Mostly a one-off", "Comes up occasionally", "We face some version of it regularly"],
+    part: 1,
+  },
+  Q6_DETAIL,
+  {
+    id: "q7",
+    label:
+      "For the specific deal you just walked me through — would you have actually used something like this? If yes, where exactly — asset screening, diligence, deal committee prep, negotiation support? And what would have made you not bother?",
+    short: "Would you have used this? Where / why not?",
+    kind: "textarea",
+    part: 2,
+  },
+  {
+    id: "q8",
+    label:
+      "If yes — what would it have to prove before you'd put its number in front of your deal committee, or use it to push back on a counterparty's number? What about using it systematically across your BD pipeline?",
+    short: "What would it have to prove to be trusted?",
+    kind: "textarea",
+    part: 2,
+  },
+  {
+    id: "q9",
+    label:
+      "If yes — how likely is it that your internal organization would build and provide a sufficient tool itself, rather than outsourcing?",
+    short: "Build internally vs. outsource",
+    kind: "textarea",
+    part: 2,
+  },
+  {
+    id: "q10",
+    label:
+      "If you'd outsource — what price range pops into your mind that would make you immediately push for approval?",
+    short: "Price range for immediate approval",
+    kind: "textarea",
+    part: 2,
+  },
+  {
+    id: "q11",
+    label:
+      "Who else feels this pain most directly — search & evaluation, corporate development, finance, portfolio strategy, someone else? Is there someone you think I should speak with to understand this workflow better?",
     short: "Who else feels this pain / referrals",
     kind: "textarea",
     optional: true,
@@ -347,6 +443,7 @@ const HEDGE_FUND_QUESTIONS: SurveyQuestion[] = [
 
 export const QUESTIONS_BY_SEGMENT: Record<SegmentId, SurveyQuestion[]> = {
   biopharma: BIOPHARMA_QUESTIONS,
+  biopharma_ma_bd: BIOPHARMA_MA_BD_QUESTIONS,
   vc_pe: VC_PE_QUESTIONS,
   hedge_fund: HEDGE_FUND_QUESTIONS,
 };
@@ -356,6 +453,10 @@ export const CONCEPT_BY_SEGMENT: Record<SegmentId, string[]> = {
   biopharma: [
     "It's an AI platform that builds a defensible, sourced valuation for an asset — from preclinical to LCM — with industry-leading AI-driven probability calculations, and lets you compare the value of strategic options: indication sequencing, trial design, partnering, go/no-go — with the reasoning shown and traceable, not a black box.",
     "You could add and compare new options, or changes to options, instantly and as often as you like, simply by asking in plain language.",
+  ],
+  biopharma_ma_bd: [
+    "It's an AI platform that builds a defensible, sourced valuation for any drug asset or company — probability-adjusted NPV from preclinical to LCM — with industry-leading AI-driven probability calculations and every number traceable to its sources, not a black box.",
+    "You could re-run the valuation instantly as deal terms or new data change — during diligence or live negotiations — simply by asking in plain language.",
   ],
   vc_pe: [
     "It's an AI platform that builds a defensible, sourced valuation for any drug asset — from preclinical to LCM — with industry-leading AI-driven probability calculations, and lets you stress-test the strategic options behind a deal: indication sequencing, trial design, partnering structures, follow-on scenarios — with the reasoning shown and traceable, not a black box.",
@@ -369,7 +470,7 @@ export const CONCEPT_BY_SEGMENT: Record<SegmentId, string[]> = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 export function isSegmentId(v: unknown): v is SegmentId {
-  return v === "biopharma" || v === "vc_pe" || v === "hedge_fund";
+  return v === "biopharma" || v === "biopharma_ma_bd" || v === "vc_pe" || v === "hedge_fund";
 }
 
 export function segmentById(id: SegmentId): Segment {
