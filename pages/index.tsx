@@ -9,13 +9,15 @@ import { useToast } from "../components/Toast";
 import type { Valuation, Indication, RevenueAnalysisResult, IndicationRevenueAnalysis } from "../lib/types";
 import { computeOutputs, computeRevenuePV } from "../lib/cashflow";
 import type { CtgovTrial } from "../lib/ctgov";
+import { isEnrollmentComplete } from "../lib/ctgov";
 import DecisionAnalysis from "../components/DecisionAnalysis";
 import DevPlan from "../components/DevPlan";
 import EffectPriorChain from "../components/EffectPriorChain";
 import StrategicAssessment from "../components/StrategicAssessment";
 import { buildBaseContext } from "../lib/decision-analysis";
-import { computeDevPlan, shiftLoeForLaunch, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
+import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
+import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, computeLoeYear } from "../lib/financial-pins";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
 
@@ -48,7 +50,10 @@ function fmtPrice(n?: number | null) {
   if (n >= 1000) return `$${Math.round(n / 1000)}K`;
   return `$${Math.round(n).toLocaleString()}`;
 }
-function fmtPct(n?: number | null, dp = 1) {
+// Display rounding only (render boundary). Default to WHOLE % — a Phase 1/2 asset
+// doesn't support decimal-point precision on a probability. Callers pass dp=1 only
+// where a decimal is genuinely meaningful. Never round before a computation.
+function fmtPct(n?: number | null, dp = 0) {
   if (n == null || Number.isNaN(n)) return "—";
   return (n * 100).toFixed(dp) + "%";
 }
@@ -163,7 +168,7 @@ function Card({ children, style }: { children: React.ReactNode; style?: React.CS
 }
 
 // ─── P&L Table ───────────────────────────────────────────────────────────────
-function PnLTable({ v, out, pApproval, onClose }: { v: Valuation; out: ReturnType<typeof computeOutputs>; pApproval?: number; onClose: () => void }) {
+function PnLTable({ v, out, pApproval, devPlan, onClose }: { v: Valuation; out: ReturnType<typeof computeOutputs>; pApproval?: number; devPlan?: DevPlanResult | null; onClose: () => void }) {
   const [distPct, setDistPct] = useState(v.distributionPct ?? 0.05);
   const [opexPct, setOpexPct] = useState(v.commercialOpexPct ?? 0.20);
 
@@ -188,9 +193,15 @@ function PnLTable({ v, out, pApproval, onClose }: { v: Valuation; out: ReturnTyp
   for (let y = now; y < minLaunch; y++) devYears.push(y);
   if (devYears.length === 0) devYears.push(now);
 
-  // Spread nominal dev cost evenly over dev years
-  const totalDevCostNominal = (v.devCostPV ?? 0) * (1 + disc); // rough nominal est.
-  const annualDevCost = totalDevCostNominal / Math.max(1, devYears.length);
+  // Dev cost pulled from the CANONICAL dev plan (pinned CPP × n), not the stale
+  // auto-value devCostPV. Nominal column = the plan's total nominal cost; the
+  // probability-weighted spend = the plan's risk-adjusted cost (already weighted per
+  // stage by P(reaching it)), so the P&L's dev spend reconciles with the headline eNPV.
+  // Legacy fallback (no dev plan): the old auto-value estimate.
+  const devNominalTotal = devPlan ? devPlan.totalNominalCostM * 1e6 : (v.devCostPV ?? 0) * (1 + disc);
+  const devPwTotal = devPlan ? devPlan.totalRiskAdjCostM * 1e6 : (v.devCostPV ?? 0) * ptrs;
+  const annualDevCost = devNominalTotal / Math.max(1, devYears.length);       // nominal per year (display)
+  const annualPwDevCost = devPwTotal / Math.max(1, devYears.length);          // risk-adjusted per year (drives DCF)
 
   const ramps: Record<number, number> = { 0: 0.2, 1: 0.5, 2: 0.8, 3: 1.0 };
 
@@ -212,7 +223,7 @@ function PnLTable({ v, out, pApproval, onClose }: { v: Valuation; out: ReturnTyp
   devYears.forEach((yr) => {
     const t = yr - now;
     const df = 1 / Math.pow(1 + disc, Math.max(0, t));
-    const pwRdCost = annualDevCost * ptrs;
+    const pwRdCost = annualPwDevCost; // already risk-adjusted (dev-plan basis); do NOT × ptrs again
     const dcf = -pwRdCost * df;
     cumExpCosts += pwRdCost;
     cumDcf += dcf;
@@ -427,6 +438,9 @@ export default function HomePage() {
   const [showSaved, setShowSaved] = useState(false);
   const [patentResult, setPatentResult] = useState<any>(null);
   const [patentLoading, setPatentLoading] = useState(false);
+  // Fix #2 provenance strings surfaced in the live UI (peak-sales anchor, LOE rule).
+  const [peakProvenance, setPeakProvenance] = useState<string | null>(null);
+  const [loeProvenance, setLoeProvenance] = useState<string | null>(null);
   const [trialResults, setTrialResults] = useState<CtgovTrial[] | null>(null);
   const [trialSummary, setTrialSummary] = useState("");
   const [trialTotal, setTrialTotal] = useState(0);
@@ -501,12 +515,16 @@ export default function HomePage() {
     // Reuse the analog step's class determination (Step 3) — a "graveyard" class
     // haircuts the stage probabilities too, not just the effect prior.
     const modalityClassStatus = effectPrior?.chain?.find((s) => s.source === "analog")?.classStatus;
+    // Fix #2: therapeutic area keys the pinned cost-per-patient benchmark.
+    const therapeuticArea = inferTherapeuticArea(valuationBrief?.base_case_indication?.value || v.indication);
+    // Fix B: orphan benefits apply only when confirmed for the base-case indication.
+    const orphanConfirmedForIndication = layer2Result?.orphanConfirmedForIndication === true;
     return computeDevPlan(
       mixture, base.ciHalfWidth,
-      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0, modalityClassStatus },
+      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0, modalityClassStatus, therapeuticArea, orphanConfirmedForIndication },
       revenuePVM,
     );
-  }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief]);
+  }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief, v.indication, layer2Result]);
 
   // Single source of truth for the displayed P(approval): a genuine user
   // override wins, else the dev plan governs, else the phase baseline. Used by
@@ -522,6 +540,14 @@ export default function HomePage() {
     ptrs: governedPtrs,
     ...(devPlan ? { devCostPV: Math.round(devPlan.totalRiskAdjCostM * 1e6) } : {}),
   }), [display, governedPtrs, devPlan]);
+
+  // Governed outputs for every rNPV/eNPV DISPLAY (table total, CSV, headline sign).
+  // computeOutputs(chartValuation) uses the governed P(approval) and the dev plan's
+  // RISK-ADJUSTED cost, so these reconcile to the headline eNPV instead of the legacy
+  // `out.rnpv`, which subtracts the FULL NOMINAL devCostPV from risk-adjusted revenue
+  // (the cost/revenue asymmetry that produced tau's spurious −$710M). Display-only —
+  // `out`/`display`/`base`/`devPlan` are unchanged, so no computed golden moves.
+  const governedOut = useMemo(() => computeOutputs(chartValuation), [chartValuation]);
 
   // ── Expectation smoke detector: fires when devPlan result changes ─────────
   useEffect(() => {
@@ -541,26 +567,32 @@ export default function HomePage() {
     const implied = devPlan.impliedLaunchYear;
     const current = v.indications?.[0]?.launchYear ?? v.launchYear;
     if (current === implied) return;
-    const excl = v.loeExclusivityYears ?? 8;
-    const newLoe = shiftLoeForLaunch(v.loeYear, v.loeBasis, implied, excl);
-    const loeChanged = newLoe != null && newLoe !== v.loeYear;
+    // Fix #2: LOE from the pinned rule (real patent when cited, else labeled
+    // exclusivity term by modality/designation) anchored to the timeline launch.
+    const patentLoe = v.loeBasis === "patent" ? v.loeYear : null;
+    const loePin = computeLoeYear({
+      launchYear: implied,
+      modality: inferModality(v.mechanism),
+      regulatoryContext: devPlanRegContext as any,
+      patentLoeYear: patentLoe,
+      orphanConfirmed: layer2Result?.orphanConfirmedForIndication === true,
+    });
+    const newLoe = loePin.loeYear;
+    setLoeProvenance(loePin.provenance);
+    const loeChanged = newLoe !== v.loeYear;
     setV((cur) => ({
       ...cur,
       launchYear: implied,
-      loeYear: newLoe ?? cur.loeYear,
+      loeYear: newLoe,
+      loeBasis: loePin.basis,
+      loeExclusivityYears: loePin.exclusivityYears,
       indications: cur.indications?.length
-        ? cur.indications.map((ind, i) => (i === 0
-            ? { ...ind, launchYear: implied, loeYear: shiftLoeForLaunch(ind.loeYear, cur.loeBasis, implied, excl) }
-            : ind))
+        ? cur.indications.map((ind, i) => (i === 0 ? { ...ind, launchYear: implied, loeYear: newLoe } : ind))
         : cur.indications,
     }));
     pushToast(
       `Launch year set to ${implied} from dev plan timeline (${Math.round(devPlan.totalDurationMonths)} months to approval).` +
-      (loeChanged
-        ? (v.loeBasis === "exclusivity"
-            ? ` LOE moved to ${newLoe} (exclusivity-based, anchored to launch).`
-            : ` LOE moved to ${newLoe} — launch reached the prior LOE, so regulatory exclusivity (+${excl}y) is now the binding constraint.`)
-        : ""),
+      (loeChanged ? ` LOE ${newLoe} — ${loePin.provenance}.` : ""),
       "info", loeChanged ? 9000 : 6000,
     );
   }, [devPlan?.impliedLaunchYear]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -947,11 +979,11 @@ export default function HomePage() {
         `Auto-value complete: ${indCount} indication${indCount !== 1 ? "s" : ""} added${withSales ? `, ${withSales} with peak sales estimates` : ""}${data.loeYear ? `, LOE ${data.loeYear}` : ""}. Running revenue deep-dive…`,
         "success", 8000
       );
-      // Revenue research can start immediately (doesn't need the brief)
+      // Auto-value indication names — fallback only (used for the base case if the
+      // brief omits one). Revenue is NOT triggered here: Part A (Fix #3) requires the
+      // revenue module to value the SAME base-case indication the lead reasoner chose,
+      // not the broad auto-value label — so the trigger moves below, after the brief.
       const autoIndNames = (data.indications || []).map((i: any) => i.name).filter(Boolean);
-      if (autoIndNames.length > 0) {
-        setTimeout(() => onResearchRevenue(autoIndNames, drug), 15000);
-      }
 
       // Wait for the brief — it GOVERNS the valuation. It runs in parallel with
       // auto-value, so it may already be done by the time we reach here.
@@ -974,6 +1006,14 @@ export default function HomePage() {
       const briefIndication = brief.base_case_indication?.value;
       const ptrsIndication = briefIndication || autoIndNames[0] || "";
       const ptrsPhase = brief.true_stage?.value || data.phase;
+
+      // Part A (Fix #3): revenue values the BRIEF's base-case indication — the same
+      // indication the probability engine values — so TAM/population/comps/peak all
+      // match the base case. The broad pan-tumor opportunity is a Strategy-Advisor
+      // OPTION, not the base-case revenue pool.
+      if (ptrsIndication) {
+        setTimeout(() => onResearchRevenue([ptrsIndication], drug), 15000);
+      }
 
       // Re-apply brief's indication now that both brief and auto-value are done
       if (briefIndication) {
@@ -1024,12 +1064,23 @@ export default function HomePage() {
       setRevenueAnalysis(data);
       const withEstimates = data.indications.filter(i => i.peakSalesM > 0).length;
 
-      // Auto-apply peak sales from revenue analysis — it's more researched than auto-value estimates
+      // Fix #2: peak sales ANCHORED to the retrieved comps (deterministic median),
+      // not the free-floating LLM peak estimate — so it stops swinging run-to-run.
+      // Capture the base-case (primary) peak-sales provenance for the live UI tag.
+      const primaryRev = data.indications[0];
+      if (primaryRev) {
+        const primaryComps = classifyComps((primaryRev.comps || []).map((c) => ({ drug: c.drug, peakSalesM: c.peakSalesM })));
+        setPeakProvenance(anchorPeakSales(primaryComps, { rawLlmPeakM: primaryRev.peakSalesM }).provenance);
+      }
       setV((cur) => {
         if (!cur.indications?.length) return cur;
         const updated = cur.indications.map((ind, i) => {
-          const estimate = data.indications[i]?.peakSalesM;
-          return estimate && estimate > 0 ? { ...ind, peakSales: Math.round(estimate * 1e6) } : ind;
+          const rev = data.indications[i];
+          if (!rev) return ind;
+          const comps = classifyComps((rev.comps || []).map((c) => ({ drug: c.drug, peakSalesM: c.peakSalesM })));
+          const pin = anchorPeakSales(comps, { rawLlmPeakM: rev.peakSalesM });
+          const anchoredM = pin.baseM > 0 ? pin.baseM : rev.peakSalesM;
+          return anchoredM > 0 ? { ...ind, peakSales: Math.round(anchoredM * 1e6) } : ind;
         });
         return { ...cur, indications: updated };
       });
@@ -1131,6 +1182,19 @@ export default function HomePage() {
     setDevPlanError(null);
     setDevPlanLoading(true);
     try {
+      // Whether the current trial is already fully enrolled — from CT.gov status.
+      // A fully-enrolled trial's accrual is elapsed, so the dev-plan timeline should
+      // not project years of future enrollment for it. Read the ref (always current);
+      // match the same trial that fed layer2 (first at-or-above the drug's phase).
+      const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
+      const trials = trialResultsRef.current ?? [];
+      const currentTrial =
+        trials.find((t) => t.nctId === recommendedNctId) ??
+        trials.find((t) => phaseNum(t.phase || "") >= phaseNum(phase));
+      const currentTrialEnrollmentComplete = isEnrollmentComplete(currentTrial?.status);
+      // Ground-truth readout date for a fully-enrolled current trial → drives remaining
+      // duration (months-to-completion) instead of a projected enrollment window.
+      const currentTrialCompletionDate = currentTrial?.primaryCompletionDate ?? currentTrial?.completionDate;
       const res = await fetch("/api/dev-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1141,6 +1205,8 @@ export default function HomePage() {
           sponsor,
           currentTrialDesign: l2Result.trialInputs,
           currentTrialName: drug,
+          currentTrialEnrollmentComplete,
+          currentTrialCompletionDate,
         }),
       });
       if (!res.ok) {
@@ -1359,7 +1425,7 @@ export default function HomePage() {
     rows.push(["Mechanism", v.mechanism || ""]);
     rows.push(["Discount Rate", `${(disc * 100).toFixed(1)}%`]);
     rows.push(["P(approval)", `${(ptrsVal * 100).toFixed(1)}%`]);
-    rows.push(["rNPV ($M)", String(Math.round((out.rnpv ?? 0) / 1e6))]);
+    rows.push(["rNPV ($M)", String(Math.round((governedOut.rnpv ?? 0) / 1e6))]);
     rows.push(["Revenue PV ($M)", String(Math.round((out.revenuePV ?? 0) / 1e6))]);
     rows.push(["Dev Cost PV ($M)", String(Math.round((out.devCostPV ?? 0) / 1e6))]);
     rows.push([]);
@@ -1417,7 +1483,7 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   }
 
-  const rnpvPositive = (out.rnpv ?? 0) >= 0;
+  const rnpvPositive = (governedOut.rnpv ?? 0) >= 0;
   void rnpvPositive; // used in MetricCard sub text
 
   return (
@@ -1603,7 +1669,7 @@ export default function HomePage() {
             <div style={{ borderTop: "1px solid var(--border)", margin: "16px 0" }} />
             <SectionLabel>Financial Assumptions</SectionLabel>
             <div className="form-grid-3" style={{ marginBottom: 16 }}>
-              <FieldNumber label="Peak Sales" value={v.peakSales} onChange={(x) => update("peakSales", x)} hint="USD" />
+              <FieldNumber label="Peak Sales" value={v.peakSales} onChange={(x) => update("peakSales", x)} hint={peakProvenance ?? "USD"} />
               <FieldNumber label="Discount Rate" value={v.discountRate} onChange={(x) => update("discountRate", x)} isPct hint="%" />
               <FieldNumber label="Dev Cost PV" value={v.devCostPV} onChange={(x) => update("devCostPV", x)} hint={devPlan ? "USD · not used — dev-plan risk-adj cost drives eNPV" : "USD"} />
               <FieldNumber label="COGS %" value={v.cogsPct} onChange={(x) => update("cogsPct", x)} isPct hint="%" />
@@ -1618,7 +1684,12 @@ export default function HomePage() {
             <SectionLabel>Timeline</SectionLabel>
             <div className="form-grid-3" style={{ marginBottom: 16 }}>
               <FieldNumber label="Launch Year" value={v.launchYear} onChange={(x) => update("launchYear", x)} integer />
-              <FieldNumber label="LOE Year" value={v.loeYear} onChange={(x) => setV((cur) => ({ ...cur, loeYear: x, loeBasis: undefined }))} integer hint="Loss of Exclusivity" />
+              <FieldNumber label="LOE Year" value={v.loeYear} onChange={(x) => setV((cur) => ({ ...cur, loeYear: x, loeBasis: undefined }))} integer hint={
+                loeProvenance
+                ?? (v.loeBasis === "patent" ? "pinned: patent/exclusivity expiry"
+                  : v.loeBasis === "exclusivity" ? "estimate: launch + regulatory exclusivity term"
+                  : "user-entered")
+              } />
               <FieldNumber label="Override P(approval)" value={v.ptrs} onChange={(x) => update("ptrs", x)} isPct hint="Leave blank = auto" />
             </div>
 
@@ -1646,7 +1717,7 @@ export default function HomePage() {
                     <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)", gridColumn: "1 / 6" }}>Combined</div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(out.devCostPV)}</div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(out.revenuePV)}</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", textAlign: "right", color: briefStatus === "failed" ? "var(--text-faint)" : (out.rnpv >= 0 ? "var(--accent)" : "var(--danger)") }}>{briefStatus === "failed" ? "—" : fmtMoney(out.rnpv)}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", textAlign: "right", color: briefStatus === "failed" ? "var(--text-faint)" : (governedOut.rnpv >= 0 ? "var(--accent)" : "var(--danger)") }}>{briefStatus === "failed" ? "—" : fmtMoney(governedOut.rnpv)}</div>
                     <div />
                   </div>
                 )}
@@ -2149,10 +2220,10 @@ export default function HomePage() {
                 const deltaColor = (d: number) => d >= 0 ? "#10b981" : "#ef4444";
                 const { trialInputs, riskFlags, phaseBenchmark, ptrsCombined, ptrsCI, layer2Delta, layer2Multiplier, trialSuccessProb, ptrsLayer1 } = layer2Result;
 
-                const ENDPOINT_LABEL: Record<string, string> = { hard: "Hard (OS / CR)", surrogate: "Surrogate (ORR / PFS)", pro: "PRO / Subjective" };
+                const ENDPOINT_LABEL: Record<string, string> = { hard: "Hard endpoint", surrogate: "Surrogate endpoint", pro: "PRO / subjective" };
                 const DESIGN_LABEL: Record<string, string> = { rct: "Randomized Controlled", single_arm: "Single Arm", basket: "Basket / Umbrella" };
                 const POP_LABEL: Record<string, string> = { biomarker_selected: "Biomarker Selected", broad: "Broad / Unselected", rare_small: "Rare / Small Pool" };
-                const PLACEBO_LABEL: Record<string, string> = { low: "Low (oncology / rare)", moderate: "Moderate (autoimmune)", high: "High (CNS / pain)" };
+                const PLACEBO_LABEL: Record<string, string> = { low: "Low", moderate: "Moderate", high: "High" };
                 const REG_LABEL: Record<string, string> = { standard: "Standard", btd: "Breakthrough Therapy", orphan: "Orphan Drug", btd_orphan: "BTD + Orphan", accelerated: "Accelerated Approval", confirmatory: "Confirmatory (post-AA)" };
 
                 return (
@@ -2633,7 +2704,7 @@ export default function HomePage() {
               <button onClick={() => setShowPnL(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 22, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
             </div>
 
-            <PnLTable v={v} out={out} pApproval={devPlan?.pApproval} onClose={() => setShowPnL(false)} />
+            <PnLTable v={v} out={out} pApproval={devPlan?.pApproval} devPlan={devPlan} onClose={() => setShowPnL(false)} />
           </div>
         </div>
       )}

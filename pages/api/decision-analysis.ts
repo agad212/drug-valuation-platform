@@ -64,18 +64,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return lines.join("\n");
   }).join("\n\n");
 
+  // Engine-determined ★ best option (max eNPV) — the insight must not contradict this.
+  const bestIdx = options.reduce((best, o, i) => (o.eNPVM > options[best].eNPVM ? i : best), 0);
+  const bestLabel = ["A", "B", "C", "D"][bestIdx] ?? String(bestIdx + 1);
+  const bestOpt = options[bestIdx];
+
   const prompt = `You are a pharma business development analyst. A clinical development team is comparing ${options.length} strategic options for ${drug || "a drug asset"}${phase ? ` (${phase})` : ""}.
 
-Here is the quantitative comparison:
+Quantitative comparison — these ENGINE-COMPUTED values are the single source of truth (the same numbers on the decision cards):
 
 ${optionsSummary}
 
-Write a 2–3 sentence strategic insight for the decision team. Focus on:
-1. Which option has the best risk-adjusted return and why.
-2. The key tradeoff being made (e.g. higher expected value vs. capital efficiency, or certainty vs. upside).
+The highest-eNPV option is Option ${bestLabel} ("${bestOpt.name}") at $${bestOpt.eNPVM.toFixed(0)}M — this is the ★ option shown on the cards.
+
+Write a 2–3 sentence strategic insight for the decision team:
+1. Name Option ${bestLabel} as the best risk-adjusted return and say why (in words).
+2. The key tradeoff (e.g. higher expected value vs. capital efficiency, or certainty vs. upside).
 3. One specific condition or assumption that would change the recommendation.
 
-Be direct and specific — use the numbers. Do not hedge everything. Assume the audience understands eNPV and PTRS.`;
+HARD RULES (must follow):
+- Use ONLY the numbers shown above; if you cite a figure, copy it EXACTLY. Do NOT compute, infer, re-round, or invent any number or ranking.
+- Never contradict the ranking: Option ${bestLabel} has the highest eNPV — do not claim any other option's eNPV is higher.
+- eNPV is driven by peak sales × probability of approval, minus risk-adjusted cost. Sample size (n) affects trial COST and statistical power, NOT eNPV directly — never say a larger or smaller n "drives eNPV up/down".
+- Assume the audience understands eNPV and PTRS. Be direct; don't hedge everything.`;
 
   try {
     const apiRes = await fetch("https://api.anthropic.com/v1/messages", {

@@ -89,6 +89,21 @@ Study-startup cushion (site activation, IRB/EC approval, first-patient-in, month
 Adjust similarly to CPP — rare disease and specialized-site trials enroll more
 slowly and take longer to start than common-disease trials at established
 networks.
+
+CRITICAL UNIT RULE — treatmentObsMonths, startupCushionMonths and the accrual
+implied by enrollmentRatePerMonth are all in MONTHS. Protocols on ClinicalTrials.gov
+frequently state periods in WEEKS ("76-week treatment period", "96-week extension").
+CONVERT weeks → months by dividing by ~4.345 BEFORE you fill these fields: a 76-week
+period is ~18 months (NOT 76), a 96-week period is ~22 months (NOT 96). Never place a
+week-count in a month field. A single-phase treatment/observation period above ~36
+months is almost never real — re-check whether you mis-read weeks as months.
+
+FULLY-ENROLLED CURRENT TRIAL — if the current trial's status indicates enrollment is
+complete (Active-not-recruiting / Completed / Enrolling-by-invitation), its accrual is
+already elapsed; the remaining timeline is the treatment/observation readout, not a
+fresh multi-year enrollment. For a fully-enrolled trial, use a HIGH enrollmentRatePerMonth
+so implied accrual is short — do not project years of future enrollment for patients
+who are already on study.
 `;
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -101,6 +116,10 @@ type RequestBody = {
   sponsor?: string;
   currentTrialDesign: TrialDesignInputs;  // from layer2Result.trialInputs
   currentTrialName?: string;              // e.g. "ABACUS-2"
+  currentTrialEnrollmentComplete?: boolean; // CT.gov status says the current trial is
+                                          //   fully enrolled → 0 remaining accrual time
+  currentTrialCompletionDate?: string;    // CT.gov primary-completion date (ISO) — for a
+                                          //   fully-enrolled trial, drives remaining duration
 };
 
 type StageOutput = {
@@ -115,6 +134,8 @@ type StageOutput = {
   enrollmentRatePerMonth: number;
   treatmentObsMonths: number;
   startupCushionMonths: number;
+  enrollmentComplete?: boolean;
+  completionDate?: string;
   nullResponseRate?: number;
   isTimeToEvent?: boolean;
   endpointRationale?: string;
@@ -128,7 +149,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const {
     drug, indication, phase, mechanism, sponsor,
-    currentTrialDesign, currentTrialName,
+    currentTrialDesign, currentTrialName, currentTrialEnrollmentComplete, currentTrialCompletionDate,
   } = req.body as RequestBody;
 
   if (!drug || !currentTrialDesign) {
@@ -299,6 +320,7 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
   const userMessage = `Drug: ${drug}
 Indication: ${indication || "unknown"}
 Current Phase: ${phase}${mechanism ? `\nMechanism: ${mechanism}` : ""}${sponsor ? `\nSponsor: ${sponsor}` : ""}
+MODALITY FIDELITY: describe the drug using its ACTUAL modality from the mechanism above. Do NOT mislabel it (e.g. an antisense / anti-miR oligonucleotide is NOT an "mRNA immunotherapy"; an antibody is not a small molecule). Any modality reference in your reasoning must match the stated mechanism.
 
 Current Trial${currentTrialName ? ` (${currentTrialName})` : ""}:
 ${currentDesignSummary}
@@ -361,6 +383,10 @@ Reason about the full development path. Return the current trial as stage 1 (use
         enrollmentRatePerMonth: (typeof s.enrollmentRatePerMonth === "number" && s.enrollmentRatePerMonth > 0) ? s.enrollmentRatePerMonth : 5,
         treatmentObsMonths:     (typeof s.treatmentObsMonths === "number" && s.treatmentObsMonths > 0) ? s.treatmentObsMonths : 9,
         startupCushionMonths:   (typeof s.startupCushionMonths === "number" && s.startupCushionMonths >= 0) ? s.startupCushionMonths : 6,
+        // Only the current trial (stage 0) can be "already enrolled" — future stages
+        // always carry projected accrual. Drives the 0-remaining-enrollment rule.
+        enrollmentComplete: i === 0 ? currentTrialEnrollmentComplete === true : false,
+        completionDate: i === 0 ? (currentTrialCompletionDate || undefined) : undefined,
         isCurrentTrial: i === 0,
         aiRationale:    s.aiRationale || "",
         trialDesign:    td,

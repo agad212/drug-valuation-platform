@@ -32,6 +32,7 @@ import type {
   RegulatoryContext,
 } from "./ptrs-trial";
 import { mixtureMoments, type EffectPriorMixture, type ClassStatus } from "./effect-prior";
+import { pinCostPerPatient, type TherapeuticArea } from "./financial-pins";
 import {
   computeStageRR,
   gridToGaussianMixture,
@@ -98,6 +99,14 @@ export type DevStageInput = {
   enrollmentRatePerMonth: number; // patients enrolled per month, across all sites
   treatmentObsMonths: number;     // treatment + follow-up/observation period
   startupCushionMonths: number;   // site activation, IRB/EC approval, first-patient-in
+  completionDate?: string;        // current trial only: CT.gov primary-completion date (ISO).
+                                  //   For a FULLY ENROLLED trial this is the ground-truth
+                                  //   readout date → remaining duration = months-to-completion,
+                                  //   overriding the projected enroll/obs/startup estimate.
+  enrollmentComplete?: boolean;   // current trial only: CT.gov says fully enrolled
+                                  //   (Active-not-recruiting / Completed / Enrolling-
+                                  //   by-invitation) → accrual is elapsed, so it adds
+                                  //   ~0 remaining enrollment time to the launch model
 
   // Bayesian RR engine inputs (AI-estimated or user-entered)
   nullResponseRate?: number;      // SOC/historical control response rate (0-1)
@@ -140,14 +149,30 @@ export type DevStage = DevStageInput & {
   mssIfSuccess: number;
   varianceIfSuccess: number;
 
-  // Cost accounting
-  trialCostM: number;          // n × cpp / 1e6
+  // Cost accounting (cpp is the PINNED benchmark value — displayed == used; see Fix #2)
+  cppRaw: number;              // the LLM-suggested cost-per-patient before pinning
+  cppClamped: boolean;         // true if the LLM cpp fell outside the benchmark band
+  cppProvenance: string;       // "pinned: <TA> <phase> $Xk" (+ band note if clamped)
+  trialCostM: number;          // n × (pinned cpp) / 1e6
   pPriorSuccess: number;       // P(all prior stages succeeded) — cost multiplier
   riskAdjCostM: number;        // trialCostM × pPriorSuccess
 
-  // Timeline (months)
-  enrollmentMonths: number;     // n / enrollmentRatePerMonth
-  durationMonths: number;       // enrollmentMonths + treatmentObsMonths + startupCushionMonths
+  // Timeline (months) — unit-normalized + sanity-bounded (see normalizeDurationMonths).
+  // The stage's treatmentObsMonths / startupCushionMonths values ARE the normalized
+  // ones (displayed == used); the *Raw fields preserve what the LLM returned.
+  enrollmentMonths: number;      // remaining accrual time (0 if current trial fully enrolled)
+  enrollmentMonthsRaw: number;   // n / enrollmentRatePerMonth, before bounds
+  enrollmentComplete: boolean;   // current trial already fully enrolled → 0 remaining accrual
+  enrollmentClamped: boolean;    // future accrual clamped to the phase ceiling
+  treatmentObsMonthsRaw: number; // obs value as returned, before normalization
+  treatmentObsWasWeeks: boolean; // obs value was a week-count, converted to months
+  treatmentObsClamped: boolean;  // obs value clamped to MAX_TREATMENT_OBS_MONTHS
+  startupCushionMonthsRaw: number;
+  durationFromCompletion: boolean; // true = duration is remaining months to the trial's
+                                   //   CT.gov completion date (fully-enrolled current trial),
+                                   //   overriding the enroll+obs+startup sum
+  durationMonths: number;        // enrollmentMonths + treatmentObsMonths + startupCushionMonths
+                                 //   (or months-to-completion when durationFromCompletion)
 
   // Cumulative probability through this stage
   cumSuccessProb: number;      // pPriorSuccess × trialSuccessProb
@@ -159,6 +184,8 @@ export type DevStage = DevStageInput & {
   bandsAfter?: RRBands;
   nullResponseRate: number;
   isProxied?: boolean;           // true if TTE endpoint approximated via RR proxy
+  comparatorUnreliable?: boolean; // un-pinned comparator exceeded the drug's own prior mean →
+                                  //   discarded, held to clinical floor (data-quality flag; fix #3)
   comparatorGrid?: { theta: number[]; density: number[] } | null; // comparator density for chart
   comparatorSigma2Effective: number; // actual comparatorSigma2 used in computation
   counterfactuals?: { label: string; pSuccess: number }[];
@@ -196,6 +223,9 @@ export type DevPlanResult = {
 
   // Echoed so downstream (decision-analysis per-option plans) applies the same haircut
   modalityClassStatus?: ClassStatus;
+  // Fix B: true when an orphan/btd_orphan context was downgraded for engine purposes
+  // because it wasn't confirmed for the base-case indication (audit/UI signal).
+  orphanGatedOff?: boolean;
 };
 
 // Inputs for the full plan computation
@@ -206,6 +236,12 @@ export type DevPlanInputs = {
   // Modality/target-class status from the analog step (Step 3). "graveyard"
   // applies the modality meta-risk haircut to trial-success stages.
   modalityClassStatus?: ClassStatus;
+  therapeuticArea?: TherapeuticArea; // Fix #2: keys the pinned cost-per-patient benchmark
+  // Fix B: orphan designation only earns engine benefits (easier significance bar +
+  // reg-approval uplift) if it is confirmed FOR THE BASE-CASE INDICATION. Default-deny:
+  // when undefined/false, an "orphan"/"btd_orphan" context is downgraded for engine
+  // purposes so an unearned cross-indication designation can't inflate P(approval).
+  orphanConfirmedForIndication?: boolean;
 };
 
 // Default null/control response rates by phase (when AI doesn't provide one)
@@ -270,6 +306,13 @@ export function computeDevPlan(
   let cumPriorSuccess = 1.0; // P(all prior stages succeeded); starts at 1 (nothing has failed yet)
   let prevStage: DevStageInput | null = null;
 
+  // Fix B: orphan benefits (easier significance bar + reg-approval uplift) apply only
+  // when the orphan designation is confirmed for the base-case indication. Default-deny.
+  const orphanConfirmed = inputs.orphanConfirmedForIndication === true;
+  const isOrphanCtx = (c: RegulatoryContext) => c === "orphan" || c === "btd_orphan";
+  const orphanGatedOff = !orphanConfirmed &&
+    (isOrphanCtx(inputs.regulatoryContext) || inputs.stages.some((s) => isOrphanCtx(s.trialDesign.regulatoryContext)));
+
   for (const stageInput of inputs.stages) {
 
     // ── Surrogate-translation penalty (Part 4) ────────────────────────────────
@@ -315,7 +358,8 @@ export function computeDevPlan(
       designType:        stageInput.trialDesign.designType,
       endpointType:      stageInput.trialDesign.endpointType,
       populationType:    stageInput.trialDesign.populationType,
-      regulatoryContext: stageInput.trialDesign.regulatoryContext,
+      // Fix B: gate the orphan significance-bar benefit on indication-confirmation.
+      regulatoryContext: gateOrphanForEngine(stageInput.trialDesign.regulatoryContext, orphanConfirmed),
     };
 
     const rrResult = computeStageRR(
@@ -365,18 +409,64 @@ export function computeDevPlan(
     );
     const { mss: mssIfSuccess, variance: varianceIfSuccess } = mixtureMoments(mixtureIfSuccess);
 
-    // ── Cost accounting ───────────────────────────────────────────────────────
-    const trialCostM   = (stageInput.n * stageInput.cpp) / 1e6;
+    // ── Cost accounting (Fix #2: cost-per-patient pinned to phase × TA benchmark) ─
+    // The pinned central value GOVERNS so identical assets stop swinging on cost;
+    // this touches only dollar cost, never any probability.
+    const cppPin = pinCostPerPatient(stageInput.phase, inputs.therapeuticArea, {
+      populationType:    stageInput.trialDesign.populationType,
+      regulatoryContext: stageInput.trialDesign.regulatoryContext,
+      llmCpp:            stageInput.cpp,
+    });
+    const trialCostM   = (stageInput.n * cppPin.cpp) / 1e6;
     // Risk-adjusted: this trial only happens if all prior stages succeeded
     const riskAdjCostM = trialCostM * cumPriorSuccess;
     // Cumulative probability through this stage
     const cumSuccessProb = cumPriorSuccess * trialSuccessProb;
 
-    // ── Timeline ───────────────────────────────────────────────────────────────
-    // Enrollment time scales with n; treatment/observation and startup cushion
-    // are roughly fixed regardless of trial size.
-    const enrollmentMonths = stageInput.n / Math.max(stageInput.enrollmentRatePerMonth, 0.1);
-    const durationMonths = enrollmentMonths + stageInput.treatmentObsMonths + stageInput.startupCushionMonths;
+    // ── Timeline (unit-normalized + sanity-bounded) ─────────────────────────────
+    // Corrects the two non-credible-duration failure modes: (1) a week-count dropped
+    // into a month field (obs of 76 → ~18mo), and (2) an absurd accrual projection —
+    // a fully-enrolled current trial adds ~0 future enrollment, and a future stage
+    // cannot accrue beyond its phase ceiling. Timeline only; no probability depends
+    // on any duration.
+    const obs     = normalizeDurationMonths(stageInput.treatmentObsMonths, MAX_TREATMENT_OBS_MONTHS);
+    const startup = normalizeDurationMonths(stageInput.startupCushionMonths, MAX_STARTUP_MONTHS);
+
+    const enrollmentMonthsRaw = stageInput.n / Math.max(stageInput.enrollmentRatePerMonth, 0.1);
+    let enrollmentMonths = enrollmentMonthsRaw;
+    let enrollmentComplete = false;
+    let enrollmentClamped = false;
+    if (stageInput.isCurrentTrial && stageInput.enrollmentComplete) {
+      enrollmentMonths = 0; // already fully enrolled: accrual is elapsed, not remaining
+      enrollmentComplete = true;
+    } else {
+      const enrollCeiling = maxEnrollmentMonths(stageInput.phase);
+      if (enrollmentMonths > enrollCeiling) { enrollmentMonths = enrollCeiling; enrollmentClamped = true; }
+    }
+
+    // A FULLY ENROLLED current trial with a known CT.gov completion date has a
+    // GROUND-TRUTH remaining duration = months from now to that readout — use it
+    // instead of the projected enroll+obs+startup estimate (which over-counts an
+    // already-running trial). General: any fully-enrolled trial with a completion
+    // date. Clamped to the credible max so a stale/far-future date can't blow up the
+    // timeline; floored at a short readout residual so a just-past date isn't zero.
+    let durationFromCompletion = false;
+    let durationMonths = enrollmentMonths + obs.months + startup.months;
+    if (enrollmentComplete && stageInput.completionDate) {
+      const compMs = Date.parse(stageInput.completionDate);
+      if (!Number.isNaN(compMs)) {
+        const nowD = new Date();
+        const compD = new Date(compMs);
+        // UTC month arithmetic so the remaining duration is identical on a UTC server
+        // (Vercel) and a dev box in any timezone — no environment-dependent off-by-one.
+        const monthsToCompletion =
+          (compD.getUTCFullYear() - nowD.getUTCFullYear()) * 12 + (compD.getUTCMonth() - nowD.getUTCMonth());
+        // Cap at MAX_TREATMENT_OBS_MONTHS (a fully-enrolled readout ≤ ~3y remaining);
+        // floor at 3mo (a just-completed trial still needs analysis/readout).
+        durationMonths = Math.min(MAX_TREATMENT_OBS_MONTHS, Math.max(3, monthsToCompletion));
+        durationFromCompletion = true;
+      }
+    }
 
     stages.push({
       ...stageInput,
@@ -394,10 +484,25 @@ export function computeDevPlan(
       riskFlags:         l2.riskFlags,
       mssIfSuccess,
       varianceIfSuccess,
+      cpp:               cppPin.cpp,   // pinned benchmark value overwrites the raw stageInput.cpp
+      cppRaw:            cppPin.raw ?? stageInput.cpp,
+      cppClamped:        cppPin.clamped,
+      cppProvenance:     cppPin.provenance,
       trialCostM,
       pPriorSuccess:     cumPriorSuccess,
       riskAdjCostM,
+      // Timeline — normalized values overwrite the raw stageInput fields (displayed == used)
       enrollmentMonths,
+      enrollmentMonthsRaw,
+      enrollmentComplete,
+      enrollmentClamped,
+      treatmentObsMonths:      obs.months,
+      treatmentObsMonthsRaw:   obs.raw,
+      treatmentObsWasWeeks:    obs.wasWeeks,
+      treatmentObsClamped:     obs.wasClamped,
+      startupCushionMonths:    startup.months,
+      startupCushionMonthsRaw: startup.raw,
+      durationFromCompletion,
       durationMonths,
       cumSuccessProb,
       // Bayesian RR diagnostics
@@ -407,6 +512,7 @@ export function computeDevPlan(
       bandsAfter:        rrResult.bandsAfter,
       nullResponseRate:  rrResult.effectiveNullRR,
       isProxied:         stageInput.isTimeToEvent === true,
+      comparatorUnreliable: rrResult.comparatorUnreliable,
       comparatorGrid:    rrResult.comparatorGrid,
       comparatorSigma2Effective: rrResult.comparatorSigma2,
       counterfactuals:   rrResult.counterfactuals,
@@ -419,7 +525,10 @@ export function computeDevPlan(
   }
 
   // ── Regulatory stage ──────────────────────────────────────────────────────
-  const pApprovalGivenSuccess = REG_APPROVAL_PROB[inputs.regulatoryContext] ?? 0.85;
+  // Fix B: reg-approval prob uses the orphan-GATED context (unearned orphan → no uplift).
+  // Review months (timeline) stay on the ORIGINAL context so the P-impact stays isolated.
+  const engineRegContext = gateOrphanForEngine(inputs.regulatoryContext, orphanConfirmed);
+  const pApprovalGivenSuccess = REG_APPROVAL_PROB[engineRegContext] ?? 0.85;
   const regCostM  = inputs.regCostM ?? 1.0;
   const reviewMonths = REVIEW_MONTHS_BY_REG_CONTEXT[inputs.regulatoryContext] ?? 12;
   const regStage: RegStage = {
@@ -452,6 +561,7 @@ export function computeDevPlan(
     totalDurationMonths,
     impliedLaunchYear: impliedLaunchYear(totalDurationMonths),
     modalityClassStatus: inputs.modalityClassStatus,
+    orphanGatedOff,
     revenuePVM,
     eNPVM,
     eROI,
@@ -484,8 +594,60 @@ const MODALITY_META_RISK_HAIRCUT = 0.80;
 const STAGE_SUCCESS_CEILING = 0.90;       // any single stage
 const LATE_PHASE_SUCCESS_CEILING = 0.80;  // confirmatory / Phase 3 stage
 
+// ── Trial-conduct duration norms (months) ─────────────────────────────────────
+// Sanity CEILINGS + a unit-normalizer for the launch-timeline model. They bound the
+// per-component durations (enrollment, treatment/observation, startup) the LLM
+// estimates per stage — the last unconstrained numeric inputs feeding launch year →
+// revenue PV. Sourced from general clinical-operations benchmarks (Tufts CSDD trial-
+// conduct data; typical oncology/CNS Phase 2–3 accrual and follow-up windows). They
+// only clamp a NON-credible estimate; a credible one passes through unchanged. They
+// touch NO probability — durations feed the timeline only.
+const WEEKS_PER_MONTH = 4.345;
+// A single trial-phase duration expressed in "months" but exceeding ~4.3 years is
+// almost always a WEEK count dropped into a month field — CT.gov routinely states
+// protocol windows in weeks ("76-week treatment", "96-week extension"). >52 "months"
+// (>4.3y) for one component is implausible while 52–104 weeks (1–2y) is routine, so
+// above this threshold we read the value as weeks and convert.
+const WEEKS_AS_MONTHS_THRESHOLD = 52;
+const MAX_TREATMENT_OBS_MONTHS = 36;   // even long adjuvant / disease-modifying readouts ≤ ~3y
+const MAX_STARTUP_MONTHS = 12;         // site activation / IRB-EC / first-patient-in
+
+// Enrollment-accrual ceiling by phase (patients accrue over this window). A large
+// Phase 3 legitimately accrues longer than a Phase 2; beyond these implies a non-
+// credible accrual rate, not a real timeline.
+function maxEnrollmentMonths(phase: string): number {
+  if (/3|registration|pivotal/i.test(phase)) return 48;
+  if (/phase 1\b|preclinical/i.test(phase)) return 24;
+  return 36; // Phase 2 (and default)
+}
+
+// Normalize an LLM month-field to credible months: convert an obvious week-count,
+// then clamp to a ceiling. Returns flags so the UI can show what was corrected.
+function normalizeDurationMonths(raw: number, ceiling: number): {
+  months: number; wasWeeks: boolean; wasClamped: boolean; raw: number;
+} {
+  let v = Math.max(0, raw || 0);
+  let wasWeeks = false;
+  if (v > WEEKS_AS_MONTHS_THRESHOLD) { v = v / WEEKS_PER_MONTH; wasWeeks = true; }
+  let wasClamped = false;
+  if (v > ceiling) { v = ceiling; wasClamped = true; }
+  return { months: v, wasWeeks, wasClamped, raw };
+}
+
 function addMixtureVariance(mixture: EffectPriorMixture, add: number): EffectPriorMixture {
   return mixture.map((c) => ({ ...c, sigma2: c.sigma2 + add }));
+}
+
+// Fix B: downgrade an orphan designation to its non-orphan equivalent for ENGINE
+// purposes (significance bar + reg-approval prob) when the orphan status is NOT
+// confirmed for the base-case indication. orphan→standard, btd_orphan→btd. All
+// other contexts pass through. Timeline/review-months are NOT gated here (left on the
+// original context) so this fix's P-impact stays isolated from the timeline.
+function gateOrphanForEngine(ctx: RegulatoryContext, confirmed: boolean): RegulatoryContext {
+  if (confirmed) return ctx;
+  if (ctx === "orphan") return "standard";
+  if (ctx === "btd_orphan") return "btd";
+  return ctx;
 }
 
 function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }

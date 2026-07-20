@@ -1,0 +1,179 @@
+{
+  "meta": {
+    "asset": "TTX-MC138",
+    "capturedAt": "2026-07-18",
+    "note": "CAPTURED from a live run via scripts/capture-fixture.ts (faithful inputs, not reconstructed). Base=http://localhost:3000. Expected values computed at the harness reference date 2026-07-01T00:00:00Z.",
+    "expectedHeadline": {
+      "pApprovalBand": [
+        0,
+        0.2
+      ],
+      "classStatus": "graveyard",
+      "appliesModalityHaircut": true
+    }
+  },
+  "ciHalfWidth": 0.1327111111111111,
+  "chainSteps": [
+    {
+      "source": "mechanism",
+      "label": "Mechanism & pharmacology",
+      "found": true,
+      "signal": {
+        "mu": 0.94,
+        "sigma2": 0.3522222222222222
+      },
+      "reasoning": "Mechanism signal strength: moderate (MSS 0.47). Potency profile (IPS 0.51): potency 0.40, selectivity 0.62, PK 0.50, engagement 0.38, therapeutic window 0.72. Translational reliability (TRS 0.47): target validation 0.35, indication fit 0.72, modality fit 0.58, translation rate 0.12. Uncertainty (σ² 0.35)."
+    },
+    {
+      "source": "animal",
+      "label": "Animal model: multi-tumor xenograft/orthotopic efficacy (TNBC, PDAC, GBM) — no CRC-specific model",
+      "found": true,
+      "signal": {
+        "mu": 1.2,
+        "sigma2": 0.38
+      },
+      "reasoning": "TTX-MC138 has a substantial preclinical in vivo package across multiple murine tumor models, though none is CRC-specific. In TNBC models, treatment eliminated pre-existing local metastases in 100% of treated animals (stage II/III) and distant metastases in 65% (stage IV). In an orthotopic PDAC xenograft, 40% of animals achieved complete responses (regression without recurrence), with necropsy confirming no residual tumors or metastases and gene expression confirming target engagement. In orthotopic GBM murine models, IV-delivered TTX-MC138 produced a five-fold increase in tumor apoptosis and a statistically significant survival extension, published peer-reviewed in the Journal of Functional Biomaterials (Jan 2026). IND-enabling PK, biodistribution, and toxicity studies are complete, with a rat NOAEL of 1 mg/kg (IV). These are genuinely strong preclinical signals — mu is set above average (~1.2) reflecting consistent, multi-model efficacy with solid mechanistic readouts. However, sigma2 is kept moderately wide (0.38) for two reasons: (1) no CRC-specific model exists, making the indication-match indirect; and (2) the target indication is MRD (micrometastatic/ctDNA-positive), a setting with no direct animal analog — the murine models used established macro-metastatic disease, which is a different biological and clinical context from eradicating minimal residual disease post-curative-intent surgery."
+    },
+    {
+      "source": "analog",
+      "label": "Same-target: MN-anti-miR10b (TTX-MC138 precursor, Phase 0/1a); Modality-class: MRX34 (miR-34a mimic, Phase 1 terminated), Cobomarsen/MRG-106 (anti-miR-155, Phase 2 discontinued) — miRNA-directed oncology class track record",
+      "found": true,
+      "signal": {
+        "mu": 0.3,
+        "sigma2": 0.18
+      },
+      "classStatus": "graveyard",
+      "reasoning": "TIER 1 (same target): TTX-MC138 itself is the only anti-miR-10b agent to enter human trials; it completed Phase 1a with no dose-limiting toxicities and 64% stable disease in 14 evaluable patients, but zero confirmed objective responses — stable disease only in a heavily pre-treated metastatic population is a weak efficacy signal. TIER 2 (same modality-class — miRNA-directed oncology therapeutics): MRX34 (liposomal miR-34a mimic) was terminated in Phase 1 after four patient deaths from immune-mediated adverse events, with only 3 partial responses in 85 patients; Cobomarsen (anti-miR-155 LNA antagomir) was discontinued after Phase 2 without achieving its endpoints in lymphoma — collectively this constitutes at least two well-documented clinical failures across different companies and miRNA targets with no approved or pivotal-success analog in this modality class. TIER 3 (broader RNA/oligonucleotide oncology): the broader therapeutic-oligonucleotide oncology space has likewise produced no approved cancer drugs via this route. The miRNA-directed oncology modality is a class graveyard: no approved agents, multiple Phase 1–2 failures, and safety signals (immune-mediated toxicity) that challenge the delivery platform broadly. TTX-MC138's own Phase 1a 'stable disease only' signal in metastatic disease — while its Phase 2a targets the easier MRD/ctDNA+ setting — partially offsets the class-level negativity, and its clean safety profile differentiates it from MRX34; however, efficacy translation from stable disease in late-line metastatic to ctDNA clearance in MRD remains unproven. Synthesis: the class graveyard with 2–3 documented failures justifies a low mu (0.30) reflecting the strong negative class prior, with sigma2 set at 0.18 — lower than a single-failure scenario but slightly elevated above the tightest range because TTX-MC138's own tolerability data and distinct delivery chemistry introduce modest uncertainty about whether it will track the class trajectory."
+    },
+    {
+      "source": "own_clinical",
+      "label": "Own clinical data: Phase 1a dose-escalation (n=14–16 evaluable, metastatic mixed solid tumors, RECIST tumor response)",
+      "found": true,
+      "signal": {
+        "mu": 0.38,
+        "sigma2": 0.42
+      },
+      "reasoning": "The completed Phase 1a trial (NCT06260774) enrolled 16 patients with advanced metastatic solid tumors across 4 dose cohorts; 14 were evaluable for RECIST tumor response. The headline efficacy result was 64% stable disease lasting ≥6 months — zero objective responses (PR/CR) were reported. Stable disease only in a RECIST-measured setting is null_negative under the scoring rules: no objective responses were achieved, which is the clinically meaningful efficacy bar. This anchors mu at 0.38 (well below average; clearly weak efficacy signal, not near-failure-zero but stable disease carries some minor informational weight). Two major translation gaps compound the scoring: (1) the Phase 1a evidence comes from a mixed metastatic solid-tumor population, whereas the valued indication is ctDNA-positive/MRD CRC post-curative-intent surgery — a completely different biology (no measurable disease, ctDNA clearance endpoint, not RECIST), adding ~+0.25–0.30 to sigma2; (2) the small n (14 evaluable) and mixed histology further widen uncertainty. Despite the mismatch, the ASYMMETRY rule prevents sigma2 from being inflated to the point of neutralizing the null signal — sigma2 is set at 0.48, reflecting modest confidence in the negative (small n limits certainty but the 0-ORR result is still informative-negative), with a moderate upward adjustment for the cross-setting/endpoint translation gap."
+    }
+  ],
+  "devPlan": {
+    "regulatoryContext": "standard",
+    "regCostM": 1,
+    "stages": [
+      {
+        "id": "stage-1",
+        "name": "TTX-MC138 Phase 2a — ctDNA Clearance & RFS in MRD-Positive CRC",
+        "phase": "Phase 2a (INITIATED) — ctDNA+ colorectal MRD. The ClinicalTrials.gov label for the master IND is Phase 1/2 (NCT06260774); the Phase 1a dose-escalation arm (the safety gate) is COMPLETE as of June 2026. The active efficacy-bearing arm is Phase 2a (NCT05868226), initiated May 2026.",
+        "n": 60,
+        "cpp": 185000,
+        "enrollmentRatePerMonth": 5,
+        "treatmentObsMonths": 12,
+        "startupCushionMonths": 6,
+        "enrollmentComplete": true,
+        "isCurrentTrial": true,
+        "aiRationale": "Phase 2a single-arm proof-of-concept with RFS as primary gate; ctDNA clearance rate as co-primary biomarker proof-of-concept. If RFS signal is strong (>70% at interim/primary), this supports pivotal Phase 3 initiation.",
+        "trialDesign": {
+          "n": 60,
+          "endpointType": "surrogate",
+          "designType": "single_arm",
+          "populationType": "biomarker_selected",
+          "placeboResponse": "low",
+          "regulatoryContext": "standard",
+          "endpointDescription": "ctDNA clearance rate (circulating tumor DNA negativity) and recurrence-free survival (RFS) in ctDNA-positive stage II-IV colorectal cancer patients post-curative therapy",
+          "enrollmentNote": "Phase 2a single-arm open-label trial in ctDNA-positive colorectal MRD (minimal residual disease); initiated May 2026 following Phase 1a dose-escalation safety gate completion (June 2026). Biomarker-selected population (ctDNA+). Typical Phase 2a enrollment ~60 patients; no BTD or orphan designation confirmed for this indication.",
+          "nctId": "NCT05868226",
+          "orphanConfirmedForIndication": false
+        },
+        "nullResponseRate": 0.15,
+        "isTimeToEvent": true,
+        "endpointRationale": "RFS is the primary gating endpoint because in the MRD setting, ctDNA clearance alone (a biomarker surrogate) cannot support approval without clinical benefit data; RFS is the time-to-event measure that bridges biomarker signal to clinical outcome and is the FDA-accepted pivotal endpoint in adjuvant/MRD CRC (KEYNOTE-177, MCODE trial precedent).",
+        "endpointEvidenceBasis": "CONFIRMED",
+        "comparatorSigma2": 0.008,
+        "comparatorSource": "Historical RFS in observation-only or standard adjuvant therapy in ctDNA-positive MRD CRC: ~40–50% 2-year RFS from MCODE (Gensheimer et al., ASCO GI 2024) and supportive real-world data; nullResponseRate set to 15% for untreated ctDNA-positive MRD baseline hazard."
+      },
+      {
+        "id": "stage-2",
+        "name": "TTX-MC138 Phase 3 Registration — RFS in MRD-Positive CRC vs Observation",
+        "phase": "Phase 3",
+        "n": 280,
+        "cpp": 245000,
+        "enrollmentRatePerMonth": 6,
+        "treatmentObsMonths": 18,
+        "startupCushionMonths": 7,
+        "enrollmentComplete": false,
+        "isCurrentTrial": false,
+        "aiRationale": "Phase 3 randomized trial (TTX-MC138 vs observation, 1:1 or similar) to confirm RFS benefit and generate the registration package. FDA will expect ~18–24 month median follow-up to mature RFS events; interim futility/efficacy analysis planned at 50% events.",
+        "trialDesign": {
+          "n": 280,
+          "endpointType": "surrogate",
+          "designType": "rct",
+          "populationType": "broad",
+          "placeboResponse": "low",
+          "regulatoryContext": "standard",
+          "endpointDescription": "Disease-free survival (DFS) — time to recurrence or death",
+          "enrollmentNote": "n=280 (1:1 randomized), multi-center RCT at 40–60 specialized oncology sites; enrollment ~6 patients/month over ~47 months; observation arm is standard of care comparator"
+        },
+        "nullResponseRate": 0.15,
+        "isTimeToEvent": true,
+        "endpointRationale": "DFS/RFS is the FDA-registrable primary endpoint for adjuvant/MRD colorectal cancer (ALTAIR, DYNAMIC-III, CLAUDIA); ctDNA clearance is a supportive secondary, not the registrational basis. Pinned to regulatory precedent.",
+        "endpointEvidenceBasis": "INFERRED",
+        "comparatorSigma2": 0,
+        "comparatorSource": "Observation (standard of care) arm measured concurrently in Phase 3 RCT; historical baseline 2-year RFS ~50% in untreated ctDNA-positive MRD CRC from MCODE and supportive registries."
+      }
+    ],
+    "orphanConfirmedForIndication": false
+  },
+  "financial": {
+    "therapeuticArea": "oncology",
+    "modality": "oligonucleotide",
+    "patentLoeYear": null,
+    "comps": [
+      {
+        "drug": "Trifluridine/tipiracil (LONSURF)",
+        "peakSalesM": 450,
+        "relation": "anchor"
+      },
+      {
+        "drug": "Pembrolizumab (KEYTRUDA) — adjuvant MSI-H CRC",
+        "peakSalesM": 800,
+        "relation": "anchor"
+      },
+      {
+        "drug": "Osimertinib (TAGRISSO) — adjuvant EGFR+ NSCLC (ADAURA)",
+        "peakSalesM": 5900,
+        "relation": "ceiling"
+      }
+    ]
+  },
+  "valuation": {
+    "peakSales": 320000000,
+    "launchYear": 2029,
+    "loeYear": 2037,
+    "discountRate": 0.12,
+    "cogsPct": 0.2,
+    "taxRate": 0.21,
+    "workingCapitalPct": 0.1,
+    "avgRoyalty": 0.15,
+    "ownerType": "Owner"
+  },
+  "expected": {
+    "finalMss": 0.31319,
+    "pApproval": 0.09993,
+    "pAllTrialsSuccess": 0.11756,
+    "s0_trialSuccessProb": 0.20646,
+    "s0_trialSuccessProbRaw": 0.25807,
+    "s0_modalityHaircut": 0.8,
+    "s1_trialSuccessProb": 0.56943,
+    "s1_modalityHaircut": 0.8,
+    "totalDurationMonths": 101.66667,
+    "impliedLaunchYear": 2034,
+    "s0_cpp": 140000,
+    "s1_cpp": 215000,
+    "totalRiskAdjCostM": 20.94622,
+    "peakSalesM": 625,
+    "loeYear": 2039,
+    "revenuePVM": 538.86035,
+    "eNPVM": 32.9,
+    "eROI": 1.57
+  }
+}

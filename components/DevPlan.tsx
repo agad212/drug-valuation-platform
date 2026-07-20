@@ -31,10 +31,13 @@ type Props = {
 
 // ─── Labels ───────────────────────────────────────────────────────────────────
 
+// Category labels only — NO domain examples in parentheses (they leaked wrong-domain
+// boilerplate, e.g. "BCVA" on oncology). The actual endpoint is shown via the stage's
+// endpointDescription / endpointRationale, which name the real endpoint for THIS trial.
 const ENDPOINT_LABEL: Record<string, string> = {
-  hard: "Hard (OS / CR)",
-  surrogate: "Surrogate (BCVA / ORR / PFS)",
-  pro: "PRO / Subjective",
+  hard: "Hard endpoint",
+  surrogate: "Surrogate endpoint",
+  pro: "PRO / subjective",
 };
 const DESIGN_LABEL: Record<string, string> = {
   rct: "Randomized Controlled (RCT)",
@@ -46,10 +49,12 @@ const POP_LABEL: Record<string, string> = {
   broad: "Broad / Unselected",
   rare_small: "Rare / Small Pool",
 };
+// Level only — the domain hints ("autoimmune", "CNS/pain") leaked onto wrong-domain
+// trials. The indication is shown elsewhere; the level is what matters here.
 const PLACEBO_LABEL: Record<string, string> = {
-  low: "Low (oncology / rare)",
-  moderate: "Moderate (autoimmune)",
-  high: "High (CNS / pain)",
+  low: "Low",
+  moderate: "Moderate",
+  high: "High",
 };
 const REG_LABEL: Record<string, string> = {
   standard: "Standard",
@@ -66,12 +71,22 @@ function fmtM(n?: number | null): string {
   if (n == null || Number.isNaN(n)) return "—";
   const abs = Math.abs(n);
   if (abs >= 1000) return `$${(n / 1000).toFixed(1)}B`;
-  if (abs >= 1)    return `$${n.toFixed(1)}M`;
+  if (abs >= 1)    return `$${n.toFixed(0)}M`;  // whole $M — no false precision on eNPV/cost
   return `~$0`;
 }
-function fmtPct(n?: number | null, dp = 1): string {
+// Whole % by default (render boundary only; internal values untouched).
+function fmtPct(n?: number | null, dp = 0): string {
   if (n == null || Number.isNaN(n)) return "—";
   return `${(n * 100).toFixed(dp)}%`;
+}
+// Part C: headline confidence, categorized from the ALREADY-computed effect-prior σ²
+// (same thresholds as the per-step confidence label). Display categorization only —
+// no new model call, no computed value moves.
+function confidenceTag(sigma2?: number): { label: string; color: string } {
+  if (sigma2 == null) return { label: "—", color: "rgba(255,255,255,0.5)" };
+  if (sigma2 <= 0.08) return { label: "High confidence", color: "#34d399" };
+  if (sigma2 <= 0.20) return { label: "Medium confidence", color: "#fbbf24" };
+  return { label: "Low confidence", color: "#f87171" };
 }
 
 // ─── Colour helpers ───────────────────────────────────────────────────────────
@@ -189,8 +204,13 @@ function StageCard({
               </div>
             )}
             {stage.modalityHaircut != null && stage.modalityHaircut < 1 && (
-              <div title="Modality-class base rate: zero approved drugs in this class + documented failures" style={{ fontSize: 9, color: "#f59e0b", marginTop: 3, maxWidth: 160, lineHeight: 1.3 }}>
+              <div title="Modality-class base rate: zero approved drugs in this class + documented failures" style={{ fontSize: 9, color: "#f59e0b", marginTop: 3, maxWidth: 190, lineHeight: 1.3 }}>
                 incl. modality-class risk ×{stage.modalityHaircut.toFixed(2)}
+                <div style={{ color: "var(--text-faint)", fontWeight: 400, marginTop: 2 }}>
+                  Class execution/regulatory risk — the odds of CLEARING this gate. Separate
+                  from the effect-size hit (that's already in the effect prior), so the class
+                  evidence is not double-counted.
+                </div>
               </div>
             )}
           </div>
@@ -257,6 +277,11 @@ function StageCard({
                 <InlineNumber value={stage.cpp} onChange={(v) => onUpdateCpp(stage.id, v)} prefix="$" min={1000} />
               </div>
               <div style={{ fontSize: 10, color: "var(--text-faint)", marginTop: 1 }}>Trial cost: {fmtM(stage.trialCostM)}</div>
+              {stage.cppProvenance && (
+                <div style={{ fontSize: 9, color: stage.cppClamped ? "#f59e0b" : "var(--text-faint)", marginTop: 1, fontStyle: "italic" }}>
+                  {stage.cppProvenance}
+                </div>
+              )}
             </div>
             <div>
               <div style={{ fontSize: 9, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 2 }}>Risk-adj cost</div>
@@ -282,7 +307,22 @@ function StageCard({
                 {Math.round(stage.durationMonths)} mo
               </div>
               <div style={{ fontSize: 10, color: "var(--text-faint)", marginTop: 1 }}>
-                {Math.round(stage.enrollmentMonths)}mo enroll + {stage.treatmentObsMonths}mo obs + {stage.startupCushionMonths}mo startup
+                {stage.durationFromCompletion
+                  ? "remaining to trial completion (fully enrolled)"
+                  : <>
+                      {stage.enrollmentComplete
+                        ? "0mo enroll (fully enrolled)"
+                        : `${Math.round(stage.enrollmentMonths)}mo enroll${stage.enrollmentClamped ? ` (capped from ${Math.round(stage.enrollmentMonthsRaw)}mo)` : ""}`}
+                      {" + "}
+                      {Math.round(stage.treatmentObsMonths)}mo obs
+                      {stage.treatmentObsWasWeeks
+                        ? ` (${Math.round(stage.treatmentObsMonthsRaw)}wk→mo)`
+                        : stage.treatmentObsClamped
+                          ? ` (capped from ${Math.round(stage.treatmentObsMonthsRaw)}mo)`
+                          : ""}
+                      {" + "}
+                      {Math.round(stage.startupCushionMonths)}mo startup
+                    </>}
               </div>
             </div>
           </div>
@@ -312,7 +352,7 @@ function StageCard({
           {stage.rrPriorGrid && stage.rrPosteriorGrid && (
             <div style={{ background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px" }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
-                Estimated True Response Rate
+                Endpoint-specific prior (modeled, from evidence score)
               </div>
 
               {/* Density chart: prior (dashed) vs posterior (solid) vs comparator (red) */}
@@ -384,6 +424,16 @@ function StageCard({
                       })
                     </span>
                   )}
+                </div>
+              )}
+
+              {/* Un-pinned comparator guard — the LLM-derived SOC threshold exceeded the
+                  drug's own effect prior, so it was discarded in favor of the clinical floor */}
+              {stage.comparatorUnreliable && (
+                <div style={{ marginTop: 5, fontSize: 10, color: "#f59e0b", fontStyle: "italic" }}>
+                  ⚠ Comparator threshold exceeded the drug's own effect estimate — treated as unreliable
+                  and held to the clinical-meaningfulness floor ({fmtPct(stage.nullResponseRate)}). SOC
+                  benchmark not yet pinned for this endpoint.
                 </div>
               )}
 
@@ -508,10 +558,20 @@ function RegCard({ regStage }: { regStage: DevPlanResult["regStage"] }) {
 // ─── Summary Banner ────────────────────────────────────────────────────────────
 
 function SummaryBanner({ plan }: { plan: DevPlanResult }) {
+  const conf = confidenceTag(plan.stages[0]?.varianceInput);
   return (
     <div style={{ background: "linear-gradient(135deg, #1e1b4b, #312e81)", borderRadius: 12, padding: "18px 20px" }}>
-      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>
-        Development Path — Expected Value
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+          Development Path — Expected Value
+        </div>
+        {/* Part C: headline confidence signal (from the effect-prior σ²), so a point
+            estimate never reads as more certain than the evidence supports. */}
+        <div title="Derived from the effect-prior uncertainty (σ²) — the same signal shown per evidence step."
+          style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap",
+            background: "rgba(255,255,255,0.08)", color: conf.color, border: `1px solid ${conf.color}` }}>
+          {conf.label}
+        </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 16, marginBottom: 16 }}>
         <div>

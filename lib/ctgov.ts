@@ -53,6 +53,15 @@ const STATUS_LABELS: Record<string, string> = {
   UNKNOWN:                  "Unknown",
 };
 
+// Whether a CT.gov overall-status means accrual is finished (no future enrollment
+// time remains). Active-not-recruiting / Completed / Enrolling-by-invitation are all
+// closed to new accrual; Recruiting / Not-yet-recruiting still have enrollment ahead.
+// Used by the dev-plan timeline so a fully-enrolled current trial adds ~0 accrual.
+export function isEnrollmentComplete(status?: string): boolean {
+  if (!status) return false;
+  return /COMPLETED|ACTIVE_NOT_RECRUITING|ENROLLING_BY_INVITATION/i.test(status);
+}
+
 // ─── Launch year estimation ────────────────────────────────────────────────────
 
 function estimateLaunchYear(

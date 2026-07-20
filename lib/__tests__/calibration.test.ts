@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { scoreMechanism, type FactorScore, type MechanismFactors } from "../ptrs-mechanism-scorer";
 import { boundNullNegativeSignal } from "../evidence-discovery";
 import { computeDevPlan, type DevStageInput } from "../dev-plan";
+import { computeStageRR, MEANINGFUL_RR_FLOOR } from "../bayesian-rr";
 import { mixtureFromMssVariance } from "../effect-prior";
 import type { TrialDesignInputs } from "../ptrs-trial";
 
@@ -176,5 +177,62 @@ describe("Part-final — base-rate ceilings + stage-integral stability (general)
     const a = saturatingPlan(0.50, "Phase 2").stages[0].trialSuccessProbRaw;
     const b = saturatingPlan(0.52, "Phase 2").stages[0].trialSuccessProbRaw;
     expect(Math.abs(a - b)).toBeLessThan(0.10); // smooth, not a cliff
+  });
+});
+
+// Regression for the tau 0.0% incident: an UN-PINNED (LLM-derived, non-CRC)
+// comparator was set above the entire effect prior, forcing "100% below threshold"
+// and zeroing the integral. These exercise the FULL runtime path — comparator
+// derivation included, NOT a fixed comparator — so they fail on the pre-fix engine
+// (which returned ~0) and pass on the fixed one.
+describe("Regression — un-pinned comparator cannot zero a non-degenerate prior (tau incident)", () => {
+  const rrDesign = {
+    designType: "rct" as const, endpointType: "surrogate" as const,
+    populationType: "broad" as const, regulatoryContext: "standard" as const,
+  };
+  const healthyPrior = mixtureFromMssVariance(0.5, 0.12); // priorMean ≈ 0.5, non-degenerate
+
+  it("a pathological SOC threshold (0.80) above the prior mean does NOT zero P(success)", () => {
+    const bad = computeStageRR(healthyPrior, 300, 0.80, rrDesign, false);
+    expect(bad.comparatorUnreliable).toBe(true);
+    expect(bad.effectiveNullRR).toBeCloseTo(MEANINGFUL_RR_FLOOR, 6); // discarded → clinical floor
+    expect(bad.trialSuccessProb).toBeGreaterThan(0.05);              // NOT a definitional 0
+    expect(bad.bandsBefore.belowThreshold).toBeLessThan(0.999);      // not "100% below threshold"
+  });
+
+  it("a legitimate low comparator (below the prior mean) is untouched — no flag, no rescue", () => {
+    const good = computeStageRR(healthyPrior, 300, 0.12, rrDesign, false);
+    expect(good.comparatorUnreliable).toBe(false);
+    expect(good.effectiveNullRR).toBeCloseTo(0.12, 6);
+  });
+
+  it("keys on the prior relationship, not an absolute ceiling: a high-but-valid SOC below a higher prior is untouched", () => {
+    const strongPrior = mixtureFromMssVariance(0.7, 0.10); // priorMean ≈ 0.7
+    const r = computeStageRR(strongPrior, 300, 0.55, rrDesign, false); // 0.55 < 0.7 → legit
+    expect(r.comparatorUnreliable).toBe(false);
+    expect(r.effectiveNullRR).toBeCloseTo(0.55, 6);
+  });
+
+  it("the 'harder bar' counterfactual moves in the correct direction (no inversion)", () => {
+    const r = computeStageRR(healthyPrior, 300, 0.80, rrDesign, false);
+    const harder = r.counterfactuals.find((c) => /harder bar/i.test(c.label));
+    if (harder) expect(harder.pSuccess).toBeLessThanOrEqual(r.trialSuccessProb + 1e-9);
+  });
+
+  it("full computeDevPlan path: a stage with a corrupted 0.80 SOC still yields non-zero P(approval)", () => {
+    const design: TrialDesignInputs = {
+      n: 300, endpointType: "surrogate", designType: "rct",
+      populationType: "broad", placeboResponse: "high", regulatoryContext: "standard",
+    };
+    const stages: DevStageInput[] = [
+      { id: "s1", name: "Ph2", phase: "Phase 2", n: 300, cpp: 200000, trialDesign: design,
+        isCurrentTrial: true, enrollmentRatePerMonth: 10, treatmentObsMonths: 12, startupCushionMonths: 6,
+        isTimeToEvent: false, nullResponseRate: 0.80 },
+    ];
+    const plan = computeDevPlan(mixtureFromMssVariance(0.5, 0.12), 0.1,
+      { stages, regulatoryContext: "standard" }, 1000);
+    expect(plan.stages[0].comparatorUnreliable).toBe(true);
+    expect(plan.stages[0].trialSuccessProb).toBeGreaterThan(0.05);
+    expect(plan.pApproval).toBeGreaterThan(0);
   });
 });

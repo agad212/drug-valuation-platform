@@ -414,6 +414,12 @@ export function rrTrialPower(
   n: number,
   design: RRTrialDesign,
   comparatorSigma2: number = 0,
+  // Fix C: cap single-arm P(trial success) at the equivalent RCT (registration
+  // conclusiveness). Default true for the success integral; posteriorAfterSuccess
+  // passes false so the drug's effect-ESTIMATE update reflects the trial's actual
+  // single-arm measurement precision — capping it there would spuriously make a
+  // small single-arm posterior tighter than a large RCT's (a separate quantity).
+  capSingleArmToRct: boolean = true,
 ): number {
   if (theta <= 0 || theta >= 1) return theta >= 1 ? 1 : 0;
   if (n < 1) return 0;
@@ -425,15 +431,7 @@ export function rrTrialPower(
   const zA = Z_ALPHA[design.regulatoryContext] ?? 1.645;
 
   if (design.designType === "rct") {
-    // Two-proportion z-test (equal allocation). For RCTs the control arm is
-    // measured in-trial; comparatorSigma2 adds any residual external-benchmark
-    // uncertainty (typically ~0 for a proper RCT).
-    const nArm = Math.max(1, nEff / 2);
-    const se = Math.sqrt(
-      (theta * (1 - theta) + nullRR * (1 - nullRR)) / nArm + comparatorSigma2
-    );
-    if (se < 1e-10) return theta > nullRR ? 1 : 0;
-    return normalCDF((theta - nullRR) / se - zA);
+    return twoProportionRctPower(theta, nullRR, nEff, zA, comparatorSigma2);
   }
 
   // Single-arm (or basket): one-proportion test vs historical control.
@@ -451,8 +449,34 @@ export function rrTrialPower(
   // widening the denominator — makes the test less conclusive when the
   // historical benchmark itself is uncertain.
   const seObs = Math.sqrt(theta * (1 - theta) / nSingleArm + comparatorSigma2);
-  if (seObs < 1e-10) return theta > thetaCrit ? 1 : 0;
-  return normalCDF((theta - thetaCrit) / seObs);
+  const singleArmPower = seObs < 1e-10
+    ? (theta > thetaCrit ? 1 : 0)
+    : normalCDF((theta - thetaCrit) / seObs);
+
+  // Fix C: a single-arm / historical-control design is NEVER more conclusive than a
+  // concurrent-controlled RCT run with the SAME patients — the RCT removes confounding
+  // and secular trends the single-arm cannot. The one-proportion formula otherwise
+  // rewards putting all n on treatment (smaller treatment-arm variance), which lets
+  // single-arm spuriously exceed the RCT at low θ. Cap single-arm power at the
+  // equivalent RCT's power (concurrent control ⇒ comparatorSigma2 = 0 for that
+  // hypothetical). Targeted monotonicity fix — RCT power and overall calibration are
+  // unchanged; historical-control uncertainty (comparatorSigma2 > 0) still pushes the
+  // single-arm strictly below this ceiling.
+  if (!capSingleArmToRct) return singleArmPower;
+  const rctEquivalentPower = twoProportionRctPower(theta, nullRR, nEff, zA, 0);
+  return Math.min(singleArmPower, rctEquivalentPower);
+}
+
+// Two-proportion z-test power (equal allocation). For RCTs the control arm is measured
+// in-trial; comparatorSigma2 adds any residual external-benchmark uncertainty (~0 for a
+// proper concurrent-controlled RCT).
+function twoProportionRctPower(
+  theta: number, nullRR: number, nEff: number, zA: number, comparatorSigma2: number,
+): number {
+  const nArm = Math.max(1, nEff / 2);
+  const se = Math.sqrt((theta * (1 - theta) + nullRR * (1 - nullRR)) / nArm + comparatorSigma2);
+  if (se < 1e-10) return theta > nullRR ? 1 : 0;
+  return normalCDF((theta - nullRR) / se - zA);
 }
 
 // ─── Comparator distribution grid ────────────────────────────────────────────
@@ -542,7 +566,10 @@ export function posteriorAfterSuccess(
   const posterior: number[] = new Array(theta.length);
 
   for (let i = 0; i < theta.length; i++) {
-    const power = rrTrialPower(theta[i], nullRR, n, design, comparatorSigma2);
+    // capSingleArmToRct=false: the effect-estimate update uses the trial's actual
+    // single-arm precision (Fix C's cap is a P(success) conclusiveness adjustment,
+    // not a change to how much the drug's measured effect tightens).
+    const power = rrTrialPower(theta[i], nullRR, n, design, comparatorSigma2, false);
     posterior[i] = priorGrid.density[i] * power;
   }
 
@@ -647,9 +674,18 @@ export function computeCounterfactual(
   n: number,
   nullRR: number,
   design: RRTrialDesign,
+  comparatorSigma2: number = 0,
 ): number {
-  return computeStageSuccess(priorGrid, n, nullRR, design);
+  return computeStageSuccess(priorGrid, n, nullRR, design, comparatorSigma2);
 }
+
+// A single-arm registration trial leans on an EXTERNAL/historical control, which
+// carries real benchmark uncertainty an in-trial RCT control does not. Floor the
+// comparator variance for a single-arm what-if so "single-arm instead of RCT"
+// correctly LOWERS credibility instead of gaming a concurrent control's zero
+// variance (which made it spuriously beat the RCT). Display ablation only — this
+// does NOT feed P(approval).
+const SINGLE_ARM_CF_SIGMA2_FLOOR = 0.02;
 
 /**
  * Generate standard counterfactual ablations for a stage.
@@ -667,19 +703,27 @@ export function generateCounterfactuals(
 
   // 1. What if the design type were different?
   if (design.designType === "rct") {
-    const alt = computeCounterfactual(priorGrid, n, nullRR, { ...design, designType: "single_arm" });
+    // Swapping to single-arm forfeits the concurrent control → historical-benchmark
+    // uncertainty applies (floored), so this correctly reads as LOWER, not higher.
+    const saSigma2 = Math.max(comparatorSigma2, SINGLE_ARM_CF_SIGMA2_FLOOR);
+    const alt = computeCounterfactual(priorGrid, n, nullRR, { ...design, designType: "single_arm" }, saSigma2);
     results.push({ label: "If single-arm instead of RCT", pSuccess: alt });
   } else {
-    const alt = computeCounterfactual(priorGrid, n, nullRR, { ...design, designType: "rct" });
+    // Swapping to RCT gains a concurrent control → no external-benchmark uncertainty.
+    const alt = computeCounterfactual(priorGrid, n, nullRR, { ...design, designType: "rct" }, 0);
     results.push({ label: "If RCT instead of single-arm", pSuccess: alt });
   }
 
-  // 2. What if n were halved?
-  const halfN = computeCounterfactual(priorGrid, Math.round(n / 2), nullRR, design);
+  // 2. What if n were halved? (carry the same comparator uncertainty as the base)
+  const halfN = computeCounterfactual(priorGrid, Math.round(n / 2), nullRR, design, comparatorSigma2);
   results.push({ label: `If n were halved (n=${Math.round(n / 2)})`, pSuccess: halfN });
 
   // 3. What if null RR were higher (harder bar)?
-  const harderNull = Math.min(0.80, nullRR + 0.10);
+  //    Cap at 0.95 (near grid max), NOT 0.80 — a 0.80 cap made the "harder bar"
+  //    LOWER than the base threshold once base > 0.70, inverting the counterfactual
+  //    ("harder bar → higher success"). +0.10 above the (guarded) base is always
+  //    genuinely harder → success can only move down.
+  const harderNull = Math.min(0.95, nullRR + 0.10);
   const alt3 = computeCounterfactual(priorGrid, n, harderNull, design);
   results.push({ label: `If null RR were ${(harderNull * 100).toFixed(0)}% (harder bar)`, pSuccess: alt3 });
 
@@ -706,8 +750,10 @@ export type StageRRResult = {
   bandsAfter: RRBands;
   priorMean: number;
   posteriorMean: number;
-  effectiveNullRR: number;       // the threshold actually used (after floor)
+  effectiveNullRR: number;       // the threshold actually used (after floor + reliability guard)
   rawNullRR: number;             // the raw SOC rate before floor
+  comparatorUnreliable: boolean; // raw threshold exceeded the drug's own prior mean →
+                                 //   comparator discarded, held to clinical floor (fix #3 pins it)
   comparatorSigma2: number;      // variance of the historical control estimate
   /** Downsampled comparator density for chart display. null when comparatorSigma2 ≈ 0. */
   comparatorGrid: { theta: number[]; density: number[] } | null;
@@ -737,12 +783,27 @@ export function computeStageRR(
   observedN?: number,
   comparatorSigma2: number = 0,
 ): StageRRResult {
-  // 0. Apply clinically meaningful threshold floor
-  const effectiveNull = effectiveThreshold(nullRR, isTimeToEvent);
-
   // 1. Convert to Beta mixture and discretize on grid
   const betaMix = mixtureToBeta(gaussianMixture);
   const priorGrid = betaToGrid(betaMix);
+  const priorMoments = gridMoments(priorGrid);
+
+  // 0. Effective threshold — clinical floor, then a guard against an UN-PINNED,
+  //    unreliable comparator. A control/SOC threshold at or above the drug's own
+  //    evidence-based expected response (priorMean) contradicts a positive effect
+  //    prior: it means the COMPARATOR is mis-derived (wrong scale / hallucinated
+  //    SOC), not that the drug is hopeless. We trust the PINNED effect prior over
+  //    the un-pinned comparator — discard the comparator and hold the drug to the
+  //    clinical-meaningfulness floor, flagging it. This structurally prevents a
+  //    non-degenerate prior from being forced ENTIRELY below threshold (a
+  //    definitional P(success)=0 is a bug signal, not a valid output). It only
+  //    fires when the drug's own mean is itself above the floor — a genuinely
+  //    sub-floor drug still honestly fails. Full comparator pinning for non-CRC
+  //    endpoints is fix #3; this makes the derivation SANE in the meantime.
+  const floor = isTimeToEvent ? TTE_PROXY_RR_FLOOR : MEANINGFUL_RR_FLOOR;
+  const flooredNull = Math.max(nullRR, floor);
+  const comparatorUnreliable = flooredNull > priorMoments.mean && priorMoments.mean > floor;
+  const effectiveNull = comparatorUnreliable ? floor : flooredNull;
 
   // 2. Compute P(stage success) via numerical integration (with comparator uncertainty)
   const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, design, comparatorSigma2);
@@ -757,7 +818,6 @@ export function computeStageRR(
   const bandsAfter = computeBandMasses(posteriorGrid, effectiveNull);
 
   // 5. Summary statistics
-  const priorMoments = gridMoments(priorGrid);
   const posteriorMoments = gridMoments(posteriorGrid);
 
   // 6. Counterfactual ablations (use effective threshold)
@@ -778,6 +838,7 @@ export function computeStageRR(
     posteriorMean: posteriorMoments.mean,
     effectiveNullRR: effectiveNull,
     rawNullRR: nullRR,
+    comparatorUnreliable,
     comparatorSigma2,
     comparatorGrid,
     counterfactuals,

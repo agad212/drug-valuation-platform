@@ -57,7 +57,8 @@ function fmtM(n?: number | null): string {
   if (abs >= 1)    return `$${n.toFixed(0)}M`;
   return `~$0`;
 }
-function fmtPct(n?: number | null, dp = 1): string {
+// Whole % by default (render boundary only; internal values untouched).
+function fmtPct(n?: number | null, dp = 0): string {
   if (n == null || Number.isNaN(n)) return "—";
   return `${(n * 100).toFixed(dp)}%`;
 }

@@ -155,7 +155,7 @@ const STEP_META: Record<EvidenceSourceType, { title: string; blurb: string }> = 
   },
   analog: {
     title: "Step 3 · What happened with similar drugs?",
-    blurb: "How other drugs with a similar target or mechanism have performed in human trials.",
+    blurb: "How other drugs with a similar target or mechanism have performed in human trials. This adjusts the expected EFFECT SIZE (the prior). A class with no approvals ALSO carries a separate development/regulatory execution risk — that lowers P(clearing each gate) in the dev plan (the modality-class haircut), a distinct effect from the one here, so the class evidence is not double-counted.",
   },
   own_clinical: {
     title: "Step 4 · What has this drug shown in its own trials?",
@@ -428,6 +428,11 @@ export default function EffectPriorChain({ effectPrior, loading, ptrsResult }: P
   const isBimodal = shape === "bimodal";
   const { mss, variance } = mixtureMoments(mixture);
   const effectScore = Math.round(mss * 100);
+  // Part B (display only): surface the stored σ² as a ±1σ (~68%) band on the score.
+  // Pure render math from the already-computed variance — no engine value changes.
+  const scoreSd = Math.sqrt(Math.max(0, variance));
+  const scoreLow = Math.max(0, Math.round((mss - scoreSd) * 100));
+  const scoreHigh = Math.min(100, Math.round((mss + scoreSd) * 100));
   const { data: finalData, weaker, stronger } = finalCurveData(mixture, isBimodal);
 
   return (
@@ -461,12 +466,16 @@ export default function EffectPriorChain({ effectPrior, loading, ptrsResult }: P
                   {effectScore}
                 </div>
                 <div style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", fontFamily: "var(--font-mono)" }}>/100</div>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)", fontFamily: "var(--font-mono)", marginLeft: 2 }}>
+                  [range {scoreLow}–{scoreHigh}]
+                </div>
                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", marginLeft: 4 }}>
                   {confidenceLabel(variance)}
                 </div>
               </div>
               <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 3 }}>
-                Estimated true response rate ~{Math.round(mss * 100)}% — trial probability is in the Development Path below
+                Modeled endpoint-specific prior ~{effectScore}/100 (±1σ range shown) — an evidence-derived
+                effect estimate, NOT a clinical response rate. Trial probability is in the Development Path below.
               </div>
             </div>
             {isBimodal && weaker && stronger && (

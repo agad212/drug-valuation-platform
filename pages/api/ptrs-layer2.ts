@@ -51,7 +51,7 @@ async function extractTrialDesign(
   sponsor: string | undefined,
   nctId: string | undefined,
   anthropicKey: string
-): Promise<TrialDesignInputs> {
+): Promise<TrialDesignInputs & { orphanConfirmedForIndication: boolean }> {
 
   const systemPrompt = `You are a clinical trial design expert extracting trial parameters for a PTRS (probability of technical and regulatory success) model.
 
@@ -89,13 +89,21 @@ Classify by INDICATION, not by trial design or endpoint subjectivity:
 IMPORTANT: Retinal/ophthalmic indications are ALWAYS "low" — visual acuity (BCVA), light sensitivity, ERG, fMRI visual cortex activation, and perimetry are objective measurements, not subjective PROs. Do NOT classify them as "high" because vision involves perception.
 
 PARAMETER 6 — REGULATORY CONTEXT (regulatoryContext):
-Search specifically for these FDA designations for this drug in this indication:
+Search specifically for these FDA designations for this drug IN THE BASE-CASE INDICATION being valued (${indication}):
 - "btd_orphan": Has BOTH Breakthrough Therapy Designation AND Orphan Drug Designation
 - "btd": Has Breakthrough Therapy Designation only
 - "orphan": Has Orphan Drug Designation only
 - "accelerated": Accelerated Approval pathway without BTD
 - "confirmatory": Post-accelerated approval confirmatory trial
 - "standard": No special designation
+
+INDICATION-MATCH RULE (critical — do NOT grant unearned designation benefits):
+A designation only counts if it was granted FOR THIS BASE-CASE INDICATION (${indication}).
+FDA designations are indication-specific — a drug orphan-designated in pancreatic cancer or
+GBM does NOT carry orphan benefits into a colorectal-MRD program. If the designation you find
+is for a DIFFERENT indication, or you cannot confirm it was granted for ${indication}, return
+"standard" (or "btd"/"orphan" only for the designation that IS confirmed for ${indication}).
+When in doubt, default to "standard" — never assume orphan/BTD transfers across indications.
 
 ALSO RETURN:
 - endpointDescription: the exact name of the primary endpoint (e.g. "Best Corrected Visual Acuity (BCVA) at 12 months")
@@ -114,9 +122,16 @@ RESPOND WITH ONLY THIS JSON:
   "populationType": "biomarker_selected|broad|rare_small",
   "placeboResponse": "low|moderate|high",
   "regulatoryContext": "standard|btd|orphan|btd_orphan|accelerated|confirmatory",
+  "orphanConfirmedForIndication": false,
   "endpointDescription": "description of primary endpoint",
   "enrollmentNote": "brief enrollment note"
-}`;
+}
+
+Set "orphanConfirmedForIndication" to true ONLY if you positively confirmed an FDA Orphan
+Drug Designation granted for the BASE-CASE indication (${indication}). If the orphan
+designation is for a different indication, or you cannot confirm it for ${indication},
+set it to false. Default to false when unsure. (This is enforced deterministically
+downstream — an orphan designation earns easier-approval benefits only when this is true.)`;
 
   const userMessage = `Drug: ${drug}
 Indication: ${indication || "unknown"}
@@ -157,6 +172,9 @@ Search for this drug's key clinical trial and extract all 6 trial design paramet
     endpointDescription: parsed.endpointDescription || "",
     enrollmentNote: parsed.enrollmentNote || "",
     nctId,
+    // Fix B: default-deny — an orphan benefit only counts when explicitly confirmed
+    // for the base-case indication. The engine enforces the gate deterministically.
+    orphanConfirmedForIndication: parsed.orphanConfirmedForIndication === true,
   };
 }
 
@@ -177,7 +195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    let trialInputs: TrialDesignInputs | undefined;
+    let trialInputs: (TrialDesignInputs & { orphanConfirmedForIndication: boolean }) | undefined;
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
         trialInputs = await extractTrialDesign(
@@ -211,6 +229,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sigma2Trial: result.sigma2Trial,
       riskFlags: result.riskFlags,
       trialInputs: result.inputs,
+      orphanConfirmedForIndication: trialInputs.orphanConfirmedForIndication,
       summary: result.summary,
       phaseBenchmark,
     });

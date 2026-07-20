@@ -86,14 +86,18 @@ describe("computeDevPlan — trial duration economics", () => {
     expect(plan.totalDurationMonths).toBeCloseTo(47, 10);
   });
 
-  it("floors the enrollment rate at 0.1 patients/month to avoid divide-by-zero", () => {
+  it("floors the enrollment rate (no divide-by-zero) then clamps the result to a credible ceiling", () => {
     const mixture = mixtureFromMssVariance(0.5, 0.2);
     const stage = makeStage({ n: 10, enrollmentRatePerMonth: 0, treatmentObsMonths: 6, startupCushionMonths: 3 });
     const plan = computeDevPlan(mixture, 0.1, { stages: [stage], regulatoryContext: "standard" }, 0);
 
-    // enrollmentMonths = n / max(enrollmentRatePerMonth, 0.1) = 10 / 0.1 = 100
-    expect(plan.stages[0].enrollmentMonths).toBeCloseTo(100, 10);
-    expect(plan.stages[0].durationMonths).toBeCloseTo(109, 10);
+    // rate 0 → floored to 0.1 → raw accrual = 10 / 0.1 = 100 mo (finite, not Infinity/NaN),
+    // then clamped to the Phase-2 enrollment ceiling (36 mo) so a bad rate can't inflate the timeline.
+    expect(plan.stages[0].enrollmentMonthsRaw).toBeCloseTo(100, 10);
+    expect(plan.stages[0].enrollmentClamped).toBe(true);
+    expect(plan.stages[0].enrollmentMonths).toBe(36);
+    expect(Number.isFinite(plan.stages[0].durationMonths)).toBe(true);
+    expect(plan.stages[0].durationMonths).toBeCloseTo(36 + 6 + 3, 10);
   });
 });
 

@@ -1,0 +1,161 @@
+{
+  "meta": {
+    "asset": "BMS-986446",
+    "capturedAt": "2026-07-18",
+    "note": "CAPTURED from a live run via scripts/capture-fixture.ts (faithful inputs, not reconstructed). Base=http://localhost:3000. Expected values computed at the harness reference date 2026-07-01T00:00:00Z.",
+    "expectedHeadline": {
+      "pApprovalBand": [
+        0.055,
+        0.255
+      ],
+      "classStatus": "graveyard",
+      "appliesModalityHaircut": true
+    }
+  },
+  "ciHalfWidth": 0.10604444444444444,
+  "chainSteps": [
+    {
+      "source": "mechanism",
+      "label": "Mechanism & pharmacology",
+      "found": true,
+      "signal": {
+        "mu": 0.94,
+        "sigma2": 0.2688888888888889
+      },
+      "reasoning": "Mechanism signal strength: moderate (MSS 0.47). Potency profile (IPS 0.64): potency 0.45, selectivity 0.88, PK 0.88, engagement 0.35, therapeutic window 0.72. Translational reliability (TRS 0.53): target validation 0.35, indication fit 0.85, modality fit 0.62, translation rate 0.18. Uncertainty (σ² 0.27)."
+    },
+    {
+      "source": "animal",
+      "label": "Animal model: tau spread/pathology reduction + behavioral deficit protection in murine AD model",
+      "found": true,
+      "signal": {
+        "mu": 1.2,
+        "sigma2": 0.35
+      },
+      "reasoning": "Multiple public sources confirm that in preclinical in vivo models, BMS-986446 (formerly PRX005) reduced the development of tau pathology and improved tau-related behavioral deficits in a murine model, while also reducing tau uptake and spread and promoting phagocytic clearance. The murine model is reasonably indication-matched (tau pathology/spread), and the behavioral + pathological dual readout is a positive signal. However, the publicly disclosed data are described only at summary/press-release level — no granular dose-response, effect-size vs. SOC comparator, or peer-reviewed in vivo paper is publicly available — and the MTBR-tau class has seen prior clinical failures (e.g., N-/C-terminal tau antibodies), which limits direct translational confidence. This warrants an above-average mu (clearly positive preclinical package, multi-endpoint) but a moderately wide sigma2 reflecting the summary-level disclosure, the imperfect translation rate of tau antibody models to humans, and the absence of published dose-response or comparator data."
+    },
+    {
+      "source": "analog",
+      "label": "Same-target anti-tau mAb analogs (Tier 1): semorinemab, gosuranemab, tilavonemab, zagotenemab, bepranemab, posdinemab — all Phase 2 failures in AD; BMS-986446 is MTBR-targeting (differentiated epitope)",
+      "found": true,
+      "signal": {
+        "mu": 0.28,
+        "sigma2": 0.12
+      },
+      "classStatus": "graveyard",
+      "reasoning": "Tier 1 (same target — anti-tau monoclonal antibody) yields a large and consistent set of clinical failures. Semorinemab failed in two Phase 2 trials (Tauriel in prodromal-to-mild AD and Lauriet in mild-to-moderate AD). Gosuranemab and tilavonemab (both N-terminal tau antibodies) were discontinued after failing to achieve primary efficacy endpoints in Phase 2. Zagotenemab (aggregated-tau targeting) also failed Phase 2. UCB's bepranemab and J&J's posdinemab (pT217 phospho-tau) have since added to the tally, with posdinemab's Autonomy trial (500+ participants, 104 weeks) showing no statistically significant slowing of clinical decline as recently as late 2025. That is 6+ Phase 2 failures across multiple companies, mechanisms of tau engagement, and patient populations — a well-documented class graveyard with zero pivotal success for anti-tau mAbs in AD to date. BMS-986446 targets the MTBR (R1–R3) rather than the N-terminus, a mechanistically differentiated epitope that could in principle overcome prior failures, but no anti-MTBR-tau antibody has yet demonstrated clinical efficacy in humans. The breadth and consistency of the failures warrant low mu (0.28) — meaningfully below average, reflecting strong class-level negative evidence — and low sigma2 (0.12), reflecting high confidence in that negative signal given the 6+ well-documented, independently run, Phase 2 trials across multiple sponsors."
+    },
+    {
+      "source": "own_clinical",
+      "label": "Own clinical data: Phase 2 TargetTau-1 (NCT06268886) — fully enrolled, no efficacy readout yet",
+      "found": false,
+      "reasoning": "The Phase 2 TargetTau-1 trial (NCT06268886, n≈310) began enrollment March 2024 and is fully enrolled, but primary completion is estimated March 2027 — no efficacy data have been reported. The only human data available are from a Phase 1 trial in healthy volunteers showing BMS-986446 was safe and well tolerated, with no clinical efficacy readout. Because no efficacy signal (positive or negative) exists yet from patients with AD, 'found' is set to false and efficacySignal is 'not_measurable_yet'; mu and sigma2 are set to uninformative defaults (mu=1.0, sigma2=0.60) and should not materially move the prior."
+    }
+  ],
+  "devPlan": {
+    "regulatoryContext": "btd",
+    "regCostM": 1,
+    "stages": [
+      {
+        "id": "stage-1",
+        "name": "BMS-986446 Phase 2 RCT (Early AD Proof-of-Concept)",
+        "phase": "Phase 2 (proof-of-concept; fully enrolled, readout expected November 2027)",
+        "n": 257,
+        "cpp": 185000,
+        "enrollmentRatePerMonth": 6,
+        "treatmentObsMonths": 18,
+        "startupCushionMonths": 6,
+        "enrollmentComplete": true,
+        "completionDate": "2027-11-30",
+        "isCurrentTrial": true,
+        "aiRationale": "Phase 2 RCT in 257 early AD patients with confirmed biomarker positivity, powered to detect CDR-SB slowing; readout November 2027 gates advancement to Phase 3 registration studies.",
+        "trialDesign": {
+          "n": 257,
+          "endpointType": "surrogate",
+          "designType": "rct",
+          "populationType": "biomarker_selected",
+          "placeboResponse": "high",
+          "regulatoryContext": "btd",
+          "endpointDescription": "Change from baseline in Clinical Dementia Rating–Sum of Boxes (CDR-SB) at 18 months",
+          "enrollmentNote": "257 patients with early AD (MCI or mild dementia; CDR-SB 0.5–1.0), amyloid and tau PET-confirmed, randomized 1:1 to BMS-986446 or placebo; fully enrolled; readout expected November 2027",
+          "nctId": "NCT06268886"
+        },
+        "nullResponseRate": 0.3,
+        "isTimeToEvent": false,
+        "endpointRationale": "Change from baseline in CDR-SB at 18 months is the FDA-accepted surrogate for cognitive decline in early symptomatic AD; a significant slowing of decline vs placebo demonstrates target engagement and proof-of-concept before advancing to larger registration trials.",
+        "endpointEvidenceBasis": "CONFIRMED",
+        "comparatorSigma2": 0,
+        "comparatorSource": "Placebo arm measured in-trial (concurrent RCT control); historical context: placebo CDR-SB decline ~0.5–0.8 points/18mo in MCI-AD."
+      },
+      {
+        "id": "stage-2",
+        "name": "BMS-986446 Phase 3 Registration RCT (Confirmatory)",
+        "phase": "Phase 3",
+        "n": 1200,
+        "cpp": 220000,
+        "enrollmentRatePerMonth": 12,
+        "treatmentObsMonths": 18,
+        "startupCushionMonths": 6,
+        "enrollmentComplete": false,
+        "isCurrentTrial": false,
+        "aiRationale": "Phase 3 larger confirmatory RCT (n~1200) powered to robustly replicate Phase 2 CDR-SB slowing signal and support BLA registration in early symptomatic AD with amyloid and tau pathology confirmed.",
+        "trialDesign": {
+          "n": 1200,
+          "endpointType": "surrogate",
+          "designType": "rct",
+          "populationType": "broad",
+          "placeboResponse": "moderate",
+          "regulatoryContext": "btd",
+          "endpointDescription": "Change from baseline in CDR-SB at 18 months vs placebo (confirmatory)",
+          "enrollmentNote": "n~1200, randomized 1:1 RCT, multi-center international, early symptomatic AD (MCI-AD or mild dementia) with confirmed amyloid and tau biomarkers"
+        },
+        "nullResponseRate": 0.3,
+        "isTimeToEvent": false,
+        "endpointRationale": "Change from baseline in CDR-SB at 18 months is the FDA-accepted registration endpoint in early symptomatic AD; Phase 3 confirmatory RCT in a larger, geographically diverse population replicates Phase 2 efficacy and provides the pivotal evidence for BLA submission.",
+        "endpointEvidenceBasis": "INFERRED",
+        "comparatorSigma2": 0,
+        "comparatorSource": "Placebo arm measured in-trial (concurrent RCT control); FDA precedent: anti-amyloid mAbs (aducanumab, lecanemab) and tau-targeting agents gated on CDR-SB slowing in early AD RCTs."
+      }
+    ]
+  },
+  "financial": {
+    "therapeuticArea": "cns",
+    "modality": "biologic",
+    "patentLoeYear": null,
+    "comps": [
+      { "drug": "Leqembi (lecanemab)", "peakSalesM": 2600, "relation": "anchor" },
+      { "drug": "Kisunla (donanemab)", "peakSalesM": 1100, "relation": "anchor" }
+    ]
+  },
+  "valuation": {
+    "peakSales": 1850000000,
+    "launchYear": 2031,
+    "loeYear": 2044,
+    "discountRate": 0.12,
+    "cogsPct": 0.2,
+    "taxRate": 0.21,
+    "workingCapitalPct": 0.1,
+    "avgRoyalty": 0.15,
+    "ownerType": "Owner"
+  },
+  "expected": {
+    "finalMss": 0.31047,
+    "pApproval": 0.15535,
+    "pAllTrialsSuccess": 0.16886,
+    "s0_trialSuccessProb": 0.26384,
+    "s0_trialSuccessProbRaw": 0.32981,
+    "s0_modalityHaircut": 0.8,
+    "s1_trialSuccessProb": 0.64,
+    "s1_modalityHaircut": 0.8,
+    "totalDurationMonths": 96,
+    "impliedLaunchYear": 2034,
+    "s0_cpp": 150000,
+    "s1_cpp": 220000,
+    "totalRiskAdjCostM": 108.37374,
+    "peakSalesM": 1850,
+    "loeYear": 2046,
+    "revenuePVM": 2744.18813,
+    "eNPVM": 317.9,
+    "eROI": 2.93
+  }
+}
