@@ -58,6 +58,22 @@ export type OptionInputs = {
   placeboResponse?: PlaceboResponse; // "low" | "moderate" | "high"
   regulatoryContext?: RegulatoryContext;
 
+  // ── Comparator (2a): the efficacy BAR the trial must clear ─────────────────
+  // "active" = must beat an efficacious active control (nintedanib, an active SOC),
+  // a materially HARDER bar than placebo/saline → lower P(trial success). Flows into
+  // the gating stage's nullResponseRate in the engine recompute (the same lever the
+  // "harder bar" what-if uses), so P falls out of the engine, not a guess.
+  comparatorType?: "placebo" | "active";
+  nullResponseRateOverride?: number; // explicit control/comparator response rate for the gating stage (0–1)
+
+  // ── Added indications (2d): breadth is NOT free ────────────────────────────
+  // Count of indications ADDED beyond the lead (a 2-indication option → 1; a 3 → 2).
+  // Each added indication — typically LESS validated than the lead — lowers the
+  // blended PROGRAM probability of approval: succeeding across more, less-precedented
+  // indications is less likely than the focused single-indication baseline.
+  addedIndicationCount?: number;
+  addedIndicationsValidated?: boolean; // true = added indications carry their own precedent (smaller penalty)
+
   // ── Category 2: Patient Selection ─────────────────────────────────────────
   // Inclusion criteria tightness affects both PTRS (via population noise)
   // AND peak sales (via label breadth).
@@ -266,6 +282,34 @@ export function labelBreadthMultiplier(
   return { mult, reasons };
 }
 
+// Active comparator raises the efficacy bar (must beat an efficacious control, not
+// placebo/saline). Modelled as an additive lift to the gating stage's control
+// response rate — the SAME lever the "harder bar" what-if uses — so it flows through
+// the engine's threshold math to a LOWER P(trial success). A caller-supplied
+// nullResponseRateOverride (the real control rate) takes precedence over this default.
+const ACTIVE_COMPARATOR_NULL_BUMP = 0.15;
+
+// ─── Program-breadth difficulty (added indications) ─────────────────────────
+//
+// Breadth is NOT free: a multi-indication option must succeed across MORE — and
+// typically LESS-validated — indications than the focused baseline, so its blended
+// PROGRAM probability of approval is LOWER, not equal. This is a deterministic
+// per-added-indication multiplier (regulatory reasoning, not tuned to a ranking):
+//   - each added LESS-validated indication ×0.80 (own evidence/class less precedented)
+//   - each added VALIDATED indication      ×0.92 (carries its own precedent)
+// A single-indication option (count 0) → ×1.0. The multiplier only ever LOWERS P,
+// so a broad platform can never show the same/higher P than the single-indication base.
+export function programBreadthMultiplier(option: OptionInputs): { mult: number; reasons: string[] } {
+  const count = Math.max(0, Math.trunc(option.addedIndicationCount ?? 0));
+  if (count === 0) return { mult: 1.0, reasons: [] };
+  const per = option.addedIndicationsValidated ? 0.92 : 0.80;
+  const mult = Math.pow(per, Math.min(count, 3)); // cap the compounding at 3 added
+  return {
+    mult,
+    reasons: [`+${count} ${option.addedIndicationsValidated ? "validated" : "less-validated"} indication(s) — blended program P ×${mult.toFixed(2)} (breadth is not free)`],
+  };
+}
+
 // ─── Core Calculation ─────────────────────────────────────────────────────────
 
 export function computeOption(
@@ -317,10 +361,22 @@ export function computeOption(
     // design replacing stage 0 — the correct multi-stage P(approval) AND the
     // bottom-up risk-adjusted cost for THIS option's design.
     const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
+    // Comparator (2a): route an active-comparator harder bar into the gating stage's
+    // control response rate so the engine recomputes a LOWER P from it. Explicit
+    // override wins; else an "active" comparator lifts the base stage's nullResponseRate.
+    const baseStage0 = base.devPlanInputs!.stages[0] as DevStageInput;
+    const baseNull = baseStage0.nullResponseRate ?? 0.15; // phase-2 default floor when the stage has none
+    const comparatorNull =
+      option.nullResponseRateOverride != null
+        ? clamp01(option.nullResponseRateOverride)
+        : (option.comparatorType === "active"
+            ? Math.min(0.9, baseNull + ACTIVE_COMPARATOR_NULL_BUMP)
+            : undefined);
     const stage0Override: DevStageInput = {
-      ...(base.devPlanInputs!.stages[0] as DevStageInput),
+      ...baseStage0,
       n: trialDesign.n,
       trialDesign,
+      ...(comparatorNull != null ? { nullResponseRate: comparatorNull } : {}),
     };
     const fullPlan = computeDevPlan(
       mixture,
@@ -357,6 +413,17 @@ export function computeOption(
   const breadth = labelBreadthMultiplier(trialDesign, base);
   if (!option.isBaseline && breadth.mult < 1) {
     ptrs = clamp01(ptrs * breadth.mult);
+    ptrsCI = ciBand(ptrs);
+  }
+
+  // ── Step 2c: Program-breadth difficulty (added indications) ────────────────
+  // Breadth is NOT free (2d): a multi-indication option's blended PROGRAM P must be
+  // LOWER than the focused baseline. Applied after the engine P so the added, less-
+  // validated indications drag the blended probability down — the added market
+  // (peakSalesMOverride) is therefore credited only at this reduced probability.
+  const programBreadth = programBreadthMultiplier(option);
+  if (!option.isBaseline && programBreadth.mult < 1) {
+    ptrs = clamp01(ptrs * programBreadth.mult);
     ptrsCI = ciBand(ptrs);
   }
 
@@ -558,6 +625,12 @@ export function computeOption(
   }
   if (!option.isBaseline && breadth.mult < 1) {
     keyDrivers.push(`Label-breadth: ${breadth.reasons.join(", ")}`);
+  }
+  if (!option.isBaseline && programBreadth.mult < 1) {
+    keyDrivers.push(`Program-breadth: ${programBreadth.reasons.join(", ")}`);
+  }
+  if (!option.isBaseline && (option.comparatorType === "active" || option.nullResponseRateOverride != null)) {
+    keyDrivers.push("Active comparator → harder efficacy bar (lower P of trial success)");
   }
   if (option.designType && option.designType !== base.baseTrialDesign.designType) {
     const from = base.baseTrialDesign.designType.replace("_", " ");

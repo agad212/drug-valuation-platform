@@ -256,16 +256,26 @@ If you change the indication, target population, label scope, or competitive lan
   → You MUST set "devCostMOverride" to the estimated total dev cost (in $M) if the program scope changes materially.
 If you don't set these, the engine will use the baseline's $${ctx.peakSalesM?.toFixed(0) ?? "??"}M peak sales for ALL options, which is WRONG whenever the market opportunity changes.
 
-RULE 2 — PROBABILITY MUST REFLECT THE ACTUAL DIFFICULTY, NOT JUST TRIAL SIZE.
-The engine's built-in probability model rewards larger n and RCT design with higher P(approval). That's correct for the SAME drug in the SAME indication. But it is WRONG when:
-  - The option targets a DIFFERENT indication (different disease biology, different competitive bar)
-  - The regulatory path is fundamentally harder (losing orphan status, entering a crowded field)
-  - The mechanism's relevance to the new indication is uncertain
-In these cases, you MUST set "ptrsOverride" (0.0 to 1.0) to a realistic P(approval) that accounts for the ACTUAL regulatory and clinical difficulty. Do NOT let the engine compute probability from trial design alone.
-
-Example: orphan rare disease trial (n=40, single arm, surrogate) might have 42% P(approval).
-Pivoting to a large-market RCT (n=400, hard endpoint) does NOT automatically mean 60% P(approval).
-If the new indication is harder, set ptrsOverride lower than the baseline.
+RULE 2 — P(approval) IS COMPUTED BY THE ENGINE FROM YOUR STRUCTURED FIELDS. DO NOT hand it a number.
+The engine RE-RUNS the real stage-by-stage probability model for each option using the STRUCTURED
+design fields you set — the SAME engine the baseline and the what-if analysis use. Your job is to set
+the fields that make the probability move in the right direction; the engine produces the number:
+  - HARDER efficacy bar (must beat an ACTIVE control, not placebo/saline) → set "comparatorType":"active"
+    (or "nullResponseRateOverride" to the control's known response rate). This LOWERS P(trial success).
+  - BIOMARKER enrichment (cleaner, concentrated effect) → set "populationType":"biomarker_selected".
+    This RAISES P(trial success). (Broadening to "broad" from a selected base LOWERS it.)
+  - SAMPLE SIZE → set "n". Larger n → more power → higher P; smaller n → lower.
+  - REGULATORY PATH → set "regulatoryContext" (e.g. losing "orphan" → "standard"). The engine applies
+    the correct pathway effect.
+  - ADDED INDICATIONS (breadth) → set "addedIndicationCount" (number of indications ADDED beyond the
+    lead; a 2-indication platform → 1, a 3 → 2) and "addedIndicationsValidated" (true only if the added
+    indications carry their own precedent). Breadth is NOT free: the engine LOWERS the blended program
+    probability for each added, less-validated indication. A broad platform must never look as safe as
+    the focused baseline.
+Do NOT set "ptrsOverride" — it is a deprecated escape hatch the engine ignores whenever a dev plan
+exists (it always does here). Express difficulty through the structured fields above and let the engine
+compute P. Set fields HONESTLY (an active-comparator RCT is genuinely harder); do not reverse-engineer a
+desired probability.
 
 RULE 3 — "changesSummary" IS REQUIRED ON EVERY NON-BASELINE OPTION.
 Each non-baseline option must include a "changesSummary" string field: one QUALITATIVE line listing what changed and why.
@@ -283,7 +293,10 @@ RULE 6 — Be realistic. Think like a pharma executive, not an optimizer.
   - Out-licensing: isOutlicensed + royaltyPctOverride (0–1)
   - VOI studies: isVOI:true with voiCostM, voiMonths, voiProbPositive
   - Biomarker selection: populationType:"biomarker_selected" + smaller n + inclusionCriteria:"tight"
-  - Parallel programs: model the COMBINED costs and peak sales of running both
+  - Active-comparator head-to-head: comparatorType:"active" (harder bar → engine lowers P)
+  - Indication expansion / parallel programs: set addedIndicationCount (+ peakSalesMOverride for the
+    COMBINED market, devCostMOverride for the COMBINED cost). The engine lowers the blended program P
+    for the added breadth — do NOT expect a bigger market to come with the same probability.
 
 ═══════════════════════════════
 FULL OPTION SCHEMA
@@ -295,7 +308,7 @@ FULL OPTION SCHEMA
   "isBaseline": boolean,           // true ONLY for Option A
   "changesSummary": string,        // REQUIRED on non-baseline: one line of what changed and why
 
-  // ── Trial design (engine recalculates probability from these) ──
+  // ── Trial design (THE ENGINE RECOMPUTES P(approval) FROM THESE) ──
   "n": number,                     // sample size
   "endpointType": "hard" | "surrogate" | "pro",
   "designType": "rct" | "single_arm" | "basket",
@@ -304,11 +317,15 @@ FULL OPTION SCHEMA
   "inclusionCriteria": "tight" | "standard" | "broad",
   "placeboResponse": "low" | "moderate" | "high",
   "regulatoryContext": "standard" | "btd" | "orphan" | "btd_orphan" | "accelerated" | "confirmatory",
+  "comparatorType": "placebo" | "active",   // "active" = harder bar (beat an active SOC) → lower P
+  "nullResponseRateOverride": number,        // 0-1: explicit control response rate (active comparator)
+  "addedIndicationCount": number,            // indications ADDED beyond the lead (breadth → lower blended P)
+  "addedIndicationsValidated": boolean,      // true only if added indications carry their own precedent
 
   // ── Commercial overrides (CRITICAL — set whenever the market changes) ──
   "peakSalesMOverride": number,    // annual peak sales in $M for THIS option's market
   "devCostMOverride": number,      // total dev cost in $M if program scope changes
-  "ptrsOverride": number,          // 0-1 — overall P(approval) — USE when indication/difficulty changes
+  "ptrsOverride": number,          // DEPRECATED — ignored when a dev plan exists; do NOT use for probability
 
   // ── Partnership ──
   "ownershipPct": number,          // 0-100
@@ -331,9 +348,9 @@ User asks about KIO-301 indication expansion from RP (orphan) to larger retinal 
 <options_json>
 [
   {"id":"opt-a","name":"RP Orphan Path (Current)","isBaseline":true},
-  {"id":"opt-b","name":"Pivot to AMD — Single Arm","n":180,"designType":"single_arm","endpointType":"surrogate","regulatoryContext":"standard","peakSalesMOverride":1200,"devCostMOverride":180,"ptrsOverride":0.22,"changesSummary":"Pivoted to AMD (larger market). Lost orphan status. Single-arm surrogate may face FDA pushback in non-rare setting. Peak sales $350M→$1.2B, P(approval) drops to ~22%."},
-  {"id":"opt-c","name":"Pivot to AMD — Full RCT","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","placeboResponse":"moderate","peakSalesMOverride":1400,"devCostMOverride":350,"ptrsOverride":0.28,"changesSummary":"Full RCT with hard endpoint in AMD. Credible regulatory path but expensive. Peak sales $1.4B, P(approval) ~28% (hard endpoint, competitive field)."},
-  {"id":"opt-d","name":"RP + AMD Parallel Track","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","peakSalesMOverride":1750,"devCostMOverride":500,"ptrsOverride":0.35,"changesSummary":"Run both RP (beachhead) and AMD (expansion). Combined peak sales $1.75B. Higher cost ($500M) but RP data de-risks AMD. P(approval) ~35% (blended)."}
+  {"id":"opt-b","name":"Pivot to AMD — Single Arm","n":180,"designType":"single_arm","endpointType":"surrogate","regulatoryContext":"standard","peakSalesMOverride":1200,"devCostMOverride":180,"changesSummary":"Pivoted to AMD (larger market). Lost orphan status → standard pathway. Single-arm surrogate in a non-rare setting. Broader market, harder bar."},
+  {"id":"opt-c","name":"Pivot to AMD — Active-Comparator RCT","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","placeboResponse":"moderate","comparatorType":"active","peakSalesMOverride":1400,"devCostMOverride":350,"changesSummary":"Full RCT vs an active control in AMD. Credible but must beat an efficacious comparator — a harder efficacy bar. Larger market, higher cost."},
+  {"id":"opt-d","name":"RP + AMD Parallel Track","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","addedIndicationCount":1,"peakSalesMOverride":1750,"devCostMOverride":500,"changesSummary":"Run both RP (beachhead) and AMD (expansion) — one added, less-validated indication. Combined market and cost; breadth carries a lower blended program probability."}
 ]
 </options_json>
 
