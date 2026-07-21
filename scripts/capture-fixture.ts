@@ -25,11 +25,14 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runDeterministicChain, headline, type Fixture } from "../tests/harness/fixture-runner";
 import { inferTherapeuticArea, inferModality, classifyComps } from "../lib/financial-pins";
+import { classGraveyardProbability, graveyardHaircut } from "../lib/class-risk";
 import type { EvidenceStepInput } from "../lib/effect-prior";
 import type { DevStageInput } from "../lib/dev-plan";
 
 // The harness pins the clock to this date; pin identically so `expected` matches.
 const HARNESS_AS_OF = "2026-07-01T00:00:00Z";
+// Mirrors lib/dev-plan.ts MODALITY_META_RISK_HAIRCUT (not exported from the engine).
+const MODALITY_META_RISK_HAIRCUT = 0.80;
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 function parseArgs(argv: string[]): Record<string, string | boolean> {
@@ -197,7 +200,15 @@ async function main() {
   };
 
   // ── Assemble fixture + compute golden `expected` via the SAME runner the harness uses ──
-  const analogClass = chainSteps.find((s) => s.source === "analog")?.classStatus ?? null;
+  const analogStep = chainSteps.find((s) => s.source === "analog");
+  const analogClass = analogStep?.classStatus ?? null;
+  // Deterministic class risk from the analog step's STRUCTURED facts (Part 2) — the
+  // classStatus + blended haircut the engine ACTUALLY uses, not the raw LLM label.
+  const classRisk = analogStep?.classEvidence ? classGraveyardProbability(analogStep.classEvidence) : null;
+  const effectiveClassStatus = classRisk?.classStatus ?? analogClass;
+  const effectiveHaircut = classRisk
+    ? graveyardHaircut(classRisk.pGraveyard, MODALITY_META_RISK_HAIRCUT)
+    : (analogClass === "graveyard" ? MODALITY_META_RISK_HAIRCUT : 1.0);
   const fx: Fixture = {
     meta: {
       asset: drug,
@@ -205,8 +216,8 @@ async function main() {
       note: `CAPTURED from a live run via scripts/capture-fixture.ts (faithful inputs, not reconstructed). Base=${BASE}. Expected values computed at the harness reference date ${HARNESS_AS_OF}.`,
       expectedHeadline: {
         pApprovalBand: [0, 1], // set below from the actual
-        classStatus: analogClass,
-        appliesModalityHaircut: analogClass === "graveyard",
+        classStatus: effectiveClassStatus,
+        appliesModalityHaircut: effectiveHaircut < 1,
       },
     },
     ciHalfWidth,
@@ -238,7 +249,7 @@ async function main() {
 
   console.log(`\n✅ Wrote ${outPath}`);
   console.log(`   HEADLINE @ ${HARNESS_AS_OF}: P(approval)=${(p * 100).toFixed(1)}%  finalMss=${round(h.finalMss, 3)}  launch=${h.impliedLaunchYear}  eNPV=$${h.eNPVM}M  eROI=${h.eROI}`);
-  console.log(`   classStatus=${analogClass ?? "—"}  haircut=${fx.meta.expectedHeadline.appliesModalityHaircut ? "0.80" : "1.0"}\n`);
+  console.log(`   classStatus=${effectiveClassStatus ?? "—"}  haircut=${effectiveHaircut.toFixed(3)}${classRisk ? ` (p_graveyard ${classRisk.pGraveyard}${analogClass && analogClass !== effectiveClassStatus ? `; LLM label was "${analogClass}"` : ""})` : ""}\n`);
   console.log(`   Next: npx vitest run tests/harness   (the harness now reproduces this fixture offline)\n`);
 }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { loadFixture, runDeterministicChain, headline, type Fixture, type ChainResult } from "./fixture-runner";
+import { classGraveyardProbability, analogEffectSignal } from "../../lib/class-risk";
 
 // ─── Offline fixture harness (Step 2) ──────────────────────────────────────────
 //
@@ -53,12 +54,16 @@ describe.each(FIXTURES)("Deterministic harness — %s", (file) => {
     expect(h.finalMss).toBeLessThan(1);
   });
 
-  it("modality class-status is read from the analog step (drives the haircut)", () => {
+  it("modality class-status + haircut are the deterministic blend over p_graveyard", () => {
     expect(r.modalityClassStatus ?? null).toBe(fx.meta.expectedHeadline.classStatus);
-    const shouldHaircut = fx.meta.expectedHeadline.appliesModalityHaircut;
+    // Haircut is the blend 1 − 0.20·p_graveyard (Part 2), NOT the old binary 0.80/1.0.
+    const p = r.devPlan.classGraveyardProbability ?? 0;
+    const expectedHaircut = 1 - 0.2 * p;
     for (const st of r.devPlan.stages) {
-      expect(st.modalityHaircut).toBe(shouldHaircut ? 0.8 : 1.0);
+      expect(st.modalityHaircut).toBeCloseTo(expectedHaircut, 6);
     }
+    // "applies a haircut" ⇔ haircut < 1 ⇔ p_graveyard > 0.
+    expect(fx.meta.expectedHeadline.appliesModalityHaircut).toBe(p > 0);
   });
 
   it("P(approval) is in the documented headline band and never a definitional 0", () => {
@@ -132,18 +137,22 @@ describe.each(FIXTURES)("Deterministic harness — %s", (file) => {
 // is whatever the live pipeline produced (sane in both current captures), not a fixed
 // pathological value.
 
-// ── Fix #2: financial-input pins are deterministic + P(approval) untouched ──────
-// P(approval) was frozen when the probability engine closed (Fix #1b). Fix #2 pins
-// only dollars, so these values must remain EXACT — the tripwire that we stayed out
-// of the engine.
-// Re-baselined to REAL live-captured values (2026-07-18).
-// TTX = 0.09993 from a fresh live capture: real inputs differ from the earlier
-// representative fixture (real single-arm Phase-2a hit by Fix C's cap → s0 0.206;
-// real comps anchor peak at $625M). tau = 0.15535 UNCHANGED — its live capture
-// failed on Anthropic credit exhaustion, so its fixture was not refreshed this batch.
+// ── P(approval) tripwire: engine math stays put; only PINNED inputs move it ──────
+// This locks P(approval) to a fixed value per fixture. The stage-success MATH,
+// Bayesian fusion, ceilings and haircut FORMULA are frozen — a change here means a
+// math regression. The value legitimately moves ONLY when we deliberately pin a new
+// INPUT (a designation, a comparator, a classification), which is recorded below.
+// TTX = 0.09993 (live capture 2026-07-18; single-arm Ph2a + comp-anchored peak).
+// tau = 0.26751: re-baselined 2026-07-20 to the PINNED-input world — its fixture was
+// refreshed to a live capture on the deployed reproducibility pins (regContext
+// fast_track not btd; AD comparator nullRR 0.10; class-graveyard blended haircut) AND
+// the analog effect-size μ/σ² is now deterministic (μ 0.30 / σ² 0.13 from the
+// structured class facts, Part A). This is an INPUT pin, not an engine change; the
+// value sits at the low edge of the observed live band (27.1–37.9%), consistent with
+// the tight-σ² graveyard signal — reproducibility, not recalibration.
 const FROZEN_PAPPROVAL: Record<string, number> = {
   "ttx-mc138.fixture.json": 0.09993,
-  "bms-986446.fixture.json": 0.15535,
+  "bms-986446.fixture.json": 0.26751,
 };
 
 describe.each(FIXTURES)("Fix #2 financial pins — %s", (file) => {
@@ -187,5 +196,59 @@ describe.each(FIXTURES)("Fix #2 financial pins — %s", (file) => {
     const r = runDeterministicChain(loadFixture(file));
     expect(r.devPlan.totalRiskAdjCostM).toBeGreaterThan(0);
     expect(r.devPlan.totalRiskAdjCostM).toBeLessThanOrEqual(r.devPlan.totalNominalCostM);
+  });
+});
+
+// ── tau reproducibility pins are EXERCISED by the committed fixture (not fallback) ──
+// The committed tau fixture is now a live capture on the deployed pins. These
+// assertions run the deterministic chain on it and fail if ANY pin regresses — the
+// regression net for the classifications we pinned (Parts 1/2/4/A). They are the
+// reason the harness now protects the pinned world rather than the pre-fix world.
+describe("tau fixture exercises the reproducibility pins", () => {
+  beforeAll(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(AS_OF); });
+  afterAll(() => vi.useRealTimers());
+
+  const load = () => runDeterministicChain(loadFixture("bms-986446.fixture.json"));
+
+  it("Part 1: regulatory context resolves to fast_track (not btd) — top level + every stage", () => {
+    const r = load();
+    expect(r.devPlan.regStage.regulatoryContext).toBe("fast_track");
+    for (const st of r.devPlan.stages) expect(st.trialDesign.regulatoryContext).toBe("fast_track");
+    // fast_track confers the STANDARD reg-approval probability (no BTD-level uplift).
+    expect(r.devPlan.regStage.pApproval).toBeCloseTo(0.85, 10);
+  });
+
+  it("Part 4: both AD stages carry the pinned CDR-SB comparator (nullRR 0.10, σ² 0.01)", () => {
+    const fx = loadFixture("bms-986446.fixture.json");
+    for (const st of fx.devPlan.stages) {
+      expect(st.nullResponseRate).toBe(0.10);
+      expect(st.comparatorSigma2).toBe(0.01);
+    }
+  });
+
+  it("Part 2: classStatus + haircut come from the deterministic rule (blend, not a flip)", () => {
+    const r = load();
+    const ev = loadFixture("bms-986446.fixture.json").chainSteps.find((s) => s.source === "analog")!.classEvidence!;
+    const rule = classGraveyardProbability(ev);
+    expect(r.modalityClassStatus).toBe(rule.classStatus);
+    expect(r.devPlan.classGraveyardProbability).toBeCloseTo(rule.pGraveyard, 10);
+    for (const st of r.devPlan.stages) {
+      expect(st.modalityHaircut).toBeCloseTo(1 - 0.2 * rule.pGraveyard, 10);
+    }
+  });
+
+  it("Part A: the analog effect-size μ/σ² is the deterministic pin (not a per-run LLM value)", () => {
+    const r = load();
+    const ev = loadFixture("bms-986446.fixture.json").chainSteps.find((s) => s.source === "analog")!.classEvidence!;
+    const sig = analogEffectSignal(ev);
+    const analog = r.effectPrior.chain.find((s) => s.source === "analog")!;
+    expect(analog.signal!.mu).toBeCloseTo(sig.mu, 10);
+    expect(analog.signal!.sigma2).toBeCloseTo(sig.sigma2, 10);
+  });
+
+  it("all pins are reproducible run-to-run (identical output on repeat)", () => {
+    const a = runDeterministicChain(loadFixture("bms-986446.fixture.json"));
+    const b = runDeterministicChain(loadFixture("bms-986446.fixture.json"));
+    expect(a.devPlan.pApproval).toBe(b.devPlan.pApproval);
   });
 });

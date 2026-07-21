@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveRegulatoryContext, designationsToContext, parseDesignations,
 } from "../regulatory-pins";
-import { classGraveyardProbability, graveyardHaircut } from "../class-risk";
+import { classGraveyardProbability, graveyardHaircut, analogEffectSignal } from "../class-risk";
 import { pinComparator, isEarlyAlzheimers, isColorectalMRD } from "../indication-benchmarks";
 import { computeDevPlan, type DevStageInput } from "../dev-plan";
 import { mixtureFromMssVariance } from "../effect-prior";
@@ -107,6 +107,29 @@ describe("Part 2 — class-graveyard probability + haircut blend", () => {
     const none = classGraveyardProbability({ sameTargetFailures: 0, approvedInClass: 0, differentiatedSubMechanismWithPOC: false });
     expect(none.classStatus).toBe("none");
     expect(none.pGraveyard).toBe(0);
+  });
+
+  it("Part A: analog effect-size μ/σ² is a FIXED function of the facts (no LLM), calibrated to current avg", () => {
+    // Determinism: same facts → same μ/σ² every call.
+    expect(analogEffectSignal(tauLike)).toEqual(analogEffectSignal({ ...tauLike }));
+    // tau facts (5 failures, not-differentiated) → μ 0.30 / σ² 0.13.
+    const tau = analogEffectSignal({ sameTargetFailures: 5, approvedInClass: 0, differentiatedSubMechanismWithPOC: false });
+    expect(tau).toEqual({ mu: 0.30, sigma2: 0.13 });
+    // TTX facts (3-failure graveyard) → μ 0.30 / σ² 0.18 — reproduces TTX's captured analog signal.
+    const ttx = analogEffectSignal({ sameTargetFailures: 3, approvedInClass: 0, differentiatedSubMechanismWithPOC: false });
+    expect(ttx).toEqual({ mu: 0.30, sigma2: 0.18 });
+    // A3 guard: the pinned μ sits INSIDE the observed 0.28–0.38 range (center, not a re-tune);
+    // σ² inside 0.13–0.18. If this ever fails, a calibration change was smuggled in.
+    for (const f of [3, 4, 5, 6]) {
+      const s = analogEffectSignal({ sameTargetFailures: f, approvedInClass: 0, differentiatedSubMechanismWithPOC: false });
+      expect(s.mu).toBeGreaterThanOrEqual(0.28);
+      expect(s.mu).toBeLessThanOrEqual(0.38);
+      expect(s.sigma2).toBeGreaterThanOrEqual(0.13);
+      expect(s.sigma2).toBeLessThanOrEqual(0.18);
+    }
+    // Differentiation offsets μ up; a precedented class (approvals) is near-neutral.
+    expect(analogEffectSignal({ sameTargetFailures: 5, approvedInClass: 0, differentiatedSubMechanismWithPOC: true }).mu).toBeGreaterThan(tau.mu);
+    expect(analogEffectSignal({ sameTargetFailures: 1, approvedInClass: 2, differentiatedSubMechanismWithPOC: false }).mu).toBeGreaterThan(0.7);
   });
 
   it("haircut is the exact blend 1 − 0.20·p_graveyard", () => {

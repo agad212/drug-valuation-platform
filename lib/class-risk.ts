@@ -84,6 +84,42 @@ export function classGraveyardProbability(ev: ClassEvidence): ClassRisk {
 }
 
 /**
+ * Deterministic analog-step effect-size signal (μ/σ²) from the SAME structured class
+ * facts (Part A). The analog step's μ/σ² was the last un-pinned lever: its structured
+ * facts are stable run-to-run, but the LLM re-derived a fresh μ/σ² point estimate each
+ * run (tau: μ swung 0.28↔0.38), swinging finalMss → P(approval). This resolves μ/σ²
+ * as a FIXED FUNCTION of the facts — NO LLM in the resolution path — so the same facts
+ * always give the same signal.
+ *
+ * CALIBRATED to reproduce what the analog step already produced on average (this is a
+ * REPRODUCIBILITY fix, NOT a recalibration of the prior):
+ *   • class graveyard (0 approvals, ≥1 failure, not differentiated) → μ 0.30 — matches
+ *     BOTH captured anchors: TTX-MC138 (3-failure miRNA-oncology graveyard, μ 0.30/σ²
+ *     0.18) and tau (4–5-failure anti-tau-mAb graveyard, μ 0.28–0.38 center ~0.31).
+ *   • σ² tightens as consistent failures accumulate (≥4 → 0.13, else 0.18), matching
+ *     SCALE_CALIBRATION "3+ consistent failures → low σ² (high confidence in the negative)".
+ *   • a differentiated sub-mechanism WITH human POC offsets μ up (0.50).
+ *   • ≥1 approval → precedent: μ near neutral. No failures/approvals → uninformative-wide.
+ * The graveyard μ (0.30) sits at the center of the observed 0.28–0.38 range — variance
+ * removed, central estimate unchanged.
+ */
+export function analogEffectSignal(ev: ClassEvidence): { mu: number; sigma2: number } {
+  const failures = Math.max(0, Math.trunc(ev.sameTargetFailures || 0));
+  const approvals = Math.max(0, Math.trunc(ev.approvedInClass || 0));
+  const differentiated = ev.differentiatedSubMechanismWithPOC === true;
+
+  if (approvals >= 1) {
+    const mu = Math.max(0.6, Math.min(1.15, 0.90 + 0.05 * approvals - 0.05 * failures));
+    return { mu: round2(mu), sigma2: 0.22 };
+  }
+  if (failures === 0) return { mu: 1.0, sigma2: 0.45 }; // no class track record → uninformative
+  return {
+    mu: differentiated ? 0.50 : 0.30,
+    sigma2: failures >= 4 ? 0.13 : 0.18,
+  };
+}
+
+/**
  * The deterministic haircut the dev plan applies, as a BLEND over p_graveyard:
  * a graveyard-certain class (p=1) gets the full ×0.80; a validated class (p=0)
  * gets ×1.0; a genuinely-split class gets the weighted value in between. Exposed

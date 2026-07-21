@@ -14,6 +14,7 @@
 
 import { callClaudeWithSearch } from "./claudeSearch";
 import type { EvidenceStepInput, EvidenceSourceType, ClassStatus } from "./effect-prior";
+import { analogEffectSignal } from "./class-risk";
 
 export type EvidenceContext = {
   drug: string;
@@ -387,6 +388,11 @@ export async function discoverAnalogEvidence(ctx: EvidenceContext, anthropicKey:
         approvedInClass: Number.isFinite(approvals) ? Math.max(0, Math.trunc(approvals)) : 0,
         differentiatedSubMechanismWithPOC: parsed?.differentiatedSubMechanismWithPOC === true,
       };
+      // Part A: pin the analog effect-size μ/σ² as a DETERMINISTIC function of the
+      // structured facts — NO LLM in the resolution path — so it stops swinging run-
+      // to-run. The LLM's own μ/σ² point estimate is discarded; the facts govern.
+      // (The fusion math and every other step are untouched.)
+      if (step.found) step.signal = analogEffectSignal(step.classEvidence);
     }
     return step;
   } catch (e) {

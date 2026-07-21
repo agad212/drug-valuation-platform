@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { buildEffectPrior, mixtureMoments, type EvidenceStepInput, type EffectPrior } from "../../lib/effect-prior";
 import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../../lib/dev-plan";
-import { classGraveyardProbability } from "../../lib/class-risk";
+import { classGraveyardProbability, analogEffectSignal } from "../../lib/class-risk";
 import { computeRevenuePV } from "../../lib/cashflow";
 import {
   anchorPeakSales, computeLoeYear,
@@ -102,7 +102,17 @@ export function loadFixture(fileName: string): Fixture {
  * year. Callers MUST pin the clock (vi.setSystemTime) for deterministic output.
  */
 export function runDeterministicChain(fx: Fixture): ChainResult {
-  const effectPrior = buildEffectPrior(fx.chainSteps);
+  // Part A: pin the analog step's effect-size μ/σ² deterministically from its
+  // structured facts BEFORE fusion (mirrors the live evidence-discovery override), so
+  // the harness EXERCISES the pin — the analog μ stops being a per-run LLM estimate.
+  // Only fires when the analog step carries classEvidence (pre-Part-A fixtures, incl.
+  // TTX, have none → unchanged). buildEffectPrior (the fusion math) is untouched.
+  const pinnedChainSteps = fx.chainSteps.map((s) =>
+    s.source === "analog" && s.found && s.classEvidence
+      ? { ...s, signal: analogEffectSignal(s.classEvidence) }
+      : s,
+  );
+  const effectPrior = buildEffectPrior(pinnedChainSteps);
   // Part 2: derive p_graveyard + the classStatus label deterministically from the
   // analog step's STRUCTURED facts when present (mirrors index.tsx); else fall back
   // to the LLM classStatus label (backward-compatible — pre-Part-2 fixtures).
