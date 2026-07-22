@@ -1087,7 +1087,14 @@ export default function HomePage() {
           const comps = classifyComps((rev.comps || []).map((c) => ({ drug: c.drug, peakSalesM: c.peakSalesM })));
           const pin = anchorPeakSales(comps, { rawLlmPeakM: rev.peakSalesM });
           const anchoredM = pin.baseM > 0 ? pin.baseM : rev.peakSalesM;
-          return anchoredM > 0 ? { ...ind, peakSales: Math.round(anchoredM * 1e6) } : ind;
+          // Persist the bottom-up market context (Build 1) so the Strategy Advisor can
+          // RE-DERIVE the market per scenario instead of haircutting the peak.
+          const mc = rev.marketContext ?? {};
+          return anchoredM > 0
+            ? { ...ind, peakSales: Math.round(anchoredM * 1e6),
+                tamM: mc.tamM ?? ind.tamM, penetrationPct: mc.penetrationPct ?? ind.penetrationPct,
+                annualPriceUsd: mc.pricingPerYear ?? ind.annualPriceUsd }
+            : ind;
         });
         return { ...cur, indications: updated };
       });
@@ -2497,7 +2504,14 @@ export default function HomePage() {
                       <button onClick={() => {
                         const targetId = v.indications?.[revenueTab]?.id;
                         if (targetId) {
-                          updateIndication(targetId, { peakSales: Math.round(active.peakSalesM * 1e6) });
+                          // Persist the bottom-up market context (Build 1) alongside peak so
+                          // the Strategy Advisor re-derives the market per scenario.
+                          updateIndication(targetId, {
+                            peakSales: Math.round(active.peakSalesM * 1e6),
+                            tamM: active.marketContext?.tamM ?? undefined,
+                            penetrationPct: active.marketContext?.penetrationPct ?? undefined,
+                            annualPriceUsd: active.marketContext?.pricingPerYear ?? undefined,
+                          });
                           pushToast(`Applied ${fmtMoney(active.peakSalesM * 1e6)} to "${v.indications?.[revenueTab]?.name || active.indication}".`, "success");
                         }
                       }} style={{ background: "rgba(255,255,255,0.9)", color: "#0f766e", fontWeight: 700, fontSize: 13, padding: "8px 14px", border: "none", borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap" }}>

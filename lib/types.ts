@@ -11,6 +11,11 @@ export type Indication = {
   phase?: string;
   ptrs?: number;      // per-indication override; falls back to parent drug PTRS
   devCostPV?: Money;  // per-indication dev cost; if unset, global devCostPV is split evenly
+  // Bottom-up market context (from revenue-assumptions) — persisted so the Strategy
+  // Advisor can RE-DERIVE the market per scenario (Build 1/1b), not haircut the peak.
+  tamM?: number;            // addressable market $M (eligible patients × annual WAC)
+  penetrationPct?: number;  // peak penetration % (peakSales ≈ tamM × penetrationPct/100)
+  annualPriceUsd?: number;  // annual WAC $/patient/yr — the base eligible COUNT = tamM/price
   nctId?: string;
   sources?: Source[];
 };

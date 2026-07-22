@@ -4,6 +4,7 @@ import { mixtureFromMssVariance } from "../effect-prior";
 import { computeStageRR, computeStageSuccess } from "../bayesian-rr";
 import { computeRevenuePV } from "../cashflow";
 import { buildBaseContext, computeOption, programBreadthMultiplier, type OptionInputs } from "../decision-analysis";
+import { deriveMarket, deriveEnrichedNiche, nicheIdentityHolds } from "../market-model";
 import type { TrialDesignInputs } from "../ptrs-trial";
 import type { Valuation } from "../types";
 
@@ -151,5 +152,101 @@ describe("Strategy Advisor — per-option P(approval) recompute", () => {
     const withOverride = computeOption(base, { id: "b", name: "Bogus override", ptrsOverride: 0.99 }, a);
     expect(withOverride.ptrs).not.toBeCloseTo(0.99, 2);       // override ignored
     expect(withOverride.ptrs).toBeCloseTo(devPlan.pApproval, 6); // same design → same engine P as baseline
+  });
+});
+
+// ─── Build 1b: GENUINELY BOTTOM-UP niche market (kill the disguised multiplier) ─
+describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
+  const broadDesign: TrialDesignInputs = {
+    n: 200, endpointType: "surrogate", designType: "rct",
+    populationType: "broad", placeboResponse: "moderate", regulatoryContext: "standard",
+  };
+  // Base indication: TAM $4000M × 25% penetration = $1000M peak; WAC $100k/yr → 40,000 eligible.
+  function mkMarketBase(peakSalesM = 1000, tamM = 4000) {
+    const v: Valuation = {
+      asset: "MKTDRUG", phase: "Phase 2",
+      discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
+      indications: [{ id: "i1", name: "RP", peakSales: peakSalesM * 1e6, tamM, penetrationPct: 25, annualPriceUsd: 100000, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
+    };
+    const revenuePV = computeRevenuePV({ ...v, peakSales: peakSalesM * 1e6, launchYear: 2032, loeYear: 2044 });
+    const out = { ptrs: 0.4, revenuePV, devCostPV: 300e6, rnpv: 0 };
+    const mixture = mixtureFromMssVariance(0.5, 0.2);
+    const stages: DevStageInput[] = [
+      stage({ trialDesign: broadDesign, n: 200, nullResponseRate: 0.20 }),
+      stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 400, isCurrentTrial: false, trialDesign: { ...broadDesign, n: 400 }, nullResponseRate: 0.20 }),
+    ];
+    const devPlan = computeDevPlan(mixture, 0.1, { stages, regulatoryContext: "standard", regCostM: 1.0 }, revenuePV / 1e6);
+    const base = buildBaseContext(v, out, { mss: 0.5, variance: 0.2, ptrs: 0.4 }, { trialInputs: broadDesign }, null, devPlan)!;
+    return { base };
+  }
+  const A: OptionInputs = { id: "opt-a", name: "Baseline", isBaseline: true };
+  const NICHE: OptionInputs = { id: "b", name: "Niche", nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 200000, nichePeakSharePct: 35 };
+
+  it("base anchor: deriveMarket + calibration + Option A reproduce the base peak", () => {
+    expect(deriveMarket({ tamM: 4000, penetrationPct: 25 }).peakSalesM).toBeCloseTo(1000, 6);
+    const { base } = mkMarketBase();
+    expect(deriveMarket(base.market!).peakSalesM).toBeCloseTo(base.peakSalesM, 6);
+    expect(computeOption(base, A).peakSalesM).toBeCloseTo(base.peakSalesM, 6);
+  });
+
+  it("niche peak is bottom-up (eligible × price × share) — hand-computed", () => {
+    // 20,000 × $200,000/yr = $4000M TAM × 35% = $1400M. No base term enters.
+    const n = deriveEnrichedNiche({ nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 200000, nichePeakSharePct: 35 });
+    expect(n.tamM).toBeCloseTo(4000, 6);
+    expect(n.peakSalesM).toBeCloseTo(1400, 6);
+  });
+
+  it("DECOUPLING (load-bearing): niche peak is INVARIANT to the base peak when niche params are fixed", () => {
+    // The guard that would have caught Build 1. Same niche absolute params, wildly different base.
+    const small = computeOption(mkMarketBase(500, 2000).base, NICHE, undefined);
+    const big   = computeOption(mkMarketBase(5000, 20000).base, NICHE, undefined);
+    expect(small.peakSalesM).toBeCloseTo(1400, 3);
+    expect(big.peakSalesM).toBeCloseTo(1400, 3);
+    expect(small.peakSalesM).toBeCloseTo(big.peakSalesM, 6); // independent of base — genuine re-derivation
+
+    // PROOF the old Build-1 implementation FAILS this: base × (prevalence×premium×penMult) scales with base.
+    const oldNiche = (basePeak: number) => basePeak * (0.35 * 1.4 * 1.3); // the disguised multiplier
+    expect(oldNiche(500)).not.toBeCloseTo(oldNiche(5000), 3); // scales with base → would FAIL decoupling
+  });
+
+  it("FALSIFIABLE identity: a consistent niche passes, a tampered one FAILS (the guard can fail)", () => {
+    const p = { nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 200000, nichePeakSharePct: 35 };
+    const good = deriveEnrichedNiche(p);
+    expect(nicheIdentityHolds(good, p)).toBe(true);
+    expect(nicheIdentityHolds({ ...good, peakSalesM: good.peakSalesM * 2 }, p)).toBe(false); // tampered peak
+    expect(nicheIdentityHolds({ ...good, tamM: good.tamM + 500 }, p)).toBe(false);            // tampered TAM
+  });
+
+  it("net is COMPUTED not signed: a strong niche exceeds base, a weak niche falls below", () => {
+    const { base } = mkMarketBase(); // base peak 1000
+    const strong = computeOption(base, { id: "b", name: "Strong", nicheEligiblePatients: 30000, nicheAnnualPriceUsd: 250000, nichePeakSharePct: 40 }, undefined);
+    const weak   = computeOption(base, { id: "c", name: "Weak",   nicheEligiblePatients: 8000,  nicheAnnualPriceUsd: 120000, nichePeakSharePct: 20 }, undefined);
+    expect(strong.peakSalesM).toBeGreaterThan(base.peakSalesM); // 30k×250k×40% = $3000M
+    expect(weak.peakSalesM).toBeLessThan(base.peakSalesM);      // 8k×120k×20%  = $192M
+  });
+
+  it("prevalence-only enrichment derives the COUNT from base eligible, price/share are absolute defaults", () => {
+    const { base } = mkMarketBase(); // base eligible = 4000M/$100k = 40,000
+    const a = computeOption(base, A);
+    // A PURE market change (prevalence only, NO design/population change) → market re-derives,
+    // probability is untouched. (A real biomarker option would ALSO set populationType, which
+    // legitimately moves P via the design lever — tested separately in the per-option-P block.)
+    const bio = computeOption(base, { id: "b", name: "Biomarker market", biomarkerPrevalence: 0.25 }, a);
+    // count = 40,000 × 0.25 = 10,000; × $200k default × 35% default = $700M.
+    expect(bio.peakSalesM).toBeCloseTo(700, 0);
+    expect(bio.ptrs).toBeCloseTo(a.ptrs, 6); // REVENUE-ONLY: pure market change doesn't move P
+  });
+
+  it("added indications SUM their own bottom-up markets onto the lead (unchanged from Build 1)", () => {
+    const { base } = mkMarketBase();
+    const a = computeOption(base, A);
+    const multi = computeOption(base, { id: "c", name: "+AMD", addedIndicationMarkets: [{ tamM: 6000, penetrationPct: 18 }] }, a);
+    expect(multi.peakSalesM).toBeCloseTo(base.peakSalesM + deriveMarket({ tamM: 6000, penetrationPct: 18 }).peakSalesM, 3);
+  });
+
+  it("design change alone still does not haircut peak (no automatic multiplier)", () => {
+    const { base } = mkMarketBase();
+    const a = computeOption(base, A);
+    expect(computeOption(base, { id: "b", name: "Single-arm", designType: "single_arm" }, a).peakSalesM).toBeCloseTo(base.peakSalesM, 6);
   });
 });

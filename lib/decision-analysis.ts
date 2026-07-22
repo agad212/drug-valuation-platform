@@ -18,6 +18,11 @@ import { scoreLayer2, computeTrialNoise } from "./ptrs-trial";
 import { computeRevenuePV } from "./cashflow";
 import { mixtureFromMssVariance, mixtureSuccessProbability } from "./effect-prior";
 import { computeDevPlan } from "./dev-plan";
+import {
+  deriveMarket, calibrateBaseMarket, deriveEnrichedNiche,
+  NICHE_PRICE_DEFAULT_USD, NICHE_SHARE_DEFAULT_PCT, BIOMARKER_PREVALENCE_DEFAULT,
+  type MarketParams, type BaseMarket,
+} from "./market-model";
 import type {
   TrialDesignInputs,
   EndpointType,
@@ -73,6 +78,20 @@ export type OptionInputs = {
   // indications is less likely than the focused single-indication baseline.
   addedIndicationCount?: number;
   addedIndicationsValidated?: boolean; // true = added indications carry their own precedent (smaller penalty)
+
+  // ── Niche market ABSOLUTE parameters (Build 1b) — reasoned bottom-up, NOT factors ──
+  // A niche/enriched scenario re-derives peak from its OWN absolute market parameters,
+  // each reasoned from niche characteristics + real comparators (never base × factor):
+  nicheEligiblePatients?: number;  // absolute eligible-patient count for the niche
+  nicheAnnualPriceUsd?: number;    // absolute WAC $/yr, from precision-therapy comparators
+  nichePeakSharePct?: number;      // absolute peak share %, from niche competitive dynamics
+  // biomarker prevalence is a real driver of the COUNT — used only to derive the niche
+  // eligible count from the base eligible pop when an absolute count isn't supplied.
+  biomarkerPrevalence?: number;    // 0–1 (or >1 to broaden): eligible-pool fraction vs base
+  nicheMarketBasis?: string;       // one-line basis (comp / prevalence source / labeled default)
+  // Added indications' OWN re-derived markets (bottom-up), summed with the lead —
+  // replaces a single LLM peakSalesMOverride for a multi-indication program.
+  addedIndicationMarkets?: MarketParams[];
 
   // ── Category 2: Patient Selection ─────────────────────────────────────────
   // Inclusion criteria tightness affects both PTRS (via population noise)
@@ -152,6 +171,11 @@ export type BaseContext = {
   // From layer2Result (Layer 2) — the current trial design
   baseTrialDesign: TrialDesignInputs;
 
+  // Base indication's bottom-up market (Build 1/1b) — TAM + penetration calibrated so
+  // deriveMarket(market) === peakSalesM, plus the eligible-patient COUNT and annual WAC
+  // as separate components so a niche can be reasoned against real base anchors.
+  market?: BaseMarket;
+
   // From valuation
   ptrs: number;             // combined PTRS (Layer 1 × Layer 2)
   peakSalesM: number;       // peak sales in $M
@@ -216,30 +240,13 @@ const DESIGN_COST_MULT: Record<string, number> = {
   basket:     1.20,   // multi-basket adds heterogeneity costs
 };
 
-// Inclusion criteria tightness → peak sales multiplier
-// Tight criteria = fewer eligible patients → smaller label → lower peak sales
-// Broad criteria = more patients → wider label → higher peak sales
-const INCLUSION_PEAK_SALES_MULT: Record<string, number> = {
-  tight:    0.70,
-  standard: 1.00,
-  broad:    1.20,
-};
-
-// Trial design → label strength → peak sales adjustment
-// RCT produces stronger label claim vs single arm (payer pushback on single-arm labels)
-const DESIGN_PEAK_SALES_MULT: Record<DesignType, number> = {
-  rct:        1.10,
-  single_arm: 0.90,
-  basket:     1.00,
-};
-
-// Population type → eligible patient pool → peak sales adjustment
-// biomarker_selected restricts the label; broad expands it vs standard
-const POPULATION_PEAK_SALES_MULT: Record<PopulationType, number> = {
-  biomarker_selected: 0.70,
-  rare_small:         0.55,
-  broad:              1.15,
-};
+// REMOVED (Build 1): INCLUSION_PEAK_SALES_MULT, DESIGN_PEAK_SALES_MULT and
+// POPULATION_PEAK_SALES_MULT — the peak-sales HAIRCUTS that scaled the base peak per
+// scenario. They are replaced by a genuine market RE-DERIVATION (lib/market-model.ts):
+// a biomarker/enriched scenario re-derives peak from a smaller eligible pool × a
+// re-derived niche price × a re-derived niche penetration, so the net is CALCULATED,
+// not assumed. Label/design strength now folds into the niche price/penetration drivers,
+// not a flat peak multiplier. See computeOption Step 3.
 
 // ─── Label-breadth difficulty ───────────────────────────────────────────────
 //
@@ -427,42 +434,79 @@ export function computeOption(
     ptrsCI = ciBand(ptrs);
   }
 
-  // ── Step 3: Adjusted peak sales ───────────────────────────────────────────
+  // ── Step 3: Peak sales — RE-DERIVE the market, don't haircut the peak (Build 1) ─
+  // A scenario market change pushes UPSTREAM to the market drivers (eligible pool,
+  // price, penetration) and lets the market model compute the consequence; it is NOT
+  // a multiplier on the base peak. The base market is calibrated so deriveMarket(base)
+  // === base.peakSalesM, so Option A / no market change reproduces the base exactly.
   let peakSalesM: number;
+  const marketDrivers: string[] = [];
+  const baseMarket: BaseMarket = base.market ?? calibrateBaseMarket(base.peakSalesM);
 
   if (option.peakSalesMOverride != null) {
+    // Explicit escape hatch — a user/LLM-supplied peak substitutes the market model.
     peakSalesM = option.peakSalesMOverride;
+  } else if (option.isBaseline) {
+    peakSalesM = base.peakSalesM; // Option A reproduces the base peak
   } else {
-    peakSalesM = base.peakSalesM;
+    // Detect a niche/market-changing scenario and RE-DERIVE it BOTTOM-UP from the niche's
+    // OWN absolute parameters (Build 1b) — an eligible COUNT × an absolute WAC × an
+    // absolute peak share. None of these is a factor on the base peak, so the niche peak
+    // is INDEPENDENT of the base peak (the decoupling property proven in the tests).
+    const explicitNicheParams =
+      option.nicheEligiblePatients != null || option.nicheAnnualPriceUsd != null || option.nichePeakSharePct != null;
+    const enriches =
+      (option.populationType === "biomarker_selected" && base.baseTrialDesign.populationType !== "biomarker_selected") ||
+      option.inclusionCriteria === "tight" ||
+      option.biomarkerPrevalence != null;
 
-    // Apply design type → label strength adjustment (only if design is changing)
-    if (option.designType && option.designType !== base.baseTrialDesign.designType) {
-      const baseDsgn = base.baseTrialDesign.designType;
-      peakSalesM = peakSalesM
-        * (DESIGN_PEAK_SALES_MULT[option.designType] ?? 1.0)
-        / (DESIGN_PEAK_SALES_MULT[baseDsgn] ?? 1.0);
+    if (explicitNicheParams || enriches) {
+      // Eligible COUNT: an explicit absolute wins; else derive it from the base eligible
+      // pop × the biomarker prevalence (prevalence is a real driver of the COUNT — allowed).
+      const nicheEligiblePatients =
+        option.nicheEligiblePatients
+        ?? (baseMarket.eligiblePatients != null
+              ? baseMarket.eligiblePatients * (option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT)
+              : null);
+
+      if (nicheEligiblePatients != null) {
+        // Price and share are ABSOLUTE (LLM-sourced from comparators, or a labeled default) —
+        // NEVER base price × premium or base penetration × mult.
+        const nicheAnnualPriceUsd = option.nicheAnnualPriceUsd ?? NICHE_PRICE_DEFAULT_USD;
+        const nichePeakSharePct   = option.nichePeakSharePct   ?? NICHE_SHARE_DEFAULT_PCT;
+        const niche = deriveEnrichedNiche({ nicheEligiblePatients, nicheAnnualPriceUsd, nichePeakSharePct });
+        peakSalesM = niche.peakSalesM;
+        const dflts = [
+          option.nicheAnnualPriceUsd == null ? `price default $${(NICHE_PRICE_DEFAULT_USD / 1000).toFixed(0)}k/yr` : null,
+          option.nichePeakSharePct == null ? `share default ${NICHE_SHARE_DEFAULT_PCT}%` : null,
+          (option.nicheEligiblePatients == null) ? `count from base eligible × prevalence ${(option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT)}` : null,
+        ].filter(Boolean);
+        marketDrivers.push(niche.provenance +
+          (option.nicheMarketBasis ? ` — ${option.nicheMarketBasis}` : "") +
+          (dflts.length ? ` [labeled default(s): ${dflts.join("; ")}]` : ""));
+      } else {
+        // No base eligible count to anchor a niche — leave the market at base rather than
+        // invent a multiplier. (Persist annual WAC at auto-value to enable re-derivation.)
+        peakSalesM = base.peakSalesM;
+        marketDrivers.push("niche not re-derived: base eligible-patient count unavailable (persist annual WAC to enable)");
+      }
+    } else {
+      peakSalesM = base.peakSalesM;
     }
 
-    // Apply inclusion criteria → label breadth
-    if (option.inclusionCriteria && option.inclusionCriteria !== "standard") {
-      peakSalesM *= INCLUSION_PEAK_SALES_MULT[option.inclusionCriteria];
+    // Added indications (2d/#10): SUM each added indication's OWN re-derived market
+    // (bottom-up) onto the lead — replaces a single LLM peakSalesMOverride lump.
+    if (option.addedIndicationMarkets?.length) {
+      let added = 0;
+      for (const m of option.addedIndicationMarkets) added += deriveMarket(m).peakSalesM;
+      peakSalesM += added;
+      marketDrivers.push(`+${option.addedIndicationMarkets.length} indication market(s) summed (bottom-up) → +$${added.toFixed(0)}M`);
     }
 
-    // Apply population type → label breadth (only when inclusionCriteria not also set,
-    // to avoid double-counting the same market-size effect)
-    if (
-      option.populationType &&
-      option.populationType !== base.baseTrialDesign.populationType &&
-      !option.inclusionCriteria
-    ) {
-      peakSalesM *= POPULATION_PEAK_SALES_MULT[option.populationType] ?? 1.0;
-    }
-
-    // Apply ownership/partnership
+    // Ownership/partnership scaling (legitimate share of a real market, not a scenario haircut).
     if (option.ownershipPct != null) {
       peakSalesM *= option.ownershipPct / 100;
     } else if (option.isOutlicensed && !base.ownerType.includes("Licensor")) {
-      // Out-licensing: only capture royalty × peak sales instead of full ownership
       const royalty = option.royaltyPctOverride ?? base.avgRoyalty;
       peakSalesM *= royalty;
     }
@@ -632,6 +676,7 @@ export function computeOption(
   if (!option.isBaseline && (option.comparatorType === "active" || option.nullResponseRateOverride != null)) {
     keyDrivers.push("Active comparator → harder efficacy bar (lower P of trial success)");
   }
+  for (const d of marketDrivers) keyDrivers.push(`Market: ${d}`);
   if (option.designType && option.designType !== base.baseTrialDesign.designType) {
     const from = base.baseTrialDesign.designType.replace("_", " ");
     const to   = option.designType.replace("_", " ");
@@ -641,9 +686,7 @@ export function computeOption(
     keyDrivers.push(`n: ${base.baseTrialDesign.n} → ${option.n}`);
   }
   if (option.inclusionCriteria && option.inclusionCriteria !== "standard") {
-    keyDrivers.push(
-      `${option.inclusionCriteria} inclusion → peak sales ×${INCLUSION_PEAK_SALES_MULT[option.inclusionCriteria]}`
-    );
+    keyDrivers.push(`${option.inclusionCriteria} inclusion → market re-derived (pool/price/share)`);
   }
   if (option.ownershipPct != null) {
     keyDrivers.push(`${option.ownershipPct}% ownership (costs + revenue)`);
@@ -761,6 +804,16 @@ export function buildBaseContext(
     devPlanPApproval:     devPlan?.pApproval ?? null,
     devPlanRiskAdjCostM:  devPlan?.totalRiskAdjCostM ?? null,
     baseTrialDesign,
+    // Base market (Build 1/1b): calibrate TAM+penetration so deriveMarket === base peak,
+    // and carry the eligible-patient COUNT + annual WAC as separate components (Build 1b)
+    // so a niche can be reasoned against real base anchors. eligiblePatients = tamM/price.
+    market: (() => {
+      const ind0 = v.indications?.[0];
+      const cal = calibrateBaseMarket(peakSalesRaw / 1e6, { tamM: ind0?.tamM, penetrationPct: ind0?.penetrationPct });
+      const annualPriceUsd = ind0?.annualPriceUsd && ind0.annualPriceUsd > 0 ? ind0.annualPriceUsd : undefined;
+      const eligiblePatients = annualPriceUsd ? (cal.tamM * 1e6) / annualPriceUsd : undefined;
+      return { ...cal, annualPriceUsd, eligiblePatients } as BaseMarket;
+    })(),
     ptrs:         out.ptrs,
     peakSalesM:   peakSalesRaw / 1e6,
     // Prefer the dev-plan engine's risk-adjusted cost over the stale devCostPV

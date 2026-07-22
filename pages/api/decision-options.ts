@@ -249,12 +249,29 @@ Step 2: After the closing tag, write your plain-language explanation.
 CRITICAL RULES — READ CAREFULLY
 ═══════════════════════════════
 
-RULE 1 — EVERY OPTION MUST MODEL THE FULL COMMERCIAL PICTURE.
-The engine computes eNPV = P(approval) × Revenue PV − Dev Cost for each option.
-If you change the indication, target population, label scope, or competitive landscape:
-  → You MUST set "peakSalesMOverride" to the estimated annual peak sales (in $M) for THAT option's market.
-  → You MUST set "devCostMOverride" to the estimated total dev cost (in $M) if the program scope changes materially.
-If you don't set these, the engine will use the baseline's $${ctx.peakSalesM?.toFixed(0) ?? "??"}M peak sales for ALL options, which is WRONG whenever the market opportunity changes.
+RULE 1 — THE ENGINE RE-DERIVES THE MARKET BOTTOM-UP FROM ABSOLUTE PARAMETERS. Never hand it a peak, and never a "factor on the base."
+The engine computes peak = eligible patients × annual WAC × peak share. For a niche/enriched or
+re-scoped market, give it the niche's OWN ABSOLUTE numbers (reasoned from real comparators), NOT
+a multiple of the base:
+  - "nicheEligiblePatients": the ABSOLUTE eligible-patient COUNT for the niche = (indication eligible
+      population) × (biomarker prevalence). Source the prevalence per asset where you can (e.g. PTCH1
+      mutations ~2% of the indication); compute and emit the resulting patient count.
+  - "nicheAnnualPriceUsd": an ABSOLUTE annual WAC ($/patient/yr) reasoned from PRECISION-THERAPY
+      COMPARABLES in this space (e.g. "targeted agents in this indication price ~$180,000/yr"). NOT
+      base price × a premium — an absolute dollar figure.
+  - "nichePeakSharePct": an ABSOLUTE peak share % reasoned from the niche's competitive dynamics
+      (companion-Dx targeting, less competition). NOT base penetration × a multiple.
+  - "nicheMarketBasis": ONE line stating the basis — the comparator name for the price, the
+      prevalence source for the count, and note any value you had to DEFAULT (e.g. "price default
+      $200k/yr — no niche comp found").
+  The engine computes net peak = count × price × share — which can land ABOVE or BELOW the base.
+  Do NOT assume enrichment lowers revenue; let it be computed from the absolutes.
+  - ADDED INDICATIONS → "addedIndicationMarkets": an array of { "tamM": <$M = eligible × annual WAC>,
+      "penetrationPct": <peak %> } — ONE entry per ADDED indication; the engine sums each indication's
+      own bottom-up market onto the lead. Do NOT lump them into a single peak override.
+  → devCostMOverride: still set the total dev cost (in $M) if program scope changes materially.
+"peakSalesMOverride" is a DEPRECATED escape hatch — only if you truly cannot express the market via
+the absolute parameters above. If you set nothing, the engine keeps the baseline market.
 
 RULE 2 — P(approval) IS COMPUTED BY THE ENGINE FROM YOUR STRUCTURED FIELDS. DO NOT hand it a number.
 The engine RE-RUNS the real stage-by-stage probability model for each option using the STRUCTURED
@@ -322,9 +339,16 @@ FULL OPTION SCHEMA
   "addedIndicationCount": number,            // indications ADDED beyond the lead (breadth → lower blended P)
   "addedIndicationsValidated": boolean,      // true only if added indications carry their own precedent
 
-  // ── Commercial overrides (CRITICAL — set whenever the market changes) ──
-  "peakSalesMOverride": number,    // annual peak sales in $M for THIS option's market
+  // ── Niche market ABSOLUTE parameters (engine RE-DERIVES peak bottom-up; NOT base × factor) ──
+  "nicheEligiblePatients": number, // absolute eligible-patient COUNT = indication eligible pop × prevalence
+  "nicheAnnualPriceUsd": number,   // absolute WAC $/yr from precision-therapy comparators (not base × premium)
+  "nichePeakSharePct": number,     // absolute peak share % from niche competitive dynamics (not base × mult)
+  "nicheMarketBasis": string,      // one line: price comp / prevalence source / any defaulted value
+  "addedIndicationMarkets": [{ "tamM": number, "penetrationPct": number }], // one per ADDED indication (summed)
+
+  // ── Commercial overrides ──
   "devCostMOverride": number,      // total dev cost in $M if program scope changes
+  "peakSalesMOverride": number,    // DEPRECATED escape hatch — prefer the market drivers above
   "ptrsOverride": number,          // DEPRECATED — ignored when a dev plan exists; do NOT use for probability
 
   // ── Partnership ──
@@ -348,9 +372,9 @@ User asks about KIO-301 indication expansion from RP (orphan) to larger retinal 
 <options_json>
 [
   {"id":"opt-a","name":"RP Orphan Path (Current)","isBaseline":true},
-  {"id":"opt-b","name":"Pivot to AMD — Single Arm","n":180,"designType":"single_arm","endpointType":"surrogate","regulatoryContext":"standard","peakSalesMOverride":1200,"devCostMOverride":180,"changesSummary":"Pivoted to AMD (larger market). Lost orphan status → standard pathway. Single-arm surrogate in a non-rare setting. Broader market, harder bar."},
-  {"id":"opt-c","name":"Pivot to AMD — Active-Comparator RCT","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","placeboResponse":"moderate","comparatorType":"active","peakSalesMOverride":1400,"devCostMOverride":350,"changesSummary":"Full RCT vs an active control in AMD. Credible but must beat an efficacious comparator — a harder efficacy bar. Larger market, higher cost."},
-  {"id":"opt-d","name":"RP + AMD Parallel Track","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","addedIndicationCount":1,"peakSalesMOverride":1750,"devCostMOverride":500,"changesSummary":"Run both RP (beachhead) and AMD (expansion) — one added, less-validated indication. Combined market and cost; breadth carries a lower blended program probability."}
+  {"id":"opt-b","name":"Biomarker-Enriched RP","populationType":"biomarker_selected","n":120,"nicheEligiblePatients":18000,"nicheAnnualPriceUsd":300000,"nichePeakSharePct":45,"nicheMarketBasis":"~18k biomarker+ RP patients (RPGR-mutation ~30% of ~60k RP); $300k/yr WAC per Luxturna-class gene/precision comps; 45% share (companion-Dx-targeted, low competition)","devCostMOverride":150,"changesSummary":"Enrich to the biomarker-positive RP subset — a smaller defined pool, but a precision niche (companion Dx) at a high absolute WAC and high peak share. The engine re-derives the net market from those absolutes (may be higher or lower than the broad label)."},
+  {"id":"opt-c","name":"AMD — Active-Comparator RCT","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","placeboResponse":"moderate","comparatorType":"active","nicheEligiblePatients":1200000,"nicheAnnualPriceUsd":25000,"nichePeakSharePct":12,"nicheMarketBasis":"~1.2M eligible wet-AMD patients; $25k/yr WAC per anti-VEGF comps (Eylea/Lucentis era); 12% share (crowded, competed market)","devCostMOverride":350,"changesSummary":"Pivot to broad AMD vs an active control: a large pool but a commoditized, competed market (modest absolute price and share), and must beat an efficacious comparator (harder efficacy bar)."},
+  {"id":"opt-d","name":"RP + AMD Parallel Track","n":400,"designType":"rct","endpointType":"hard","regulatoryContext":"standard","addedIndicationCount":1,"addedIndicationMarkets":[{"tamM":6000,"penetrationPct":18}],"devCostMOverride":500,"changesSummary":"Run both RP (beachhead) and AMD (expansion). AMD's own bottom-up market is summed onto RP; the added, less-validated indication also lowers the blended program probability."}
 ]
 </options_json>
 
