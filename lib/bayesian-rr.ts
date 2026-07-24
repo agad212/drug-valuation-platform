@@ -126,6 +126,13 @@ const POP_N_FACTOR: Record<PopulationType, number> = {
 // Endpoint type → effective sample size multiplier
 // Hard endpoints (OS, CR) are more reliably measured → cleaner signal.
 // PRO/subjective endpoints have investigator bias → noisier.
+//
+// ENDPOINT DOUBLE-COUNT SEPARATION (Build 3): this is ACHIEVABILITY — can the trial
+// statistically DETECT the endpoint (effective-n on TRIAL P). It is DISTINCT from
+// dev-plan.ts deriveRegConfidence's endpoint term, which is ACCEPTABILITY — will the
+// AGENCY accept the endpoint as an approval basis even if the trial hits it (reg gate).
+// A trial can cleanly hit a novel surrogate (high trial P here) yet still owe a
+// confirmatory study (lower reg acceptability there). The two never book the same fact.
 const ENDPOINT_N_FACTOR: Record<EndpointType, number> = {
   hard: 1.2,
   surrogate: 1.0,

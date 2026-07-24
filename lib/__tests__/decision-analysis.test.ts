@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDevPlan, type DevStageInput } from "../dev-plan";
+import { computeDevPlan, deriveRegConfidence, type DevStageInput } from "../dev-plan";
 import { mixtureFromMssVariance } from "../effect-prior";
 import { computeStageRR, computeStageSuccess } from "../bayesian-rr";
 import { computeRevenuePV } from "../cashflow";
@@ -363,5 +363,77 @@ describe("Strategy Advisor — biomarker enrichment shifts the effect prior", ()
     );
     expect(enriched.ptrs).toBeCloseTo(manual.pApproval, 6); // prior-shift only; broad design retained
     expect(enriched.ptrs).toBeGreaterThan(a.ptrs);          // still higher than baseline
+  });
+});
+
+// ─── Build 3: evidence-derived regulatory confidence (scenario-only) ────────────
+describe("Regulatory confidence — evidence-derived, scenario-only (Build 3)", () => {
+  const design = (o: Partial<TrialDesignInputs> = {}): TrialDesignInputs => ({
+    n: 200, endpointType: "surrogate", designType: "rct", populationType: "broad",
+    placeboResponse: "low", regulatoryContext: "standard", ...o,
+  });
+  const regStages = (): DevStageInput[] => [
+    stage({ trialDesign: design(), n: 200, nullResponseRate: 0.20 }),
+    stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 400, isCurrentTrial: false, trialDesign: design({ n: 400 }), nullResponseRate: 0.20 }),
+  ];
+  const plan = (regEndpoint?: { endpointType: any; endpointEvidenceBasis?: any }) =>
+    computeDevPlan(mixtureFromMssVariance(0.5, 0.2), 0.1,
+      { stages: regStages(), regulatoryContext: "standard", regCostM: 1.0, ...(regEndpoint ? { regEndpoint } : {}) }, 1000);
+
+  it("deriveRegConfidence: hard > CONFIRMED-surrogate(=base) > INFERRED-surrogate; designation preserved; bounded", () => {
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toBeCloseTo(0.85, 6); // base preserved
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "hard" })).toBeCloseTo(0.88, 6);                                          // +bonus
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" })).toBeCloseTo(0.73, 6);  // −penalty
+    expect(deriveRegConfidence({ designation: "btd", endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toBeCloseTo(0.92, 6);      // designation base flows through
+    expect(deriveRegConfidence({ designation: "confirmatory", endpointType: "hard" })).toBeCloseTo(0.97, 6);                                      // 0.95+0.03 → capped at 0.97
+  });
+
+  it("reg gate is SCENARIO-ONLY: base path keeps the flat lookup; regEndpoint switches to evidence-derived", () => {
+    expect(plan().regStage.pApproval).toBeCloseTo(0.85, 6);                                                    // no regEndpoint → flat REG_APPROVAL_PROB[standard]
+    expect(plan({ endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" }).regStage.pApproval).toBeCloseTo(0.73, 6);
+    expect(plan({ endpointType: "hard" }).regStage.pApproval).toBeCloseTo(0.88, 6);
+  });
+
+  it("reg MOVES on evidence, ORTHOGONAL to trial P (no double-count)", () => {
+    const flat = plan(), inferred = plan({ endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" }), hard = plan({ endpointType: "hard" });
+    // eslint-disable-next-line no-console
+    console.log(`[BUILD3] reg P: flat ${flat.regStage.pApproval} | INFERRED ${inferred.regStage.pApproval} | hard ${hard.regStage.pApproval}`);
+    // eslint-disable-next-line no-console
+    console.log(`[BUILD3] trial P (Ph2): flat ${flat.stages[0].trialSuccessProb} | INFERRED ${inferred.stages[0].trialSuccessProb} | hard ${hard.stages[0].trialSuccessProb}`);
+    expect(inferred.regStage.pApproval).toBeLessThan(flat.regStage.pApproval);
+    expect(hard.regStage.pApproval).toBeGreaterThan(flat.regStage.pApproval);
+    // endpoint-EVIDENCE-BASIS changes reg but NOT trial P (basis isn't an ENDPOINT_N_FACTOR input) → orthogonal
+    expect(inferred.stages[0].trialSuccessProb).toBeCloseTo(flat.stages[0].trialSuccessProb, 9);
+  });
+
+  it("SANITY: reg confidence alone can't carry a weak-evidence asset to a high P", () => {
+    const weak = computeDevPlan(
+      mixtureFromMssVariance(0.30, 0.13), 0.1,
+      { stages: [stage({ trialDesign: design({ regulatoryContext: "confirmatory" }), n: 40, nullResponseRate: 0.45 })], regulatoryContext: "confirmatory", regCostM: 1.0, regEndpoint: { endpointType: "hard" } },
+      1000,
+    );
+    expect(weak.regStage.pApproval).toBeLessThanOrEqual(0.97);  // bounded (cap holds)
+    expect(weak.pApproval).toBeLessThan(0.60);                  // pAllTrials gated by ceilings → best reg can't rescue it
+  });
+
+  it("OPTION path wires it via the SAME deriveRegConfidence (option == what-if)", () => {
+    // Base registration endpoint = surrogate (basis unset). An option that flips the
+    // registration endpoint's ACCEPTABILITY basis (→ INFERRED) changes ONLY reg (basis
+    // isn't a trial-P input), so the option's P scales by exactly the reg ratio.
+    const v: Valuation = {
+      asset: "REGDRUG", phase: "Phase 2", discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
+      indications: [{ id: "i1", name: "X", peakSales: 1000e6, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
+    };
+    const revenuePV = computeRevenuePV({ ...v, peakSales: 1000e6, launchYear: 2032, loeYear: 2044 });
+    const out = { ptrs: 0.4, revenuePV, devCostPV: 300e6, rnpv: 0 };
+    const devPlan = computeDevPlan(mixtureFromMssVariance(0.5, 0.2), 0.1, { stages: regStages(), regulatoryContext: "standard", regCostM: 1.0 }, revenuePV / 1e6);
+    const base = buildBaseContext(v, out, { mss: 0.5, variance: 0.2, ptrs: 0.4 }, { trialInputs: design() }, null, devPlan)!;
+    const A: OptionInputs = { id: "opt-a", name: "Baseline", isBaseline: true };
+    const a = computeOption(base, A);
+    const inferred = computeOption(base, { id: "b", name: "Inferred surrogate", endpointEvidenceBasis: "INFERRED" }, a);
+    expect(inferred.ptrs).toBeLessThan(a.ptrs - 1e-6);                       // reg down → P down
+    // The reg factor is EXACTLY deriveRegConfidence (shared mechanism): P scales by 0.73/0.85.
+    expect(inferred.ptrs / a.ptrs).toBeCloseTo(
+      deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" }) / 0.85, 4);
   });
 });

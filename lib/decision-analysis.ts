@@ -57,6 +57,9 @@ export type OptionInputs = {
   // ── Category 1: Trial Design ──────────────────────────────────────────────
   n?: number;                        // sample size
   endpointType?: EndpointType;       // "hard" | "surrogate" | "pro"
+  // Build 3: registration-endpoint acceptability signal for the reg-confidence model —
+  // "CONFIRMED" = FDA-accepted/precedented basis; "INFERRED" = novel/unvalidated surrogate.
+  endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
   designType?: DesignType;           // "rct" | "single_arm" | "basket"
   numArms?: 1 | 2 | 3 | "adaptive"; // explicit arm count (affects cost; maps to designType)
   populationType?: PopulationType;   // "biomarker_selected" | "broad" | "rare_small"
@@ -369,6 +372,7 @@ export function computeOption(
   let ptrsCI: { lower: number; upper: number };
   let enginePlanCostM: number | null = null;  // per-option risk-adjusted cost when the engine ran
   let priorShiftDriver: string | null = null; // Build 2: biomarker enrichment prior-shift audit line
+  let regDriver: string | null = null;         // Build 3: evidence-derived reg-confidence audit line
   const hasDevPlan = !!base.devPlanInputs?.stages?.length;
   const ciBand = (p: number) => ({
     lower: Math.max(0.01, p - base.ciHalfWidth),
@@ -440,6 +444,20 @@ export function computeOption(
       trialDesign: recomputeTrialDesign,
       ...(comparatorNull != null ? { nullResponseRate: comparatorNull } : {}),
     };
+    // ── Regulatory confidence (Build 3, scenario-only): if this option CHANGES the
+    // registration endpoint (type or evidence basis) vs the base registration trial,
+    // route the evidence-derived reg gate via regEndpoint. When unchanged, omit it so
+    // the flat REG_APPROVAL_PROB base rate governs (same as baseline → no discontinuity).
+    const planStages = base.devPlanInputs!.stages as DevStageInput[];
+    const regStageInput = planStages[planStages.length - 1]; // registration (last) trial
+    const baseRegEndpointType = regStageInput.trialDesign.endpointType;
+    const baseRegEndpointBasis = regStageInput.endpointEvidenceBasis;
+    const optRegEndpointType = option.endpointType ?? baseRegEndpointType;
+    const optRegEndpointBasis = option.endpointEvidenceBasis ?? baseRegEndpointBasis;
+    const regEndpoint =
+      optRegEndpointType !== baseRegEndpointType || optRegEndpointBasis !== baseRegEndpointBasis
+        ? { endpointType: optRegEndpointType, endpointEvidenceBasis: optRegEndpointBasis }
+        : undefined;
     const fullPlan = computeDevPlan(
       mixture,
       base.ciHalfWidth,
@@ -448,12 +466,19 @@ export function computeOption(
         regulatoryContext: base.devPlanInputs!.regulatoryContext,
         regCostM: base.devPlanInputs!.regCostM,
         modalityClassStatus: base.devPlanInputs!.modalityClassStatus,
+        ...(regEndpoint ? { regEndpoint } : {}),
       },
       0, // revenuePVM not needed — we use pApproval + totalRiskAdjCostM
     );
     ptrs = fullPlan.pApproval;
     ptrsCI = ciBand(ptrs);
     enginePlanCostM = fullPlan.totalRiskAdjCostM;
+    if (regEndpoint) {
+      regDriver =
+        `Reg confidence (evidence-derived): registration endpoint ${optRegEndpointType}` +
+        `${optRegEndpointType !== "hard" ? `/${optRegEndpointBasis ?? "INFERRED"}` : ""} → ` +
+        `P(approve|success) ${(fullPlan.regStage.pApproval * 100).toFixed(0)}% (endpoint acceptability, not trial power)`;
+    }
   } else if (option.isBaseline) {
     // Fallback when dev plan not yet computed — use stored combined PTRS.
     ptrs = base.ptrs;
@@ -733,6 +758,7 @@ export function computeOption(
     keyDrivers.push("Active comparator → harder efficacy bar (lower P of trial success)");
   }
   if (priorShiftDriver) keyDrivers.push(priorShiftDriver);
+  if (regDriver) keyDrivers.push(regDriver);
   for (const d of marketDrivers) keyDrivers.push(`Market: ${d}`);
   if (option.designType && option.designType !== base.baseTrialDesign.designType) {
     const from = base.baseTrialDesign.designType.replace("_", " ");

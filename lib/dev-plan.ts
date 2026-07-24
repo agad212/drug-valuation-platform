@@ -51,7 +51,14 @@ import {
 // ─── Regulatory approval probability ─────────────────────────────────────────
 // P(FDA/EMA approves | all clinical trials succeeded)
 // Based on industry data (DiMasi et al.; BioMedtracker FDA approval rates)
-
+//
+// DEBT (Build 3): this is the FLAT per-designation base rate and it governs the BASE
+// path (and the FROZEN tripwires — TTX 0.09993 / tau 0.26751 both embed 0.85). The
+// SCENARIO axis derives regulatory confidence from evidence via deriveRegConfidence()
+// below, which USES these values as its base rate and adjusts for endpoint acceptability.
+// Two representations of one quantity (flat base rate vs evidence-derived); making the
+// base path evidence-derived is a re-pin queued WITH the POP_N_FACTOR retirement — do NOT
+// change these values or the base-path lookup here.
 const REG_APPROVAL_PROB: Record<RegulatoryContext, number> = {
   standard:      0.85,
   fast_track:    0.85,  // Fast Track does NOT raise the approval probability (== standard)
@@ -61,6 +68,47 @@ const REG_APPROVAL_PROB: Record<RegulatoryContext, number> = {
   accelerated:   0.88,
   confirmatory:  0.95,
 };
+
+// ─── Evidence-derived regulatory confidence (Build 3, scenario-only) ─────────────
+// P(approve | trials succeeded) derived from the dossier's regulatory ACCEPTABILITY —
+// not a flat per-designation constant. It IS the conditional approval probability the
+// reg gate multiplies (pApproval = pAllTrials × this), computed from evidence, NOT a
+// bolt-on output multiplier. Clean, orthogonal inputs only (Build-3 decision 2):
+//   • designation base rate = REG_APPROVAL_PROB[designation] (grounded; preserved).
+//   • endpoint ACCEPTABILITY: a hard/clinical-outcome endpoint is the agency-preferred
+//     approval basis (+); a novel/INFERRED surrogate faces confirmatory-evidence /
+//     accelerated-then-verify risk (−); an FDA-accepted (CONFIRMED) surrogate is neutral.
+//
+// ENDPOINT DOUBLE-COUNT SEPARATION (mandatory): this endpoint term is ACCEPTABILITY —
+// "will the agency accept this endpoint as an approval basis even if the trial hits it."
+// It is DISTINCT from bayesian-rr.ts ENDPOINT_N_FACTOR, which is ACHIEVABILITY — "can the
+// trial statistically detect the surrogate" (effective-n on TRIAL P). A trial can cleanly
+// hit a novel surrogate (high trial P) yet still owe a confirmatory study (lower reg
+// acceptability). The two never book the same fact. (Comment mirrored at ENDPOINT_N_FACTOR.)
+//
+// Precedent (approvedInClass) is deliberately EXCLUDED — it already moves the Build-2
+// effect prior + the modality haircut; no third channel. Safety is deferred (no signal).
+// GROUNDED/BOUNDED: constants named; clamped to [FLOOR, CAP] so weak evidence can't
+// manufacture a high approval prob. Pinned to regulatory precedent, NOT a target P.
+const REG_ENDPOINT_HARD_BONUS = 0.03;                 // hard clinical-outcome: agency-preferred approval basis
+const REG_ENDPOINT_SURROGATE_INFERRED_PENALTY = 0.12; // novel/unvalidated surrogate: confirmatory-verify risk
+const REG_CONFIDENCE_FLOOR = 0.50;
+const REG_CONFIDENCE_CAP = 0.97;
+
+export function deriveRegConfidence(opts: {
+  designation: RegulatoryContext;
+  endpointType: EndpointType;
+  endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
+}): number {
+  const base = REG_APPROVAL_PROB[opts.designation] ?? 0.85; // grounded designation base rate (preserved)
+  let delta = 0;
+  if (opts.endpointType === "hard") {
+    delta = REG_ENDPOINT_HARD_BONUS;                        // clinical-outcome endpoint — most acceptable
+  } else if (opts.endpointEvidenceBasis !== "CONFIRMED") {
+    delta = -REG_ENDPOINT_SURROGATE_INFERRED_PENALTY;       // surrogate/PRO not FDA-accepted → verify risk
+  }                                                          // CONFIRMED (FDA-accepted) surrogate → neutral
+  return Math.max(REG_CONFIDENCE_FLOOR, Math.min(REG_CONFIDENCE_CAP, base + delta));
+}
 
 // ─── Regulatory review timeline ───────────────────────────────────────────────
 // Typical FDA review duration (months), submission to decision, by pathway.
@@ -251,6 +299,10 @@ export type DevPlanInputs = {
   // when undefined/false, an "orphan"/"btd_orphan" context is downgraded for engine
   // purposes so an unearned cross-indication designation can't inflate P(approval).
   orphanConfirmedForIndication?: boolean;
+  // Build 3 (SCENARIO-ONLY): when present, the reg gate uses deriveRegConfidence over
+  // this registration endpoint (evidence-derived P(approve|success)) instead of the flat
+  // REG_APPROVAL_PROB lookup. Absent (base path) → flat lookup → FROZEN byte-identical.
+  regEndpoint?: { endpointType: EndpointType; endpointEvidenceBasis?: "CONFIRMED" | "INFERRED" };
 };
 
 // Default null/control response rates by phase (when AI doesn't provide one)
@@ -547,7 +599,17 @@ export function computeDevPlan(
   // Fix B: reg-approval prob uses the orphan-GATED context (unearned orphan → no uplift).
   // Review months (timeline) stay on the ORIGINAL context so the P-impact stays isolated.
   const engineRegContext = gateOrphanForEngine(inputs.regulatoryContext, orphanConfirmed);
-  const pApprovalGivenSuccess = REG_APPROVAL_PROB[engineRegContext] ?? 0.85;
+  // Build 3 (SCENARIO-ONLY): if a registration endpoint is supplied, derive reg confidence
+  // from evidence (designation base rate × endpoint acceptability) via the ONE canonical
+  // deriveRegConfidence, using the orphan-GATED context so Fix B still holds. Absent
+  // (base path) → the flat REG_APPROVAL_PROB lookup, so FROZEN tripwires are byte-identical.
+  const pApprovalGivenSuccess = inputs.regEndpoint
+    ? deriveRegConfidence({
+        designation: engineRegContext,
+        endpointType: inputs.regEndpoint.endpointType,
+        endpointEvidenceBasis: inputs.regEndpoint.endpointEvidenceBasis,
+      })
+    : (REG_APPROVAL_PROB[engineRegContext] ?? 0.85);
   const regCostM  = inputs.regCostM ?? 1.0;
   const reviewMonths = REVIEW_MONTHS_BY_REG_CONTEXT[inputs.regulatoryContext] ?? 12;
   const regStage: RegStage = {
