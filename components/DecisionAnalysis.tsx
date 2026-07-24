@@ -904,7 +904,7 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
 
               <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
                 eNPV = P(approval) × Revenue PV − Dev Cost PV · eROI = eNPV / Dev Cost · Marginal eROI = ΔeNPV / |ΔDev Cost| vs Option A ·
-                P(approval) recalculated per option via full multi-stage development plan · Dev cost = CPP × n per patient · Biomarker-selected population: peak sales ×0.70 · Broad population: ×1.15 · Tight inclusion: ×0.70 · Broad inclusion: ×1.20
+                P(approval) recalculated per option via full multi-stage development plan · Dev cost = CPP × n per patient · Peak sales re-derived bottom-up per scenario: eligible patients × annual WAC × peak share % (not a multiple of the base peak)
               </div>
             </>
           )}
