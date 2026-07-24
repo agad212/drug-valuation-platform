@@ -22,7 +22,7 @@
 // This file is PURE MATH: no API calls, no React, no side effects.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { normalCDF } from "./effect-prior";
+import { normalCDF, enrichEffectPrior, DEFAULT_ENRICHMENT_LIFT } from "./effect-prior";
 import type { EffectPriorMixture } from "./effect-prior";
 import type {
   EndpointType,
@@ -110,6 +110,13 @@ const GRID_STEP = (GRID_MAX - GRID_MIN) / (GRID_SIZE - 1);
 // Population type → effective sample size multiplier
 // Biomarker-selected populations are cleaner (less noise), so the same n
 // gives more statistical information. Rare/small populations are noisier.
+//
+// DEBT (Build 2): this is the BASE-PATH representation of biomarker enrichment
+// (effective-n / power), and it is baked into the FROZEN tripwires (e.g. TTX-MC138's
+// biomarker Ph2a → 0.09993). The SCENARIO axis models the SAME phenomenon upstream via
+// effect-prior.ts enrichEffectPrior (a truth-curve shift). Two representations of one
+// phenomenon; POP_N_FACTOR retirement + a frozen re-pin is queued as its own build —
+// do NOT modify this table here (it would move the tripwires).
 const POP_N_FACTOR: Record<PopulationType, number> = {
   biomarker_selected: 1.3,
   broad: 1.0,
@@ -699,6 +706,7 @@ export function generateCounterfactuals(
   design: RRTrialDesign,
   basePSuccess: number,
   comparatorSigma2: number = 0,
+  gaussianMixture?: EffectPriorMixture,  // Build 2: biomarker what-if shifts the PRIOR (needs the mixture)
 ): { label: string; pSuccess: number }[] {
   const results: { label: string; pSuccess: number }[] = [];
 
@@ -728,13 +736,25 @@ export function generateCounterfactuals(
   const alt3 = computeCounterfactual(priorGrid, n, harderNull, design);
   results.push({ label: `If null RR were ${(harderNull * 100).toFixed(0)}% (harder bar)`, pSuccess: alt3 });
 
-  // 4. What if population were different?
-  if (design.populationType === "biomarker_selected") {
+  // 4. What if the population were biomarker-enriched? (Build 2)
+  // Enrichment shifts the effect PRIOR upstream (μ↑ / σ² tighter) — the same
+  // mechanism the per-option recompute uses (effect-prior.ts enrichEffectPrior) — so
+  // the two paths agree at stage level. The integral over the shifted prior computes
+  // the higher P; the design's populationType is NOT flipped (no POP_N_FACTOR double-
+  // count). Only when the base is not already biomarker-selected and we have the
+  // mixture to shift; otherwise fall back to the (pre-Build-2) effective-n view.
+  if (design.populationType !== "biomarker_selected") {
+    if (gaussianMixture) {
+      const enrichedGrid = betaToGrid(mixtureToBeta(enrichEffectPrior(gaussianMixture, DEFAULT_ENRICHMENT_LIFT)));
+      const alt = computeStageSuccess(enrichedGrid, n, nullRR, design, comparatorSigma2);
+      results.push({ label: "If biomarker-selected population", pSuccess: alt });
+    } else {
+      const alt = computeCounterfactual(priorGrid, n, nullRR, { ...design, populationType: "biomarker_selected" });
+      results.push({ label: "If biomarker-selected population", pSuccess: alt });
+    }
+  } else {
     const alt = computeCounterfactual(priorGrid, n, nullRR, { ...design, populationType: "broad" });
     results.push({ label: "If broad population (not biomarker-selected)", pSuccess: alt });
-  } else if (design.populationType === "broad") {
-    const alt = computeCounterfactual(priorGrid, n, nullRR, { ...design, populationType: "biomarker_selected" });
-    results.push({ label: "If biomarker-selected population", pSuccess: alt });
   }
 
   // Only include counterfactuals that meaningfully differ from base
@@ -823,7 +843,7 @@ export function computeStageRR(
 
   // 6. Counterfactual ablations (use effective threshold)
   const counterfactuals = generateCounterfactuals(
-    priorGrid, n, effectiveNull, design, trialSuccessProb, comparatorSigma2,
+    priorGrid, n, effectiveNull, design, trialSuccessProb, comparatorSigma2, gaussianMixture,
   );
 
   // 7. Build comparator distribution curve for display

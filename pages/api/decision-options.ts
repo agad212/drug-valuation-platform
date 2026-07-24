@@ -309,7 +309,13 @@ RULE 5 — Only set fields that CHANGE from the baseline — leave everything el
 RULE 6 — Be realistic. Think like a pharma executive, not an optimizer.
   - Out-licensing: isOutlicensed + royaltyPctOverride (0–1)
   - VOI studies: isVOI:true with voiCostM, voiMonths, voiProbPositive
-  - Biomarker selection: populationType:"biomarker_selected" + smaller n + inclusionCriteria:"tight"
+  - BIOMARKER / responder enrichment — you MUST signal it with the biomarker field, NOT with tightness:
+    set "populationType":"biomarker_selected" (and "biomarkerPrevalence" = the responder fraction when
+    you know it). This is what tells the engine to CONCENTRATE THE EFFECT (raise P via the prior) and to
+    re-derive the niche market. Do NOT rely on inclusionCriteria:"tight" to convey biomarker selection.
+  - GENERIC narrowing that is NOT biomarker (by disease severity, line of therapy, age, geography):
+    use "inclusionCriteria":"tight". This shrinks the eligible COUNT (market) only — it does NOT
+    concentrate the effect and must NOT be used to imply a responder-enriched population.
   - Active-comparator head-to-head: comparatorType:"active" (harder bar → engine lowers P)
   - Indication expansion / parallel programs: set addedIndicationCount (+ peakSalesMOverride for the
     COMBINED market, devCostMOverride for the COMBINED cost). The engine lowers the blended program P

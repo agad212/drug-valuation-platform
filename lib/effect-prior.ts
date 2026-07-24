@@ -234,6 +234,39 @@ export function mixtureFromMssVariance(mss: number, variance: number): EffectPri
   return [{ w: 1, mu: mss * 2, sigma2: Math.max(variance, MIN_SIGMA2) }];
 }
 
+// ─── Biomarker enrichment: shift the effect prior UPSTREAM (Build 2) ──────────────
+// Enriching to a biomarker-positive / defined-responder population removes non-
+// responders, so the TRUTH CURVE for the enriched population shifts toward a larger,
+// more certain effect: μ rises (responder concentration) and σ² tightens modestly
+// (lower inter-patient heterogeneity). The existing stage integral over this shifted
+// prior then computes a higher P — an UPSTREAM cause, not a multiplier on the output.
+//
+// `enrichmentFactor` is a GROUNDED, NAMED, BOUNDED, ZEROABLE input: the fractional
+// effect concentration for THIS asset, pinned to its biomarker-subgroup data or analog
+// precedent (a labeled estimate + hard bound when unknown). f ≤ 0 (no enrichable
+// rationale) → mixture returned UNCHANGED → baseline P. It feeds real math (μ/σ²) and
+// is NOT reverse-engineered to a target P; the base-rate ceilings + modality haircut
+// downstream still gate the result (a graveyard-class Ph2 cannot be enriched to ~99%).
+//
+// DEBT (Build 2): biomarker enrichment is TEMPORARILY represented two ways — POP_N_FACTOR
+// (effective-n) in the FROZEN base path (bayesian-rr.ts rrTrialPower) and this prior-
+// shift on the SCENARIO axis. Both lift P in the same direction; POP_N_FACTOR retirement
+// + frozen re-pin is queued as its own build. Do NOT unify or re-pin here.
+export const DEFAULT_ENRICHMENT_LIFT = 0.30;  // +30% effect concentration — biomarker-subgroup precedent (ITT→responder subgroup effect ≈1.3–1.5×); labeled default when no asset-specific factor
+export const MAX_ENRICHMENT_LIFT = 0.60;      // hard bound: enrichment alone cannot manufacture an absurd effect/P
+
+export function enrichEffectPrior(mixture: EffectPriorMixture, enrichmentFactor: number): EffectPriorMixture {
+  if (!(enrichmentFactor > 0)) return mixture; // f ≤ 0 / NaN / no enrichable rationale → baseline (unchanged)
+  const f = Math.min(enrichmentFactor, MAX_ENRICHMENT_LIFT);
+  const muLift = 1 + f;              // μ is PRIMARY: responder concentration raises the true effect
+  const sigmaTighten = 1 - 0.3 * f;  // σ² CONSERVATIVE: modest heterogeneity reduction, NOT tuned to a P
+  return mixture.map((c) => ({
+    w: c.w,
+    mu: c.mu * muLift,
+    sigma2: Math.max(MIN_SIGMA2, c.sigma2 * sigmaTighten),
+  }));
+}
+
 /**
  * Collapse a mixture to a single (mss, variance) pair via the law of total
  * variance:

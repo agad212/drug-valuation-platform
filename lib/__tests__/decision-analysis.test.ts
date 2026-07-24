@@ -3,8 +3,9 @@ import { computeDevPlan, type DevStageInput } from "../dev-plan";
 import { mixtureFromMssVariance } from "../effect-prior";
 import { computeStageRR, computeStageSuccess } from "../bayesian-rr";
 import { computeRevenuePV } from "../cashflow";
-import { buildBaseContext, computeOption, programBreadthMultiplier, type OptionInputs } from "../decision-analysis";
+import { buildBaseContext, computeOption, programBreadthMultiplier, isBiomarkerEnriched, type OptionInputs } from "../decision-analysis";
 import { deriveMarket, deriveEnrichedNiche, nicheIdentityHolds } from "../market-model";
+import { enrichEffectPrior, mixtureMoments, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "../effect-prior";
 import type { TrialDesignInputs } from "../ptrs-trial";
 import type { Valuation } from "../types";
 
@@ -228,13 +229,12 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
   it("prevalence-only enrichment derives the COUNT from base eligible, price/share are absolute defaults", () => {
     const { base } = mkMarketBase(); // base eligible = 4000M/$100k = 40,000
     const a = computeOption(base, A);
-    // A PURE market change (prevalence only, NO design/population change) → market re-derives,
-    // probability is untouched. (A real biomarker option would ALSO set populationType, which
-    // legitimately moves P via the design lever — tested separately in the per-option-P block.)
-    const bio = computeOption(base, { id: "b", name: "Biomarker market", biomarkerPrevalence: 0.25 }, a);
+    // biomarkerPrevalence is a canonical enrichment signal → it re-derives the MARKET count
+    // AND (Build 2) shifts the effect prior, so ONE signal moves both axes (the unification).
+    const bio = computeOption(base, { id: "b", name: "Biomarker", biomarkerPrevalence: 0.25 }, a);
     // count = 40,000 × 0.25 = 10,000; × $200k default × 35% default = $700M.
-    expect(bio.peakSalesM).toBeCloseTo(700, 0);
-    expect(bio.ptrs).toBeCloseTo(a.ptrs, 6); // REVENUE-ONLY: pure market change doesn't move P
+    expect(bio.peakSalesM).toBeCloseTo(700, 0);   // market re-derived (unchanged from Build 1b)
+    expect(bio.ptrs).toBeGreaterThan(a.ptrs);      // Build 2: same signal also lifts P via the shifted prior
   });
 
   it("added indications SUM their own bottom-up markets onto the lead (unchanged from Build 1)", () => {
@@ -248,5 +248,120 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     const { base } = mkMarketBase();
     const a = computeOption(base, A);
     expect(computeOption(base, { id: "b", name: "Single-arm", designType: "single_arm" }, a).peakSalesM).toBeCloseTo(base.peakSalesM, 6);
+  });
+});
+
+// ─── Build 2: biomarker enrichment shifts the effect PRIOR upstream (not frozen, not ×P) ─
+describe("Strategy Advisor — biomarker enrichment shifts the effect prior", () => {
+  const broadDesign: TrialDesignInputs = {
+    n: 200, endpointType: "surrogate", designType: "rct",
+    populationType: "broad", placeboResponse: "moderate", regulatoryContext: "standard",
+  };
+  const rr = { designType: "rct" as const, endpointType: "surrogate" as const, populationType: "broad" as const, regulatoryContext: "standard" as const, n: 200 };
+  function mkBase(mss = 0.5, variance = 0.2) {
+    const v: Valuation = {
+      asset: "ENRDRUG", phase: "Phase 2", discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
+      // market components so the market re-derivation has a base eligible count (tamM/$price)
+      indications: [{ id: "i1", name: "IPF", peakSales: 1000e6, tamM: 4000, penetrationPct: 25, annualPriceUsd: 100000, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
+    };
+    const revenuePV = computeRevenuePV({ ...v, peakSales: 1000e6, launchYear: 2032, loeYear: 2044 });
+    const out = { ptrs: 0.4, revenuePV, devCostPV: 300e6, rnpv: 0 };
+    const stages: DevStageInput[] = [
+      stage({ trialDesign: broadDesign, n: 200, nullResponseRate: 0.20 }),
+      stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 400, isCurrentTrial: false, trialDesign: { ...broadDesign, n: 400 }, nullResponseRate: 0.20 }),
+    ];
+    const devPlan = computeDevPlan(mixtureFromMssVariance(mss, variance), 0.1, { stages, regulatoryContext: "standard", regCostM: 1.0 }, revenuePV / 1e6);
+    const base = buildBaseContext(v, out, { mss, variance, ptrs: 0.4 }, { trialInputs: broadDesign }, null, devPlan)!;
+    return { base, stages, revenuePVM: revenuePV / 1e6 };
+  }
+  const A: OptionInputs = { id: "opt-a", name: "Baseline", isBaseline: true };
+
+  it("enrichEffectPrior MOVES the truth curve (μ↑, σ² tighter); f≤0 is a no-op", () => {
+    const m = mixtureFromMssVariance(0.4, 0.2); // μ 0.80, σ² 0.20
+    const before = mixtureMoments(m);
+    const after = mixtureMoments(enrichEffectPrior(m, 0.3));
+    // eslint-disable-next-line no-console
+    console.log(`[BUILD2] prior shift: μ ${(before.mss * 2).toFixed(3)}→${(after.mss * 2).toFixed(3)}, σ² ${before.variance.toFixed(3)}→${after.variance.toFixed(3)}`);
+    expect(after.mss * 2).toBeGreaterThan(before.mss * 2);   // μ rises (responder concentration)
+    expect(after.variance).toBeLessThan(before.variance);     // σ² tightens (less heterogeneity)
+    expect(enrichEffectPrior(m, 0)).toEqual(m);               // f=0 → unchanged (baseline)
+    expect(enrichEffectPrior(m, -1)).toEqual(m);              // f<0 → unchanged
+  });
+
+  it("GROUNDED + BOUNDED: a huge factor is capped at MAX (μ can't blow up)", () => {
+    const m = mixtureFromMssVariance(0.5, 0.2);
+    expect(mixtureMoments(enrichEffectPrior(m, 999)).mss).toBeCloseTo(mixtureMoments(enrichEffectPrior(m, MAX_ENRICHMENT_LIFT)).mss, 9);
+  });
+
+  it("SANITY: enrichment alone cannot carry a weak/graveyard-class prior to ~99%", () => {
+    const weak = mixtureFromMssVariance(0.31, 0.13); // tau-like, low μ
+    const p = computeStageRR(enrichEffectPrior(weak, 999), 200, 0.20, rr).trialSuccessProb;
+    expect(p).toBeLessThan(0.90); // ceiling/bound hold — nowhere near 0.99
+  });
+
+  it("CONSISTENCY: the what-if biomarker branch IS enrichEffectPrior over the same prior (shared machinery)", () => {
+    const m = mixtureFromMssVariance(0.45, 0.15);
+    const r = computeStageRR(m, 200, 0.20, rr);
+    const whatIf = r.counterfactuals.find((c) => /biomarker-selected/i.test(c.label))!.pSuccess;
+    // Independently: enrich the prior, then run the SAME stage-success integral.
+    const enrichedGrid = computeStageRR(enrichEffectPrior(m, DEFAULT_ENRICHMENT_LIFT), 200, 0.20, rr).priorGrid;
+    const manual = computeStageSuccess(enrichedGrid, 200, r.effectiveNullRR, rr);
+    expect(whatIf).toBeCloseTo(manual, 9);                 // what-if == enriched-prior stage success
+    expect(whatIf).toBeGreaterThan(r.trialSuccessProb);    // and higher than the un-enriched base
+  });
+
+  it("OPTION: biomarker enrichment raises P off baseline (the 61% fix); f=0 → baseline; ONE predicate unifies", () => {
+    const { base } = mkBase();
+    const a = computeOption(base, A);
+    const enriched = computeOption(base, { id: "b", name: "Biomarker", populationType: "biomarker_selected" }, a);
+    expect(enriched.ptrs).toBeGreaterThan(a.ptrs + 1e-6);  // P moved via the shifted prior — no longer frozen
+    // f=0 (no concentration rationale) → baseline P (zeroable)
+    const noLift = computeOption(base, { id: "c", name: "No-lift", populationType: "biomarker_selected", enrichmentEffectLift: 0 }, a);
+    expect(noLift.ptrs).toBeCloseTo(a.ptrs, 6);
+    // predicate = BIOMARKER-SPECIFIC only: populationType / biomarkerPrevalence<1 / explicit lift.
+    // Generic tightness and broadening are NOT enrichment (must not lift μ).
+    expect(isBiomarkerEnriched({ id: "x", name: "x", populationType: "biomarker_selected" })).toBe(true);
+    expect(isBiomarkerEnriched({ id: "x", name: "x", biomarkerPrevalence: 0.3 })).toBe(true);
+    expect(isBiomarkerEnriched({ id: "x", name: "x", inclusionCriteria: "tight" })).toBe(false); // generic narrowing ≠ biomarker
+    expect(isBiomarkerEnriched({ id: "x", name: "x", populationType: "broad" })).toBe(false);
+  });
+
+  it("PATCH: generic tight narrowing moves the MARKET but NOT P (no free effect lift)", () => {
+    const { base } = mkBase();
+    const a = computeOption(base, A);
+    // inclusionCriteria:"tight" with NO biomarker signal → severity/line/age/geography narrowing.
+    const tight = computeOption(base, { id: "b", name: "Tight (severity)", inclusionCriteria: "tight" }, a);
+    expect(tight.ptrs).toBeCloseTo(a.ptrs, 6);                        // P (μ) UNCHANGED — the bug fix
+    expect(tight.peakSalesM).not.toBeCloseTo(base.peakSalesM, 1);     // market (count) still re-derives
+    // Contrast: a real biomarker option DOES lift P.
+    const bio = computeOption(base, { id: "c", name: "Biomarker", populationType: "biomarker_selected" }, a);
+    expect(bio.ptrs).toBeGreaterThan(a.ptrs + 1e-6);
+  });
+
+  it("PATCH: enrichment lift is SIZED by responder prevalence (0.10 ≠ 0.90, not a flat +0.30)", () => {
+    const { base } = mkBase();
+    const rare = computeOption(base, { id: "b", name: "Rare responders", biomarkerPrevalence: 0.10 }, undefined);
+    const common = computeOption(base, { id: "c", name: "Common responders", biomarkerPrevalence: 0.90 }, undefined);
+    // A rarer responder subset concentrates the effect MORE → larger lift → higher P.
+    expect(rare.ptrs).toBeGreaterThan(common.ptrs + 1e-6);
+    // And the μ shift itself differs (bounded): 0.10 hits the MAX cap, 0.90 is well below DEFAULT.
+    const m = mixtureFromMssVariance(0.5, 0.2);
+    const fRare = Math.min(MAX_ENRICHMENT_LIFT, DEFAULT_ENRICHMENT_LIFT * (0.35 / 0.10));   // capped 0.60
+    const fCommon = DEFAULT_ENRICHMENT_LIFT * (0.35 / 0.90);                                 // ≈0.117
+    expect(mixtureMoments(enrichEffectPrior(m, fRare)).mss).toBeGreaterThan(mixtureMoments(enrichEffectPrior(m, fCommon)).mss);
+  });
+
+  it("NO DOUBLE-COUNT: enrichment shifts the prior ONLY — it does not also flip POP_N_FACTOR", () => {
+    const { base, stages, revenuePVM } = mkBase();
+    const a = computeOption(base, A);
+    const enriched = computeOption(base, { id: "b", name: "Biomarker", populationType: "biomarker_selected" }, a);
+    // Reconstruct the recompute the option SHOULD do: enriched prior + BASE (broad) design
+    // stages (no POP_N_FACTOR flip). If the option also flipped POP_N_FACTOR, it would be higher.
+    const manual = computeDevPlan(
+      enrichEffectPrior(mixtureFromMssVariance(0.5, 0.2), DEFAULT_ENRICHMENT_LIFT),
+      0.1, { stages, regulatoryContext: "standard", regCostM: 1.0 }, revenuePVM,
+    );
+    expect(enriched.ptrs).toBeCloseTo(manual.pApproval, 6); // prior-shift only; broad design retained
+    expect(enriched.ptrs).toBeGreaterThan(a.ptrs);          // still higher than baseline
   });
 });

@@ -16,7 +16,7 @@
 
 import { scoreLayer2, computeTrialNoise } from "./ptrs-trial";
 import { computeRevenuePV } from "./cashflow";
-import { mixtureFromMssVariance, mixtureSuccessProbability } from "./effect-prior";
+import { mixtureFromMssVariance, mixtureSuccessProbability, mixtureMoments, enrichEffectPrior, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "./effect-prior";
 import { computeDevPlan } from "./dev-plan";
 import {
   deriveMarket, calibrateBaseMarket, deriveEnrichedNiche,
@@ -89,6 +89,11 @@ export type OptionInputs = {
   // eligible count from the base eligible pop when an absolute count isn't supplied.
   biomarkerPrevalence?: number;    // 0–1 (or >1 to broaden): eligible-pool fraction vs base
   nicheMarketBasis?: string;       // one-line basis (comp / prevalence source / labeled default)
+  // Build 2 — effect-concentration factor for the enriched (biomarker+) population:
+  // the fractional μ lift the responder subset shows vs the ITT population (pinned to
+  // the drug's biomarker-subgroup data / analog precedent; labeled estimate + bounded
+  // when unknown; 0 → no concentration → baseline P). Feeds enrichEffectPrior upstream.
+  enrichmentEffectLift?: number;
   // Added indications' OWN re-derived markets (bottom-up), summed with the lead —
   // replaces a single LLM peakSalesMOverride for a multi-indication program.
   addedIndicationMarkets?: MarketParams[];
@@ -317,6 +322,22 @@ export function programBreadthMultiplier(option: OptionInputs): { mult: number; 
   };
 }
 
+// ─── Canonical biomarker-enrichment predicate (Build 2, patched) ────────────────
+// "Is this option a BIOMARKER / defined-RESPONDER enrichment?" — the signal that
+// concentrates the EFFECT and therefore shifts the effect prior (μ↑/σ² tighter).
+// BIOMARKER-SPECIFIC signals ONLY. inclusionCriteria:"tight" is DELIBERATELY excluded:
+// generic narrowing (severity / line-of-therapy / age / geography) shrinks the eligible
+// COUNT (a market effect) but does NOT concentrate the effect, so it must never raise μ
+// — otherwise any tight option gets a free effect lift through the integral. The market
+// re-derivation still responds to inclusionCriteria (count) separately; the two axes
+// agree on ENRICHMENT but stop treating generic tightness as enrichment. Broadening
+// (populationType "broad" / prevalence ≥ 1) is excluded.
+export function isBiomarkerEnriched(option: OptionInputs): boolean {
+  return option.populationType === "biomarker_selected"
+    || option.enrichmentEffectLift != null
+    || (option.biomarkerPrevalence != null && option.biomarkerPrevalence < 1);
+}
+
 // ─── Core Calculation ─────────────────────────────────────────────────────────
 
 export function computeOption(
@@ -347,6 +368,7 @@ export function computeOption(
   let ptrs: number;
   let ptrsCI: { lower: number; upper: number };
   let enginePlanCostM: number | null = null;  // per-option risk-adjusted cost when the engine ran
+  let priorShiftDriver: string | null = null; // Build 2: biomarker enrichment prior-shift audit line
   const hasDevPlan = !!base.devPlanInputs?.stages?.length;
   const ciBand = (p: number) => ({
     lower: Math.max(0.01, p - base.ciHalfWidth),
@@ -367,7 +389,35 @@ export function computeOption(
     // Re-run the full multi-stage development plan with this option's trial
     // design replacing stage 0 — the correct multi-stage P(approval) AND the
     // bottom-up risk-adjusted cost for THIS option's design.
-    const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
+    let mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
+    // ── Biomarker enrichment (Build 2): shift the effect PRIOR upstream ──────────
+    // When the option enriches to a defined-responder population (and the base isn't
+    // already biomarker-selected), concentrate the effect prior (μ↑/σ² tighter) BEFORE
+    // computeDevPlan builds the grid — the integral then computes the higher P. This is
+    // the ONLY biomarker→P channel: we SUPPRESS the POP_N_FACTOR flip (keep the stage
+    // design's populationType at base) so biomarker is not double-counted. Same
+    // enrichEffectPrior mechanism as the what-if → the two agree at stage level.
+    const enrichable = isBiomarkerEnriched(option) && base.baseTrialDesign.populationType !== "biomarker_selected";
+    // SIZE the lift from the responder fraction when known: concentration ∝ 1/prevalence
+    // (a rarer responder subset concentrates the effect MORE). Anchored so f = DEFAULT at
+    // the reference prevalence, bounded by MAX; explicit enrichmentEffectLift always wins;
+    // no prevalence → DEFAULT fallback. Pinned to the concentration rationale, NOT a target P.
+    const enrichmentLift = !enrichable
+      ? 0
+      : option.enrichmentEffectLift != null
+        ? option.enrichmentEffectLift
+        : (option.biomarkerPrevalence != null && option.biomarkerPrevalence > 0
+            ? Math.min(MAX_ENRICHMENT_LIFT, DEFAULT_ENRICHMENT_LIFT * (BIOMARKER_PREVALENCE_DEFAULT / option.biomarkerPrevalence))
+            : DEFAULT_ENRICHMENT_LIFT);
+    if (enrichable && enrichmentLift > 0) {
+      const before = mixtureMoments(mixture);
+      mixture = enrichEffectPrior(mixture, enrichmentLift);
+      const after = mixtureMoments(mixture);
+      priorShiftDriver =
+        `Biomarker enrichment → effect prior shifted (μ ${(before.mss * 2).toFixed(2)}→${(after.mss * 2).toFixed(2)}, ` +
+        `σ² ${before.variance.toFixed(2)}→${after.variance.toFixed(2)}; lift ×${(1 + enrichmentLift).toFixed(2)}` +
+        `${option.enrichmentEffectLift == null ? ", grounded default" : ""}) → higher P via the integral`;
+    }
     // Comparator (2a): route an active-comparator harder bar into the gating stage's
     // control response rate so the engine recomputes a LOWER P from it. Explicit
     // override wins; else an "active" comparator lifts the base stage's nullResponseRate.
@@ -379,10 +429,15 @@ export function computeOption(
         : (option.comparatorType === "active"
             ? Math.min(0.9, baseNull + ACTIVE_COMPARATOR_NULL_BUMP)
             : undefined);
+    // Prior-shift is the sole enrichment channel → force the stage design's
+    // populationType back to base so biomarker enrichment never also flips POP_N_FACTOR.
+    const recomputeTrialDesign = enrichable
+      ? { ...trialDesign, populationType: base.baseTrialDesign.populationType }
+      : trialDesign;
     const stage0Override: DevStageInput = {
       ...baseStage0,
       n: trialDesign.n,
-      trialDesign,
+      trialDesign: recomputeTrialDesign,
       ...(comparatorNull != null ? { nullResponseRate: comparatorNull } : {}),
     };
     const fullPlan = computeDevPlan(
@@ -455,12 +510,13 @@ export function computeOption(
     // is INDEPENDENT of the base peak (the decoupling property proven in the tests).
     const explicitNicheParams =
       option.nicheEligiblePatients != null || option.nicheAnnualPriceUsd != null || option.nichePeakSharePct != null;
-    const enriches =
-      (option.populationType === "biomarker_selected" && base.baseTrialDesign.populationType !== "biomarker_selected") ||
-      option.inclusionCriteria === "tight" ||
-      option.biomarkerPrevalence != null;
+    // The MARKET (count/price/share) responds to biomarker enrichment AND to generic
+    // inclusion tightening (severity/line/age/geography) — both change the eligible pool.
+    // The prior-shift (P) is gated on isBiomarkerEnriched ONLY, so generic tightness moves
+    // the market but NOT μ. Enrichment still moves both; they agree on enrichment.
+    const marketChanging = isBiomarkerEnriched(option) || option.inclusionCriteria === "tight";
 
-    if (explicitNicheParams || enriches) {
+    if (explicitNicheParams || marketChanging) {
       // Eligible COUNT: an explicit absolute wins; else derive it from the base eligible
       // pop × the biomarker prevalence (prevalence is a real driver of the COUNT — allowed).
       const nicheEligiblePatients =
@@ -676,6 +732,7 @@ export function computeOption(
   if (!option.isBaseline && (option.comparatorType === "active" || option.nullResponseRateOverride != null)) {
     keyDrivers.push("Active comparator → harder efficacy bar (lower P of trial success)");
   }
+  if (priorShiftDriver) keyDrivers.push(priorShiftDriver);
   for (const d of marketDrivers) keyDrivers.push(`Market: ${d}`);
   if (option.designType && option.designType !== base.baseTrialDesign.designType) {
     const from = base.baseTrialDesign.designType.replace("_", " ");
