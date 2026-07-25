@@ -95,11 +95,23 @@ export type Layer2Result = {
 // ─── Parameter tables ─────────────────────────────────────────────────────────
 // Each multiplier adjusts σ²_trial. >1.0 = more noise = harder to detect effect.
 
-const ENDPOINT_NOISE: Record<EndpointType, number> = {
-  hard:      0.80,  // concrete, objective, low measurement error
-  surrogate: 1.00,  // baseline reference
-  pro:       1.45,  // subjective, high placebo response, regression to mean
+// Endpoint-semantics pass: ENDPOINT_NOISE (the endpoint categorical σ²_trial factor) was
+// NEUTRALIZED — computeTrialNoise no longer reads it, so endpoint TYPE no longer moves the
+// Layer-2 noise score (same a-priori-categorical anti-pattern as bayesian-rr's deleted
+// ENDPOINT_N_FACTOR). The table is RETAINED-BUT-INERT (not deleted) because the Layer-2
+// card still renders trialSuccessProb/layer2Multiplier transiently before the effect-prior
+// chain loads (index.tsx:2211), and generateBimodalVoiOption reuses computeTrialNoise for
+// bimodal assets; retention keeps those legacy display/VOI paths structurally intact pending
+// full Layer-2 retirement. FROZEN-safe (Layer-2 output never feeds the governed pApproval;
+// the harness never calls computeTrialNoise). Surrogate assets are unchanged (was 1.00); a
+// hard/pro asset's TRANSIENT Layer-2 display + bimodal-VOI sizing shift — flagged, no
+// governed number moves.
+const ENDPOINT_NOISE_INERT: Record<EndpointType, number> = {
+  hard:      0.80,
+  surrogate: 1.00,
+  pro:       1.45,
 };
+void ENDPOINT_NOISE_INERT; // intentionally retained-but-unread (see note above)
 
 const DESIGN_NOISE: Record<DesignType, number> = {
   rct:        1.00,  // randomization removes confounding
@@ -145,15 +157,16 @@ const BASE_THRESHOLD = 0.80;        // evidentiary bar (in μ units)
  * duplicating the formula.
  */
 export function computeTrialNoise(inputs: TrialDesignInputs): { sigma2Trial: number; threshold: number } {
-  const { n, endpointType, designType, populationType, placeboResponse, regulatoryContext } = inputs;
+  const { n, designType, populationType, placeboResponse, regulatoryContext } = inputs; // endpointType no longer read (neutralized)
 
   // σ²_trial: noise from trial design
   // Base noise scales inversely with n (n=100 → 1.0, n=36 → 2.78, n=200 → 0.5)
   const nBase = Math.max(n, 5);
   const noiseFromN = NEUTRAL_SIGMA2_TRIAL * (100 / nBase);
+  // ENDPOINT_NOISE[endpointType] factor removed (endpoint-semantics pass): endpoint type
+  // no longer moves Layer-2 noise. Remaining design-noise channels unchanged.
   const sigma2Trial =
     noiseFromN *
-    ENDPOINT_NOISE[endpointType] *
     DESIGN_NOISE[designType] *
     POPULATION_NOISE[populationType] *
     PLACEBO_NOISE[placeboResponse];
@@ -187,7 +200,10 @@ export function scoreLayer2(
   // Deliberately a FIXED reference point (NOT mixture- or trial-design-aware) —
   // the multiplier below compares THIS drug+trial to a neutral drug in a
   // neutral trial, not this drug vs. neutral under its own trial design.
-  const zNeutral = (1.0 - BASE_THRESHOLD) / Math.sqrt(0.3 + NEUTRAL_SIGMA2_TRIAL * ENDPOINT_NOISE.surrogate * DESIGN_NOISE.rct * POPULATION_NOISE.broad * PLACEBO_NOISE.low);
+  // Neutral reference no longer includes the endpoint factor (ENDPOINT_NOISE neutralized);
+  // it was ENDPOINT_NOISE.surrogate = 1.00, so this is numerically identical and keeps the
+  // Layer-2 multiplier unchanged for the common surrogate case.
+  const zNeutral = (1.0 - BASE_THRESHOLD) / Math.sqrt(0.3 + NEUTRAL_SIGMA2_TRIAL * DESIGN_NOISE.rct * POPULATION_NOISE.broad * PLACEBO_NOISE.low);
   const phiNeutral = normalCDF(zNeutral);
 
   // Multiplier: how much this trial design deviates from the reference

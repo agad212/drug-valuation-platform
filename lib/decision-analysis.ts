@@ -17,7 +17,7 @@
 import { scoreLayer2, computeTrialNoise } from "./ptrs-trial";
 import { computeRevenuePV } from "./cashflow";
 import { mixtureFromMssVariance, mixtureSuccessProbability, mixtureMoments, enrichEffectPrior, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "./effect-prior";
-import { computeDevPlan } from "./dev-plan";
+import { computeDevPlan, resolveRegAcceptanceLevel } from "./dev-plan";
 import {
   deriveMarket, calibrateBaseMarket, deriveEnrichedNiche,
   NICHE_PRICE_DEFAULT_USD, NICHE_SHARE_DEFAULT_PCT, BIOMARKER_PREVALENCE_DEFAULT,
@@ -32,7 +32,7 @@ import type {
   RegulatoryContext,
 } from "./ptrs-trial";
 import type { EffectPrior, ClassStatus } from "./effect-prior";
-import type { DevPlanResult, DevStageInput } from "./dev-plan";
+import type { DevPlanResult, DevStageInput, RegAcceptanceObservables } from "./dev-plan";
 import type { Valuation } from "./types";
 
 // ─── Option Input Types ───────────────────────────────────────────────────────
@@ -57,9 +57,15 @@ export type OptionInputs = {
   // ── Category 1: Trial Design ──────────────────────────────────────────────
   n?: number;                        // sample size
   endpointType?: EndpointType;       // "hard" | "surrogate" | "pro"
-  // Build 3: registration-endpoint acceptability signal for the reg-confidence model —
+  // Registration-endpoint acceptability signals for the graded reg-confidence model.
   // "CONFIRMED" = FDA-accepted/precedented basis; "INFERRED" = novel/unvalidated surrogate.
+  // The observables below RESOLVE the acceptance level (L1–L4); leave them unset when
+  // unconfirmable → the engine FLAGS (worst level), never a silent middle rung.
   endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
+  fdaGuidanceForEndpoint?: boolean;                              // FDA guidance endorses this endpoint as an approval basis
+  priorFullApprovalsOnEndpoint?: "none" | "one_or_two" | "many"; // full (non-accelerated) approvals on this endpoint
+  acceleratedOnlyPrecedent?: boolean;                            // approvals on it exist ONLY via accelerated approval
+  approvedInClassOnEndpoint?: boolean;                           // an in-class agent was approved on this endpoint
   designType?: DesignType;           // "rct" | "single_arm" | "basket"
   numArms?: 1 | 2 | 3 | "adaptive"; // explicit arm count (affects cost; maps to designType)
   populationType?: PopulationType;   // "biomarker_selected" | "broad" | "rare_small"
@@ -444,20 +450,33 @@ export function computeOption(
       trialDesign: recomputeTrialDesign,
       ...(comparatorNull != null ? { nullResponseRate: comparatorNull } : {}),
     };
-    // ── Regulatory confidence (Build 3, scenario-only): if this option CHANGES the
-    // registration endpoint (type or evidence basis) vs the base registration trial,
-    // route the evidence-derived reg gate via regEndpoint. When unchanged, omit it so
-    // the flat REG_APPROVAL_PROB base rate governs (same as baseline → no discontinuity).
+    // ── Regulatory acceptability (scenario-only, graded): if this option CHANGES the
+    // registration endpoint (type, evidence basis, or any acceptance observable) vs the
+    // base registration trial, route the evidence-derived reg gate via regEndpoint. When
+    // unchanged, omit it so the flat REG_APPROVAL_PROB base rate governs (== baseline).
     const planStages = base.devPlanInputs!.stages as DevStageInput[];
     const regStageInput = planStages[planStages.length - 1]; // registration (last) trial
     const baseRegEndpointType = regStageInput.trialDesign.endpointType;
     const baseRegEndpointBasis = regStageInput.endpointEvidenceBasis;
     const optRegEndpointType = option.endpointType ?? baseRegEndpointType;
     const optRegEndpointBasis = option.endpointEvidenceBasis ?? baseRegEndpointBasis;
-    const regEndpoint =
-      optRegEndpointType !== baseRegEndpointType || optRegEndpointBasis !== baseRegEndpointBasis
-        ? { endpointType: optRegEndpointType, endpointEvidenceBasis: optRegEndpointBasis }
-        : undefined;
+    const optAssertsAcceptanceObs =
+      option.fdaGuidanceForEndpoint != null || option.priorFullApprovalsOnEndpoint != null ||
+      option.acceleratedOnlyPrecedent != null || option.approvedInClassOnEndpoint != null;
+    const regEndpointChanged =
+      optRegEndpointType !== baseRegEndpointType ||
+      optRegEndpointBasis !== baseRegEndpointBasis ||
+      optAssertsAcceptanceObs;
+    const regEndpoint: RegAcceptanceObservables | undefined = regEndpointChanged
+      ? {
+          endpointType: optRegEndpointType,
+          ...(optRegEndpointBasis != null ? { endpointEvidenceBasis: optRegEndpointBasis } : {}),
+          ...(option.fdaGuidanceForEndpoint != null ? { fdaGuidanceForEndpoint: option.fdaGuidanceForEndpoint } : {}),
+          ...(option.priorFullApprovalsOnEndpoint != null ? { priorFullApprovalsOnEndpoint: option.priorFullApprovalsOnEndpoint } : {}),
+          ...(option.acceleratedOnlyPrecedent != null ? { acceleratedOnlyPrecedent: option.acceleratedOnlyPrecedent } : {}),
+          ...(option.approvedInClassOnEndpoint != null ? { approvedInClassOnEndpoint: option.approvedInClassOnEndpoint } : {}),
+        }
+      : undefined;
     const fullPlan = computeDevPlan(
       mixture,
       base.ciHalfWidth,
@@ -474,9 +493,16 @@ export function computeOption(
     ptrsCI = ciBand(ptrs);
     enginePlanCostM = fullPlan.totalRiskAdjCostM;
     if (regEndpoint) {
+      const { level, flagged } = resolveRegAcceptanceLevel(regEndpoint);
+      const LEVEL_LABEL: Record<typeof level, string> = {
+        L1_precedented_outcome: "precedented clinical outcome",
+        L2_validated_surrogate: "validated surrogate",
+        L3_thin_precedent:      "thin / accelerated-only precedent",
+        L4_no_precedent:        "no-precedent / novel",
+      };
       regDriver =
-        `Reg confidence (evidence-derived): registration endpoint ${optRegEndpointType}` +
-        `${optRegEndpointType !== "hard" ? `/${optRegEndpointBasis ?? "INFERRED"}` : ""} → ` +
+        `Reg acceptability (evidence-derived — ${LEVEL_LABEL[level]}${flagged ? " ⚠ UNCONFIRMED" : ""}): ` +
+        `registration endpoint ${optRegEndpointType} → ` +
         `P(approve|success) ${(fullPlan.regStage.pApproval * 100).toFixed(0)}% (endpoint acceptability, not trial power)`;
     }
   } else if (option.isBaseline) {

@@ -123,21 +123,21 @@ const POP_N_FACTOR: Record<PopulationType, number> = {
   rare_small: 0.8,
 };
 
-// Endpoint type → effective sample size multiplier
-// Hard endpoints (OS, CR) are more reliably measured → cleaner signal.
-// PRO/subjective endpoints have investigator bias → noisier.
+// Endpoint-semantics pass: the a-priori categorical ENDPOINT_N_FACTOR (hard 1.2 /
+// surrogate 1.0 / pro 0.7) was DELETED. It was a wrong-signed a-priori haircut on trial
+// power ("hard = objectively measured → more effective-n"), the same anti-pattern as the
+// retired peak ×0.70 and biomarker P-multiplier — and it double-encoded a clinically
+// HARDER endpoint as EASIER. Endpoint TYPE no longer touches trial power at all.
 //
-// ENDPOINT DOUBLE-COUNT SEPARATION (Build 3): this is ACHIEVABILITY — can the trial
-// statistically DETECT the endpoint (effective-n on TRIAL P). It is DISTINCT from
-// dev-plan.ts deriveRegConfidence's endpoint term, which is ACCEPTABILITY — will the
-// AGENCY accept the endpoint as an approval basis even if the trial hits it (reg gate).
-// A trial can cleanly hit a novel surrogate (high trial P here) yet still owe a
-// confirmatory study (lower reg acceptability there). The two never book the same fact.
-const ENDPOINT_N_FACTOR: Record<EndpointType, number> = {
-  hard: 1.2,
-  surrogate: 1.0,
-  pro: 0.7,
-};
+// Endpoint now affects TRIAL P (achievability) ONLY through the real quantitative channels
+// the sim already integrates: n, nullResponseRate (endpoint-pinned control/SOC rate),
+// comparatorSigma2 (measurement / historical-benchmark uncertainty), designType (arm
+// allocation), isTimeToEvent (RR-proxy floor here + the surrogate→TTE translation-variance
+// bump in dev-plan.ts), and the effect-prior mixture. The ONLY legitimate CATEGORICAL
+// endpoint rule — regulatory ACCEPTABILITY (will the agency accept this endpoint as an
+// approval basis even if the trial hits it) — lives on the graded reg scale in dev-plan.ts
+// deriveRegConfidence, orthogonal to trial P. With the factor gone there is no categorical
+// trial-P term left for it to collide with.
 
 // Regulatory context → one-sided significance level z-value
 // BTD/orphan programs get regulatory flexibility (lower bar).
@@ -439,9 +439,10 @@ export function rrTrialPower(
   if (theta <= 0 || theta >= 1) return theta >= 1 ? 1 : 0;
   if (n < 1) return 0;
 
-  const nEff = n
-    * (POP_N_FACTOR[design.populationType] ?? 1.0)
-    * (ENDPOINT_N_FACTOR[design.endpointType] ?? 1.0);
+  // Endpoint type no longer scales power (ENDPOINT_N_FACTOR deleted — see note above);
+  // population enrichment is the remaining effective-n adjustment (POP_N_FACTOR, base path).
+  // design.endpointType is retained on the type for the reg gate + display, not read here.
+  const nEff = n * (POP_N_FACTOR[design.populationType] ?? 1.0);
 
   const zA = Z_ALPHA[design.regulatoryContext] ?? 1.645;
 

@@ -321,6 +321,22 @@ RULE 6 — Be realistic. Think like a pharma executive, not an optimizer.
     COMBINED market, devCostMOverride for the COMBINED cost). The engine lowers the blended program P
     for the added breadth — do NOT expect a bigger market to come with the same probability.
 
+RULE 7 — REGULATORY-ENDPOINT ACCEPTABILITY (set ONLY when an option CHANGES the registration endpoint
+or its evidence). This is a SEPARATE axis from whether the trial HITS the endpoint: it grades how likely
+FDA is to ACCEPT the endpoint as a basis for approval. The engine grades acceptability from OBSERVABLES —
+your job is to RESOLVE them from what you can source, or FLAG. NEVER assert a middle level by feel.
+  - A HARD clinical-outcome endpoint (OS, CR, organ function) is the agency-preferred basis — just set
+    "endpointType":"hard"; no observables needed (engine treats it as the top acceptance level).
+  - For a SURROGATE/PRO registration endpoint, set the observables you can source:
+      "fdaGuidanceForEndpoint" (does FDA guidance endorse it?), "priorFullApprovalsOnEndpoint"
+      ("none"/"one_or_two"/"many" full approvals on THIS endpoint), "acceleratedOnlyPrecedent" (approvals
+      exist only via accelerated approval), "approvedInClassOnEndpoint". Also set "endpointEvidenceBasis"
+      ("CONFIRMED" if FDA-accepted/precedented, else "INFERRED").
+  - If you CANNOT confirm ANY precedent for a surrogate/novel endpoint, leave the observables unset and
+    set "endpointEvidenceBasis":"INFERRED" — the engine will FLAG it at the worst acceptance level. Do NOT
+    invent guidance or approval counts to lift it. Searched-or-flagged, never guessed (same discipline as
+    designations). The engine, not you, picks the numeric penalty from the resolved level.
+
 ═══════════════════════════════
 FULL OPTION SCHEMA
 ═══════════════════════════════
@@ -334,6 +350,13 @@ FULL OPTION SCHEMA
   // ── Trial design (THE ENGINE RECOMPUTES P(approval) FROM THESE) ──
   "n": number,                     // sample size
   "endpointType": "hard" | "surrogate" | "pro",
+  // ── Registration-endpoint ACCEPTABILITY (reg gate; set only when an option CHANGES the
+  //    registration endpoint or its evidence — see RULE 7. Resolve from sources or FLAG.) ──
+  "endpointEvidenceBasis": "CONFIRMED" | "INFERRED", // FDA-accepted/precedented basis vs novel/unvalidated
+  "fdaGuidanceForEndpoint": boolean,                 // does FDA guidance endorse THIS endpoint as an approval basis?
+  "priorFullApprovalsOnEndpoint": "none" | "one_or_two" | "many", // full (non-accelerated) approvals on THIS endpoint
+  "acceleratedOnlyPrecedent": boolean,               // approvals on it exist ONLY via accelerated approval (confirm pending)
+  "approvedInClassOnEndpoint": boolean,              // has an in-class agent been approved on THIS endpoint?
   "designType": "rct" | "single_arm" | "basket",
   "numArms": 1 | 2 | 3 | "adaptive",
   "populationType": "broad" | "biomarker_selected" | "rare_small",

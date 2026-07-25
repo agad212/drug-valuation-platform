@@ -69,44 +69,105 @@ const REG_APPROVAL_PROB: Record<RegulatoryContext, number> = {
   confirmatory:  0.95,
 };
 
-// ─── Evidence-derived regulatory confidence (Build 3, scenario-only) ─────────────
+// ─── Evidence-derived regulatory confidence (graded, scenario-only) ──────────────
 // P(approve | trials succeeded) derived from the dossier's regulatory ACCEPTABILITY —
 // not a flat per-designation constant. It IS the conditional approval probability the
 // reg gate multiplies (pApproval = pAllTrials × this), computed from evidence, NOT a
-// bolt-on output multiplier. Clean, orthogonal inputs only (Build-3 decision 2):
+// bolt-on output multiplier.
 //   • designation base rate = REG_APPROVAL_PROB[designation] (grounded; preserved).
-//   • endpoint ACCEPTABILITY: a hard/clinical-outcome endpoint is the agency-preferred
-//     approval basis (+); a novel/INFERRED surrogate faces confirmatory-evidence /
-//     accelerated-then-verify risk (−); an FDA-accepted (CONFIRMED) surrogate is neutral.
+//   • endpoint ACCEPTABILITY = a GRADED 4-level scale, each level RESOLVED from an
+//     OBSERVABLE (FDA guidance for this endpoint? prior full approvals on it?
+//     accelerated-only precedent? approved-in-class on it?) — never vibe-picked. An
+//     endpoint with no resolvable precedent falls to L4 AND is FLAGGED, never silently
+//     placed mid-scale (same searched-or-flagged discipline as designations).
 //
-// ENDPOINT DOUBLE-COUNT SEPARATION (mandatory): this endpoint term is ACCEPTABILITY —
-// "will the agency accept this endpoint as an approval basis even if the trial hits it."
-// It is DISTINCT from bayesian-rr.ts ENDPOINT_N_FACTOR, which is ACHIEVABILITY — "can the
-// trial statistically detect the surrogate" (effective-n on TRIAL P). A trial can cleanly
-// hit a novel surrogate (high trial P) yet still owe a confirmatory study (lower reg
-// acceptability). The two never book the same fact. (Comment mirrored at ENDPOINT_N_FACTOR.)
+// ENDPOINT DOUBLE-COUNT SEPARATION: this endpoint term is ACCEPTABILITY — "will the agency
+// accept this endpoint as an approval basis even if the trial hits it." It is the ONLY
+// categorical endpoint rule left. Its trial-P sibling (bayesian-rr ENDPOINT_N_FACTOR) was
+// DELETED in the endpoint-semantics pass — endpoint now moves TRIAL P only through
+// quantitative params (n, nullRR, comparatorSigma2, design, isTimeToEvent, prior). So
+// acceptability (here) and achievability (the sim) can never book the same fact, and there
+// is no longer a categorical trial-P term for this to collide with.
 //
-// Precedent (approvedInClass) is deliberately EXCLUDED — it already moves the Build-2
-// effect prior + the modality haircut; no third channel. Safety is deferred (no signal).
-// GROUNDED/BOUNDED: constants named; clamped to [FLOOR, CAP] so weak evidence can't
-// manufacture a high approval prob. Pinned to regulatory precedent, NOT a target P.
-const REG_ENDPOINT_HARD_BONUS = 0.03;                 // hard clinical-outcome: agency-preferred approval basis
-const REG_ENDPOINT_SURROGATE_INFERRED_PENALTY = 0.12; // novel/unvalidated surrogate: confirmatory-verify risk
+// Endpoint-precedent observables used HERE (guidance / approvals-on-this-endpoint) are the
+// endpoint's regulatory acceptability — distinct from analog-TARGET precedent
+// (approvedInClass as a target signal), which moves the Build-2 effect prior + modality
+// haircut, not this gate. Safety is deferred (no signal).
+// GROUNDED/BOUNDED: per-level deltas are named constants pinned to regulatory precedent,
+// clamped to [FLOOR, CAP] so weak evidence can't manufacture a high approval prob. NOT a
+// target P. Build-3 anchors preserved: L1 = +HARD_BONUS, L2 = 0, L4 = −INFERRED_PENALTY.
+const REG_ENDPOINT_HARD_BONUS = 0.03;                 // L1 precedented clinical outcome — agency-preferred basis
+const REG_ACCEPTANCE_THIN_PENALTY = 0.06;             // L3 accelerated-only precedent — real but confirmatory-verify risk (~½ the novel penalty)
+const REG_ENDPOINT_SURROGATE_INFERRED_PENALTY = 0.12; // L4 no-precedent / novel surrogate — full penalty (flagged)
 const REG_CONFIDENCE_FLOOR = 0.50;
 const REG_CONFIDENCE_CAP = 0.97;
+
+// The 4-level graded regulatory-acceptance scale. Deltas apply on top of the designation
+// base rate; L1 > L2 > L3 > L4 by construction. L4 is FLAGGED at resolution time.
+export type RegAcceptanceLevel =
+  | "L1_precedented_outcome"    // hard clinical outcome (OS, CR, organ function) — agency-preferred
+  | "L2_validated_surrogate"    // FDA guidance accepts it OR ≥1 full in-class approval on it
+  | "L3_thin_precedent"         // only accelerated-approval precedent on it (confirmation pending)
+  | "L4_no_precedent";          // no guidance, no approvals — novel/speculative → FLAGGED
+const REG_ACCEPTANCE_DELTA: Record<RegAcceptanceLevel, number> = {
+  L1_precedented_outcome:  REG_ENDPOINT_HARD_BONUS,
+  L2_validated_surrogate:  0,
+  L3_thin_precedent:      -REG_ACCEPTANCE_THIN_PENALTY,
+  L4_no_precedent:        -REG_ENDPOINT_SURROGATE_INFERRED_PENALTY,
+};
+
+// Observables the acceptance level is RESOLVED from. Emitted by the generators
+// (searched-or-flagged), never guessed. endpointEvidenceBasis is the back-compat
+// resolved-or-flagged signal used when the richer observables are absent.
+export type RegAcceptanceObservables = {
+  endpointType: EndpointType;
+  fdaGuidanceForEndpoint?: boolean;                              // FDA guidance endorses THIS endpoint as an approval basis
+  priorFullApprovalsOnEndpoint?: "none" | "one_or_two" | "many"; // full (non-accelerated) approvals on THIS endpoint
+  acceleratedOnlyPrecedent?: boolean;                            // approvals on it exist ONLY via accelerated (confirm pending)
+  approvedInClassOnEndpoint?: boolean;                           // an in-class agent was approved on this endpoint
+  endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";              // back-compat signal when richer observables absent
+};
+
+// RESOLVE observables → level (+ flagged). Never silently returns L2/L3 when unconfirmable:
+// a surrogate with no resolvable precedent falls to L4 AND is flagged.
+export function resolveRegAcceptanceLevel(
+  obs: RegAcceptanceObservables,
+): { level: RegAcceptanceLevel; flagged: boolean } {
+  // L1: a hard clinical-outcome endpoint is the agency-preferred approval basis.
+  if (obs.endpointType === "hard") return { level: "L1_precedented_outcome", flagged: false };
+
+  // Surrogate / PRO: resolve acceptability from precedent observables.
+  const validated =
+    obs.fdaGuidanceForEndpoint === true ||
+    obs.priorFullApprovalsOnEndpoint === "many" ||
+    obs.priorFullApprovalsOnEndpoint === "one_or_two" ||
+    obs.approvedInClassOnEndpoint === true;
+  if (validated) return { level: "L2_validated_surrogate", flagged: false };
+
+  // Only accelerated-approval precedent → real but conditional acceptance.
+  if (obs.acceleratedOnlyPrecedent === true) return { level: "L3_thin_precedent", flagged: false };
+
+  // Back-compat: an explicit CONFIRMED (FDA-accepted) basis with no richer observables
+  // maps to a validated surrogate; INFERRED / unset falls through to the flagged floor.
+  if (obs.endpointEvidenceBasis === "CONFIRMED") return { level: "L2_validated_surrogate", flagged: false };
+
+  // No resolvable precedent (or unconfirmable) → conservative L4, FLAGGED (never silent L2/L3).
+  return { level: "L4_no_precedent", flagged: true };
+}
 
 export function deriveRegConfidence(opts: {
   designation: RegulatoryContext;
   endpointType: EndpointType;
   endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
+  regAcceptance?: RegAcceptanceObservables; // richer observables; falls back to endpointType/basis
 }): number {
   const base = REG_APPROVAL_PROB[opts.designation] ?? 0.85; // grounded designation base rate (preserved)
-  let delta = 0;
-  if (opts.endpointType === "hard") {
-    delta = REG_ENDPOINT_HARD_BONUS;                        // clinical-outcome endpoint — most acceptable
-  } else if (opts.endpointEvidenceBasis !== "CONFIRMED") {
-    delta = -REG_ENDPOINT_SURROGATE_INFERRED_PENALTY;       // surrogate/PRO not FDA-accepted → verify risk
-  }                                                          // CONFIRMED (FDA-accepted) surrogate → neutral
+  const obs: RegAcceptanceObservables = opts.regAcceptance ?? {
+    endpointType: opts.endpointType,
+    endpointEvidenceBasis: opts.endpointEvidenceBasis,
+  };
+  const { level } = resolveRegAcceptanceLevel(obs);
+  const delta = REG_ACCEPTANCE_DELTA[level];
   return Math.max(REG_CONFIDENCE_FLOOR, Math.min(REG_CONFIDENCE_CAP, base + delta));
 }
 
@@ -299,10 +360,12 @@ export type DevPlanInputs = {
   // when undefined/false, an "orphan"/"btd_orphan" context is downgraded for engine
   // purposes so an unearned cross-indication designation can't inflate P(approval).
   orphanConfirmedForIndication?: boolean;
-  // Build 3 (SCENARIO-ONLY): when present, the reg gate uses deriveRegConfidence over
+  // SCENARIO-ONLY: when present, the reg gate resolves the graded acceptance level over
   // this registration endpoint (evidence-derived P(approve|success)) instead of the flat
   // REG_APPROVAL_PROB lookup. Absent (base path) → flat lookup → FROZEN byte-identical.
-  regEndpoint?: { endpointType: EndpointType; endpointEvidenceBasis?: "CONFIRMED" | "INFERRED" };
+  // Carries the full acceptance observables (RegAcceptanceObservables); endpointType +
+  // endpointEvidenceBasis alone remain a valid subset (back-compat).
+  regEndpoint?: RegAcceptanceObservables;
 };
 
 // Default null/control response rates by phase (when AI doesn't provide one)
@@ -608,6 +671,7 @@ export function computeDevPlan(
         designation: engineRegContext,
         endpointType: inputs.regEndpoint.endpointType,
         endpointEvidenceBasis: inputs.regEndpoint.endpointEvidenceBasis,
+        regAcceptance: inputs.regEndpoint, // full observables → resolveRegAcceptanceLevel
       })
     : (REG_APPROVAL_PROB[engineRegContext] ?? 0.85);
   const regCostM  = inputs.regCostM ?? 1.0;

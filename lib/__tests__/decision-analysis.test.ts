@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDevPlan, deriveRegConfidence, type DevStageInput } from "../dev-plan";
+import { computeDevPlan, deriveRegConfidence, resolveRegAcceptanceLevel, type DevStageInput } from "../dev-plan";
 import { mixtureFromMssVariance } from "../effect-prior";
 import { computeStageRR, computeStageSuccess } from "../bayesian-rr";
 import { computeRevenuePV } from "../cashflow";
@@ -402,8 +402,11 @@ describe("Regulatory confidence — evidence-derived, scenario-only (Build 3)", 
     console.log(`[BUILD3] trial P (Ph2): flat ${flat.stages[0].trialSuccessProb} | INFERRED ${inferred.stages[0].trialSuccessProb} | hard ${hard.stages[0].trialSuccessProb}`);
     expect(inferred.regStage.pApproval).toBeLessThan(flat.regStage.pApproval);
     expect(hard.regStage.pApproval).toBeGreaterThan(flat.regStage.pApproval);
-    // endpoint-EVIDENCE-BASIS changes reg but NOT trial P (basis isn't an ENDPOINT_N_FACTOR input) → orthogonal
+    // Endpoint moves reg only, NOT trial P — now doubly true: ENDPOINT_N_FACTOR is DELETED,
+    // so even a hard registration endpoint gives byte-identical trial P (both stages).
     expect(inferred.stages[0].trialSuccessProb).toBeCloseTo(flat.stages[0].trialSuccessProb, 9);
+    expect(hard.stages[0].trialSuccessProb).toBeCloseTo(flat.stages[0].trialSuccessProb, 12);
+    expect(hard.stages[1].trialSuccessProb).toBeCloseTo(flat.stages[1].trialSuccessProb, 12);
   });
 
   it("SANITY: reg confidence alone can't carry a weak-evidence asset to a high P", () => {
@@ -435,5 +438,79 @@ describe("Regulatory confidence — evidence-derived, scenario-only (Build 3)", 
     // The reg factor is EXACTLY deriveRegConfidence (shared mechanism): P scales by 0.73/0.85.
     expect(inferred.ptrs / a.ptrs).toBeCloseTo(
       deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" }) / 0.85, 4);
+  });
+});
+
+// ─── Endpoint-semantics pass: categorical trial-P factors deleted; graded reg scale ─────
+describe("Endpoint semantics — categorical trial-P factors deleted; reg acceptance graded", () => {
+  const design = (o: Partial<TrialDesignInputs> = {}): TrialDesignInputs => ({
+    n: 200, endpointType: "surrogate", designType: "rct", populationType: "broad",
+    placeboResponse: "low", regulatoryContext: "standard", ...o,
+  });
+
+  it("INTERIM FLOOR (E1) — surrogate vs hard give IDENTICAL trial P at equal quantitative params", () => {
+    const mix = mixtureFromMssVariance(0.5, 0.2);
+    const rr = (endpointType: "surrogate" | "hard") =>
+      computeStageRR(mix, 200, 0.20,
+        { designType: "rct", endpointType, populationType: "broad", regulatoryContext: "standard" },
+        false, undefined, undefined, 0).trialSuccessProb;
+    // eslint-disable-next-line no-console
+    console.log(`[EPSEM] trial P surrogate=${rr("surrogate")} hard=${rr("hard")} (ENDPOINT_N_FACTOR deleted)`);
+    expect(rr("hard")).toBeCloseTo(rr("surrogate"), 12); // endpoint TYPE no longer scales power
+  });
+
+  it("PRESERVED — surrogate→time-to-event transition still attenuates the later stage (SURROGATE_TRANSLATION_SIGMA2)", () => {
+    const mk = (stage2Tte: boolean) => computeDevPlan(
+      mixtureFromMssVariance(0.38, 0.10), 0.1,
+      { stages: [
+          stage({ trialDesign: design(), n: 80, nullResponseRate: 0.30, isTimeToEvent: false }),
+          stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 150, isCurrentTrial: false,
+                  trialDesign: design({ n: 150 }), nullResponseRate: 0.30, isTimeToEvent: stage2Tte }),
+        ], regulatoryContext: "standard", regCostM: 1.0 },
+      1000,
+    );
+    const noTransition = mk(false), withTransition = mk(true);
+    // Assert on the RAW integral (pre-ceiling) to isolate the +0.15 translation variance.
+    // nullRR 0.30 ≥ both floors (0.10 / 0.25) → no floor confound; only the transition differs.
+    // eslint-disable-next-line no-console
+    console.log(`[EPSEM] stage-2 raw trial P — no-transition=${noTransition.stages[1].trialSuccessProbRaw} surrogate→TTE=${withTransition.stages[1].trialSuccessProbRaw}`);
+    expect(withTransition.stages[1].trialSuccessProbRaw).toBeLessThan(noTransition.stages[1].trialSuccessProbRaw);
+  });
+
+  it("GRADED reg (E3) — L1 > L2 > L3 > L4 as 4 distinct deltas; Build-3 anchors preserved; bounded", () => {
+    const L1 = deriveRegConfidence({ designation: "standard", endpointType: "hard" });                                                          // +0.03
+    const L2 = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", fdaGuidanceForEndpoint: true } });      // 0
+    const L3 = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", acceleratedOnlyPrecedent: true } });    // −0.06
+    const L4 = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate" } });                                    // −0.12
+    // eslint-disable-next-line no-console
+    console.log(`[EPSEM] reg levels L1=${L1} L2=${L2} L3=${L3} L4=${L4}`);
+    expect(L1).toBeCloseTo(0.88, 6);
+    expect(L2).toBeCloseTo(0.85, 6);
+    expect(L3).toBeCloseTo(0.79, 6);
+    expect(L4).toBeCloseTo(0.73, 6);
+    expect(L1).toBeGreaterThan(L2); expect(L2).toBeGreaterThan(L3); expect(L3).toBeGreaterThan(L4); // strictly ordered, distinct
+    // Build-3 anchors preserved as the scale endpoints:
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toBeCloseTo(0.85, 6); // = L2
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" })).toBeCloseTo(0.73, 6);  // = L4
+    expect(deriveRegConfidence({ designation: "confirmatory", endpointType: "hard" })).toBeCloseTo(0.97, 6);                                      // bounded (cap)
+  });
+
+  it("RESOLVED-OR-FLAGGED — validated/accelerated resolve unflagged; unconfirmable → L4 FLAGGED (never silent L2/L3)", () => {
+    expect(resolveRegAcceptanceLevel({ endpointType: "hard" })).toEqual({ level: "L1_precedented_outcome", flagged: false });
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", priorFullApprovalsOnEndpoint: "many" })).toEqual({ level: "L2_validated_surrogate", flagged: false });
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", approvedInClassOnEndpoint: true })).toEqual({ level: "L2_validated_surrogate", flagged: false });
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", acceleratedOnlyPrecedent: true })).toEqual({ level: "L3_thin_precedent", flagged: false });
+    const unconfirmable = resolveRegAcceptanceLevel({ endpointType: "surrogate" }); // no observables, no CONFIRMED
+    expect(unconfirmable.level).toBe("L4_no_precedent");
+    expect(unconfirmable.flagged).toBe(true);
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toEqual({ level: "L2_validated_surrogate", flagged: false }); // back-compat
+  });
+
+  it("L3 threads through the SCENARIO-ONLY reg gate: accelerated-only precedent → mid-penalty; base still flat", () => {
+    const p = (regEndpoint?: any) => computeDevPlan(mixtureFromMssVariance(0.5, 0.2), 0.1,
+      { stages: [stage({ trialDesign: design(), n: 200, nullResponseRate: 0.20 })],
+        regulatoryContext: "standard", regCostM: 1.0, ...(regEndpoint ? { regEndpoint } : {}) }, 1000);
+    expect(p().regStage.pApproval).toBeCloseTo(0.85, 6);                                                              // base path flat
+    expect(p({ endpointType: "surrogate", acceleratedOnlyPrecedent: true }).regStage.pApproval).toBeCloseTo(0.79, 6); // L3 scenario
   });
 });
