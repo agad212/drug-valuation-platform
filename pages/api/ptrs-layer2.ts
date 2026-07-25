@@ -124,8 +124,19 @@ RESPOND WITH ONLY THIS JSON:
   "regulatoryContext": "standard|btd|orphan|btd_orphan|accelerated|confirmatory",
   "orphanConfirmedForIndication": false,
   "endpointDescription": "description of primary endpoint",
-  "enrollmentNote": "brief enrollment note"
+  "enrollmentNote": "brief enrollment note",
+  "outcomeSd": null,
+  "mdeOrExpectedDelta": null
 }
+
+CONTINUOUS ENDPOINT STATS (outcomeSd + mdeOrExpectedDelta): set these ONLY when the primary
+endpoint is a CONTINUOUS measured value (FVC/FEV1 mL, BCVA letters, 6MWD metres, HbA1c %,
+eGFR, a symptom score). "outcomeSd" = the outcome's standard deviation on its NATIVE scale
+from analog trials; "mdeOrExpectedDelta" = the expected treatment effect Δ on the SAME native
+scale (consistent with the drug's expected efficacy). Source both from analog SDs / the SAP /
+precedent; if you cannot confirm them, leave them null (the engine flags and uses the
+response-rate path). NEVER guess a default SD. Leave BOTH null for rate/proportion endpoints
+(ORR, CR, ctDNA/MRD clearance, pCR) and for time-to-event endpoints (OS/PFS/RFS).
 
 Set "orphanConfirmedForIndication" to true ONLY if you positively confirmed an FDA Orphan
 Drug Designation granted for the BASE-CASE indication (${indication}). If the orphan
@@ -172,6 +183,10 @@ Search for this drug's key clinical trial and extract all 6 trial design paramet
     endpointDescription: parsed.endpointDescription || "",
     enrollmentNote: parsed.enrollmentNote || "",
     nctId,
+    // G2 Phase 2a: continuous native-scale stats — kept ONLY when both are valid positives
+    // (resolve-or-flag; absent → engine uses the proportion path). Never defaulted.
+    ...(typeof parsed.outcomeSd === "number" && parsed.outcomeSd > 0 ? { outcomeSd: parsed.outcomeSd } : {}),
+    ...(typeof parsed.mdeOrExpectedDelta === "number" && parsed.mdeOrExpectedDelta > 0 ? { mdeOrExpectedDelta: parsed.mdeOrExpectedDelta } : {}),
     // Fix B: default-deny — an orphan benefit only counts when explicitly confirmed
     // for the base-case indication. The engine enforces the gate deterministically.
     orphanConfirmedForIndication: parsed.orphanConfirmedForIndication === true,

@@ -252,6 +252,21 @@ NULL RESPONSE RATE — REQUIRED for each stage:
    This is DIFFERENT from nullResponseRate (which is the mean) — comparatorSigma2 is
    the UNCERTAINTY AROUND that mean, reflecting how well we know it.
 
+15. CONTINUOUS ENDPOINT STATS — ONLY for a CONTINUOUS primary endpoint (a measured value
+   on a scale: FVC/FEV1 decline in mL, BCVA letters, 6MWD metres, HbA1c %, PASI/ADAS-Cog
+   score, eGFR). Inside "trialDesign", set BOTH:
+     - "outcomeSd": the outcome's standard deviation on its NATIVE scale, from analog trials
+       (e.g. FVC-decline SD ≈ 200 mL from IPF trials; BCVA-change SD ≈ 12 letters).
+     - "mdeOrExpectedDelta": the expected treatment effect Δ on the SAME native scale
+       (e.g. 100 mL FVC benefit; 8 BCVA letters) — the effect this drug is expected to show,
+       consistent with the efficacy prior.
+   These let the engine compute the endpoint's REAL two-sample power instead of a response-
+   rate proxy. RESOLVE both from analog-trial SDs / SAP / precedent, or OMIT them and note in
+   endpointRationale that they were unconfirmable — the engine then FLAGS and falls back to
+   the proportion path. NEVER invent a default SD (a fabricated SD would distort power).
+   OMIT both entirely for RATE/PROPORTION endpoints (ORR, CR, ctDNA/MRD clearance, pCR) and
+   for time-to-event endpoints (OS/PFS/RFS — handled separately) — do NOT set them there.
+
 ABSOLUTE CONSTRAINT: Return EXACTLY 2 stages if currently in Phase 2, or EXACTLY 1 stage if currently in Phase 3. Never return 3 or more stages.
 
 RESPONSE FORMAT — return ONLY this JSON, no markdown:
@@ -365,6 +380,12 @@ Reason about the full development path. Return the current trial as stage 1 (use
         regulatoryContext:  VALID_REG.includes(s.trialDesign?.regulatoryContext) ? s.trialDesign.regulatoryContext : "standard",
         endpointDescription: s.trialDesign?.endpointDescription || "",
         enrollmentNote:     s.trialDesign?.enrollmentNote || "",
+        // G2 Phase 2a: continuous native-scale stats — kept ONLY when both are valid positives
+        // (resolve-or-flag; absent → engine uses the proportion path). Never defaulted.
+        ...(typeof s.trialDesign?.outcomeSd === "number" && s.trialDesign.outcomeSd > 0
+          ? { outcomeSd: s.trialDesign.outcomeSd } : {}),
+        ...(typeof s.trialDesign?.mdeOrExpectedDelta === "number" && s.trialDesign.mdeOrExpectedDelta > 0
+          ? { mdeOrExpectedDelta: s.trialDesign.mdeOrExpectedDelta } : {}),
       };
 
       // Stage 1 (current trial) — lock design to what was passed in

@@ -66,6 +66,11 @@ export type OptionInputs = {
   priorFullApprovalsOnEndpoint?: "none" | "one_or_two" | "many"; // full (non-accelerated) approvals on this endpoint
   acceleratedOnlyPrecedent?: boolean;                            // approvals on it exist ONLY via accelerated approval
   approvedInClassOnEndpoint?: boolean;                           // an in-class agent was approved on this endpoint
+  // G2 Phase 2a: sourced native-scale continuous stats for the CURRENT-trial (stage-0)
+  // endpoint. Set BOTH for a continuous endpoint → engine uses native two-sample power;
+  // omit → proportion path. Precision only; the effect stays in the prior.
+  outcomeSd?: number;                // outcome SD on the endpoint's native scale
+  mdeOrExpectedDelta?: number;       // expected effect Δ on the same native scale
   designType?: DesignType;           // "rct" | "single_arm" | "basket"
   numArms?: 1 | 2 | 3 | "adaptive"; // explicit arm count (affects cost; maps to designType)
   populationType?: PopulationType;   // "biomarker_selected" | "broad" | "rare_small"
@@ -356,6 +361,11 @@ export function computeOption(
 ): OptionResult {
 
   // ── Step 1: Resolve trial design inputs (option overrides base) ────────────
+  // G2 Phase 2a: carry the current-trial continuous stats (option-overridable). Both must
+  // resolve to a positive number for the engine to use native continuous power; else omitted
+  // → proportion path (identical to today).
+  const resolvedOutcomeSd = option.outcomeSd ?? base.baseTrialDesign.outcomeSd;
+  const resolvedMde = option.mdeOrExpectedDelta ?? base.baseTrialDesign.mdeOrExpectedDelta;
   const trialDesign: TrialDesignInputs = {
     n:                 option.n                ?? base.baseTrialDesign.n,
     endpointType:      option.endpointType     ?? base.baseTrialDesign.endpointType,
@@ -366,6 +376,8 @@ export function computeOption(
     nctId:              base.baseTrialDesign.nctId,
     endpointDescription: base.baseTrialDesign.endpointDescription,
     enrollmentNote:     base.baseTrialDesign.enrollmentNote,
+    ...(resolvedOutcomeSd != null ? { outcomeSd: resolvedOutcomeSd } : {}),
+    ...(resolvedMde != null ? { mdeOrExpectedDelta: resolvedMde } : {}),
   };
 
   // ── Step 2: Adjusted PTRS (+ per-option engine cost) ──────────────────────

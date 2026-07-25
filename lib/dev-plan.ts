@@ -478,10 +478,20 @@ export function computeDevPlan(
       ?? DEFAULT_NULL_RR[stageInput.phase]
       ?? 0.15;
 
+    // G2 Phase 2a: forward sourced CONTINUOUS stats (outcomeSd + expectedDelta) to the
+    // engine only when BOTH are present → native two-sample power; else omitted → proportion
+    // path (FROZEN byte-identical). computeStageRR fills in the dScale calibration.
+    const td = stageInput.trialDesign;
+    const continuous =
+      typeof td.outcomeSd === "number" && td.outcomeSd > 0 &&
+      typeof td.mdeOrExpectedDelta === "number" && td.mdeOrExpectedDelta > 0
+        ? { outcomeSd: td.outcomeSd, expectedDelta: td.mdeOrExpectedDelta }
+        : undefined;
     const rrDesign: RRTrialDesign = {
       designType:        stageInput.trialDesign.designType,
       endpointType:      stageInput.trialDesign.endpointType,
       populationType:    stageInput.trialDesign.populationType,
+      ...(continuous ? { continuous } : {}),
       // Fix B: gate the orphan significance-bar benefit on indication-confirmation.
       regulatoryContext: gateOrphanForEngine(stageInput.trialDesign.regulatoryContext, orphanConfirmed),
     };

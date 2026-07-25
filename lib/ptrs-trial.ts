@@ -67,6 +67,12 @@ export type TrialDesignInputs = {
   nctId?: string;                    // for provenance
   endpointDescription?: string;      // raw text for display
   enrollmentNote?: string;           // e.g. "36 enrolled, rare disease"
+  // G2 Phase 2a (CONTINUOUS family only): sourced native-scale stats that let a CONTINUOUS
+  // endpoint move trial P through its real power (two-sample z), not the response-rate proxy.
+  // Both must be sourced (analog SD / SAP) or the engine falls back to the proportion path
+  // and flags — never a default (a default would move a FROZEN tripwire). See bayesian-rr.ts.
+  outcomeSd?: number;                // outcome standard deviation on the endpoint's NATIVE scale
+  mdeOrExpectedDelta?: number;       // expected treatment effect Δ (native scale) tracking the prior
 };
 
 export type TrialRiskFlag = {

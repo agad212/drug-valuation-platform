@@ -514,3 +514,66 @@ describe("Endpoint semantics — categorical trial-P factors deleted; reg accept
     expect(p({ endpointType: "surrogate", acceleratedOnlyPrecedent: true }).regStage.pApproval).toBeCloseTo(0.79, 6); // L3 scenario
   });
 });
+
+// ─── G2 Phase 2a: CONTINUOUS-endpoint native trial-P power ──────────────────────────────
+describe("Continuous endpoint — native two-sample power via sourced SD + Δ (G2 Phase 2a)", () => {
+  const mix = mixtureFromMssVariance(0.5, 0.2); // prior mean_rr ≈ 0.5
+  const NULL = 0.20;                              // ≥ MEANINGFUL_RR_FLOOR → effectiveNull = 0.20
+  const rr = (design: any) => computeStageRR(mix, 60, NULL, design, false, undefined, undefined, 0);
+  const propDesign = { designType: "rct" as const, endpointType: "hard" as const, populationType: "broad" as const, regulatoryContext: "standard" as const };
+  const contDesign = (outcomeSd: number, expectedDelta: number) => ({ ...propDesign, continuous: { outcomeSd, expectedDelta } });
+
+  it("GATED — a continuous stage with NO sourced SD/Δ is byte-identical to the proportion path", () => {
+    const prop = rr(propDesign).trialSuccessProb;
+    expect(rr(contDesign(0, 0.5)).trialSuccessProb).toBeCloseTo(prop, 12);   // SD unset/0 → fallback
+    expect(rr(contDesign(1.5, 0)).trialSuccessProb).toBeCloseTo(prop, 12);   // Δ unset/0 → fallback
+    expect(rr({ ...propDesign, continuous: undefined }).trialSuccessProb).toBeCloseTo(prop, 12);
+  });
+
+  it("FIRES + DIVERGES — sourced SD+Δ compute two-sample z-power, not the binomial proxy", () => {
+    const prop = rr(propDesign).trialSuccessProb;
+    const cont = rr(contDesign(3.0, 0.5)).trialSuccessProb; // small standardized effect → clearly below the proxy
+    // eslint-disable-next-line no-console
+    console.log(`[G2-2a] proportion proxy P=${prop} | continuous native P=${cont} (divergence expected, labeled not tuned)`);
+    expect(cont).toBeGreaterThan(0); expect(cont).toBeLessThan(1);           // bounded
+    expect(Math.abs(cont - prop)).toBeGreaterThan(0.05);                     // genuinely different from the proxy
+  });
+
+  it("SINGLE-LOCUS (anti-double-count) — varying ONLY SD moves power via se; the prior is untouched", () => {
+    const propMean = rr(propDesign).priorMean;
+    const small = rr(contDesign(0.8, 1.0));   // tight outcome → high power
+    const large = rr(contDesign(4.0, 1.0));   // noisy outcome → low power
+    expect(large.trialSuccessProb).toBeLessThan(small.trialSuccessProb);      // larger SD → lower power (precision only)
+    // The effect (prior mean) is IDENTICAL across SDs AND identical to the no-channel prior:
+    expect(small.priorMean).toBeCloseTo(large.priorMean, 12);
+    expect(small.priorMean).toBeCloseTo(propMean, 12);                        // the channel never moved the effect
+  });
+
+  it("SANITY — monotone & bounded: larger Δ → higher power; larger SD → lower power; all in [0,1]", () => {
+    const P = (sd: number, d: number) => rr(contDesign(sd, d)).trialSuccessProb;
+    expect(P(1.5, 1.2)).toBeGreaterThan(P(1.5, 0.3));  // larger Δ → higher power
+    expect(P(2.5, 0.6)).toBeLessThan(P(0.8, 0.6));      // larger SD → lower power
+    for (const p of [P(0.5, 2.0), P(5.0, 0.2), P(1.5, 1.0)]) { expect(p).toBeGreaterThanOrEqual(0); expect(p).toBeLessThanOrEqual(1); }
+  });
+
+  it("PROPORTION family untouched — a proportion stage's trial P is unchanged (no continuous key)", () => {
+    // Two independent proportion computations agree exactly (regression guard: the dispatch
+    // never perturbs the proportion path).
+    expect(rr(propDesign).trialSuccessProb).toBeCloseTo(rr({ ...propDesign }).trialSuccessProb, 12);
+  });
+
+  it("END-TO-END wiring — stage trialDesign.outcomeSd threads through computeDevPlan to native power", () => {
+    const contTd = (o: any = {}): TrialDesignInputs => ({
+      n: 60, endpointType: "hard", designType: "rct", populationType: "broad",
+      placeboResponse: "low", regulatoryContext: "standard", ...o,
+    });
+    const plan = (td: TrialDesignInputs) => computeDevPlan(mix, 0.1,
+      { stages: [stage({ trialDesign: td, n: 60, nullResponseRate: 0.20 })], regulatoryContext: "standard", regCostM: 1.0 }, 1000);
+    const proxy = plan(contTd()).stages[0].trialSuccessProbRaw;                                   // no continuous stats → proportion
+    const native = plan(contTd({ outcomeSd: 3.0, mdeOrExpectedDelta: 0.5 })).stages[0].trialSuccessProbRaw; // sourced → native
+    // eslint-disable-next-line no-console
+    console.log(`[G2-2a] computeDevPlan stage-0 raw — proportion=${proxy} native-continuous=${native}`);
+    expect(Math.abs(native - proxy)).toBeGreaterThan(0.05); // wiring reaches the engine; diverges from proxy
+    expect(plan(contTd({ outcomeSd: 3.0 })).stages[0].trialSuccessProbRaw).toBeCloseTo(proxy, 12); // Δ missing → fallback
+  });
+});

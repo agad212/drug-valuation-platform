@@ -68,6 +68,12 @@ export type RRTrialDesign = {
   endpointType: EndpointType;
   populationType: PopulationType;
   regulatoryContext: RegulatoryContext;
+  // G2 Phase 2a (CONTINUOUS family): when present, rrTrialPower uses native two-sample
+  // z-power instead of the proportion/RR path. `outcomeSd` + `expectedDelta` are the sourced
+  // native-scale stats; `dScale` is the boundary calibration computed ONCE in computeStageRR
+  // (from the prior mean + effectiveNull) — precision only; the effect stays in the prior.
+  // Absent → proportion path (byte-identical). See CONTINUOUS-FAMILY POWER below.
+  continuous?: { outcomeSd: number; expectedDelta: number; dScale?: number };
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -138,6 +144,24 @@ const POP_N_FACTOR: Record<PopulationType, number> = {
 // approval basis even if the trial hits it) — lives on the graded reg scale in dev-plan.ts
 // deriveRegConfidence, orthogonal to trial P. With the factor gone there is no categorical
 // trial-P term left for it to collide with.
+
+// ─── CONTINUOUS-FAMILY POWER (G2 Phase 2a) ───────────────────────────────────
+// A continuous endpoint (FVC decline, BCVA letters, 6MWD, HbA1c) has its own outcome SD
+// and effect scale — the proportion sim's binomial variance is a fabricated stand-in.
+// When a stage carries sourced native-scale stats (outcomeSd + expectedDelta), rrTrialPower
+// computes the real two-sample z-test power: power(θ) = Φ(d(θ)·√(nArm/2) − z_α).
+//   • EFFECT stays in the prior: d(θ) is proportional to the prior's θ-margin (θ − null),
+//     integrated over the prior in computeStageSuccess — the sim never invents the effect.
+//   • outcomeSd is the PRECISION knob only: d = (native effect)/SD, so varying SD alone
+//     moves power via se, leaving the prior's effect untouched (the anti-double-count proof).
+//   • expectedDelta re-expresses the prior's expected effect in native units so SD can
+//     standardize it; the calibration `dScale` (computed once in computeStageRR) anchors
+//     d = expectedDelta/outcomeSd at the prior mean and scales linearly with (θ − null).
+// Divergence from the old μ/2 proxy is EXPECTED and correct (the proxy fabricated binomial
+// variance); it is labeled, never tuned to reproduce the proxy. Absent stats → proportion
+// path, byte-identical. TTE family (HR + #events / Schoenfeld) is deferred to Phase 2b.
+const CONTINUOUS_D_CAP = 3.0;        // Cohen's d ceiling — d>3 is implausible; keeps power bounded
+const CONTINUOUS_MIN_MARGIN = 0.02;  // floor for (priorMean − null) so the calibration can't blow up
 
 // Regulatory context → one-sided significance level z-value
 // BTD/orphan programs get regulatory flexibility (lower bar).
@@ -446,6 +470,13 @@ export function rrTrialPower(
 
   const zA = Z_ALPHA[design.regulatoryContext] ?? 1.645;
 
+  // G2 Phase 2a: CONTINUOUS-family native power. Gated on the boundary calibration dScale
+  // (set only when sourced outcomeSd + expectedDelta are present — computeStageRR fills it).
+  // Absent → fall through to the proportion path below (byte-identical).
+  if (design.continuous?.dScale != null) {
+    return continuousStagePower(theta, nullRR, nEff, zA, design, capSingleArmToRct);
+  }
+
   if (design.designType === "rct") {
     return twoProportionRctPower(theta, nullRR, nEff, zA, comparatorSigma2);
   }
@@ -493,6 +524,38 @@ function twoProportionRctPower(
   const se = Math.sqrt((theta * (1 - theta) + nullRR * (1 - nullRR)) / nArm + comparatorSigma2);
   if (se < 1e-10) return theta > nullRR ? 1 : 0;
   return normalCDF((theta - nullRR) / se - zA);
+}
+
+// CONTINUOUS-family native power (G2 Phase 2a). power(θ) = Φ(d(θ)·√(nArm/2) − z_α), a
+// two-sample z-test on a mean. The standardized effect d(θ) comes from the PRIOR's θ-margin
+// (θ − null), converted to native units and standardized by the sourced SD via the
+// precomputed dScale = (expectedDelta/outcomeSd) / max(priorMean − null, MIN_MARGIN):
+//   d(θ) = clamp( dScale · max(θ − null, 0), 0, D_CAP )
+// so at θ = priorMean, d = expectedDelta/outcomeSd, and d scales linearly with the prior's
+// margin. Effect lives in the prior (θ, integrated); outcomeSd is precision only (enters as
+// se: d = effect/SD). designType sets nArm exactly as the proportion path (rct nEff/2;
+// single-arm nEff, capped at the RCT-equivalent per Fix C; basket nEff/3).
+function continuousStagePower(
+  theta: number, nullRR: number, nEff: number, zA: number,
+  design: RRTrialDesign, capSingleArmToRct: boolean,
+): number {
+  const dScale = design.continuous!.dScale!;
+  const d = Math.max(0, Math.min(CONTINUOUS_D_CAP, dScale * Math.max(theta - nullRR, 0)));
+
+  // Two-sample z-test power for per-arm size m: Φ(d·√(m/2) − z_α).
+  const twoSample = (perArm: number) => normalCDF(d * Math.sqrt(Math.max(1, perArm) / 2) - zA);
+
+  if (design.designType === "rct") {
+    return twoSample(nEff / 2); // equal allocation, per-arm = nEff/2
+  }
+
+  // Single-arm / basket: one-sample z-test vs a historical mean (all n on treatment):
+  // Z = d·√n → Φ(d·√n − z_α). Capped at the RCT-equivalent (Fix C parallel): a single-arm
+  // design is never MORE conclusive than a concurrent-controlled RCT with the same patients.
+  const nOne = design.designType === "basket" ? Math.max(1, nEff / 3) : Math.max(1, nEff);
+  const oneSample = normalCDF(d * Math.sqrt(nOne) - zA);
+  if (!capSingleArmToRct) return oneSample;
+  return Math.min(oneSample, twoSample(nEff / 2));
 }
 
 // ─── Comparator distribution grid ────────────────────────────────────────────
@@ -834,13 +897,31 @@ export function computeStageRR(
   const comparatorUnreliable = flooredNull > priorMoments.mean && priorMoments.mean > floor;
   const effectiveNull = comparatorUnreliable ? floor : flooredNull;
 
+  // G2 Phase 2a: CONTINUOUS-family boundary calibration, computed ONCE here (needs the prior
+  // mean + effectiveNull). dScale anchors d = expectedDelta/outcomeSd at the prior mean and
+  // scales linearly with (θ − effectiveNull). Only when BOTH sourced stats are present and
+  // valid; otherwise `powerDesign === design` → the exact proportion path (byte-identical).
+  // Effect stays in the prior; SD is precision only. See continuousStagePower.
+  const powerDesign: RRTrialDesign =
+    design.continuous && design.continuous.outcomeSd > 0 && design.continuous.expectedDelta > 0
+      ? {
+          ...design,
+          continuous: {
+            ...design.continuous,
+            dScale:
+              (design.continuous.expectedDelta / design.continuous.outcomeSd) /
+              Math.max(priorMoments.mean - effectiveNull, CONTINUOUS_MIN_MARGIN),
+          },
+        }
+      : design;
+
   // 2. Compute P(stage success) via numerical integration (with comparator uncertainty)
-  const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, design, comparatorSigma2);
+  const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, powerDesign, comparatorSigma2);
 
   // 3. Compute posterior
   const posteriorGrid = (observedRR != null && observedN != null)
     ? posteriorFromObservedRR(priorGrid, observedRR, observedN)
-    : posteriorAfterSuccess(priorGrid, n, effectiveNull, design, comparatorSigma2);
+    : posteriorAfterSuccess(priorGrid, n, effectiveNull, powerDesign, comparatorSigma2);
 
   // 4. Band masses before and after (use effective threshold for bands)
   const bandsBefore = computeBandMasses(priorGrid, effectiveNull);
@@ -851,7 +932,7 @@ export function computeStageRR(
 
   // 6. Counterfactual ablations (use effective threshold)
   const counterfactuals = generateCounterfactuals(
-    priorGrid, n, effectiveNull, design, trialSuccessProb, comparatorSigma2, gaussianMixture,
+    priorGrid, n, effectiveNull, powerDesign, trialSuccessProb, comparatorSigma2, gaussianMixture,
   );
 
   // 7. Build comparator distribution curve for display

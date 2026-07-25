@@ -337,6 +337,16 @@ your job is to RESOLVE them from what you can source, or FLAG. NEVER assert a mi
     invent guidance or approval counts to lift it. Searched-or-flagged, never guessed (same discipline as
     designations). The engine, not you, picks the numeric penalty from the resolved level.
 
+RULE 8 — CONTINUOUS ENDPOINT POWER (set ONLY when an option uses a CONTINUOUS primary endpoint — a
+measured value on a scale: FVC/FEV1 mL, BCVA letters, 6MWD metres, HbA1c %, eGFR, a symptom score).
+Set BOTH "outcomeSd" (the outcome's native-scale standard deviation, from analog trials) and
+"mdeOrExpectedDelta" (the expected treatment effect on the SAME native scale, consistent with the drug's
+efficacy). The engine then computes the endpoint's REAL two-sample power instead of a response-rate proxy.
+This is PRECISION, not effect: the effect still comes from the efficacy prior; the SD only sets how
+detectable it is. RESOLVE both from analog SDs / SAP / precedent, or OMIT both and the engine falls back
+to the proportion path. NEVER guess a default SD. OMIT for rate/proportion endpoints (ORR, CR, ctDNA/MRD
+clearance, pCR) and for time-to-event endpoints (OS/PFS/RFS).
+
 ═══════════════════════════════
 FULL OPTION SCHEMA
 ═══════════════════════════════
@@ -350,6 +360,10 @@ FULL OPTION SCHEMA
   // ── Trial design (THE ENGINE RECOMPUTES P(approval) FROM THESE) ──
   "n": number,                     // sample size
   "endpointType": "hard" | "surrogate" | "pro",
+  // ── Continuous-endpoint stats (set BOTH only when the option's endpoint is a CONTINUOUS
+  //    measured value — FVC mL, BCVA letters, 6MWD m, HbA1c %; see RULE 8. Resolve or omit.) ──
+  "outcomeSd": number,             // outcome SD on the endpoint's NATIVE scale (from analog trials)
+  "mdeOrExpectedDelta": number,    // expected effect Δ on the SAME native scale (tracks the efficacy prior)
   // ── Registration-endpoint ACCEPTABILITY (reg gate; set only when an option CHANGES the
   //    registration endpoint or its evidence — see RULE 7. Resolve from sources or FLAG.) ──
   "endpointEvidenceBasis": "CONFIRMED" | "INFERRED", // FDA-accepted/precedented basis vs novel/unvalidated
