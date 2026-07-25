@@ -576,4 +576,36 @@ describe("Continuous endpoint — native two-sample power via sourced SD + Δ (G
     expect(Math.abs(native - proxy)).toBeGreaterThan(0.05); // wiring reaches the engine; diverges from proxy
     expect(plan(contTd({ outcomeSd: 3.0 })).stages[0].trialSuccessProbRaw).toBeCloseTo(proxy, 12); // Δ missing → fallback
   });
+
+  it("FOLLOW-UP 2 — continuous keyDriver: present (read-only) for a continuous option, ABSENT for proportion", () => {
+    const td = (o: Partial<TrialDesignInputs> = {}): TrialDesignInputs => ({
+      n: 200, endpointType: "hard", designType: "rct", populationType: "broad",
+      placeboResponse: "low", regulatoryContext: "standard", ...o,
+    });
+    const v: Valuation = {
+      asset: "CONT", phase: "Phase 2", discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
+      indications: [{ id: "i1", name: "X", peakSales: 1000e6, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
+    };
+    const revenuePV = computeRevenuePV({ ...v, peakSales: 1000e6, launchYear: 2032, loeYear: 2044 });
+    const out = { ptrs: 0.4, revenuePV, devCostPV: 300e6, rnpv: 0 };
+    const devPlan = computeDevPlan(mixtureFromMssVariance(0.5, 0.2), 0.1,
+      { stages: [stage({ trialDesign: td(), n: 200, nullResponseRate: 0.20 })], regulatoryContext: "standard", regCostM: 1.0 }, revenuePV / 1e6);
+    const base = buildBaseContext(v, out, { mss: 0.5, variance: 0.2, ptrs: 0.4 }, { trialInputs: td() }, null, devPlan)!;
+    const a = computeOption(base, { id: "opt-a", name: "Baseline", isBaseline: true });
+    const cont = computeOption(base, { id: "opt-c", name: "Continuous FVC", outcomeSd: 270, mdeOrExpectedDelta: 90 }, a);
+    const prop = computeOption(base, { id: "opt-p", name: "Larger n", n: 240 }, a);
+    // Driver present, read-only: surfaces SD/Δ and d = 90/270 = 0.33 (the engine's anchor).
+    const contLine = cont.keyDrivers.find((d) => /Continuous endpoint/.test(d));
+    expect(contLine).toBeTruthy();
+    expect(contLine!).toMatch(/SD 270 \/ Δ 90/);
+    expect(contLine!).toMatch(/d 0\.33/);
+    // Absent for a proportion-fallback option (no sourced stats).
+    expect(prop.keyDrivers.some((d) => /Continuous endpoint/.test(d))).toBe(false);
+    // DISPLAY-ONLY: the driver is appended AFTER ptrs is computed → it moves no number. The
+    // continuous option's P came from the engine (native power), so it differs from the
+    // proportion option; the driver only reports it. (Suite-level: FROZEN byte-identical +
+    // the Build-3 OPTION ratio test unchanged prove follow-up 2 altered no computed value.)
+    expect(cont.ptrs).toBeGreaterThan(0); expect(cont.ptrs).toBeLessThan(1);
+    expect(Math.abs(cont.ptrs - prop.ptrs)).toBeGreaterThan(1e-6); // engine ran native power (not the display)
+  });
 });

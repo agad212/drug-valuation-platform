@@ -391,6 +391,7 @@ export function computeOption(
   let enginePlanCostM: number | null = null;  // per-option risk-adjusted cost when the engine ran
   let priorShiftDriver: string | null = null; // Build 2: biomarker enrichment prior-shift audit line
   let regDriver: string | null = null;         // Build 3: evidence-derived reg-confidence audit line
+  let continuousDriver: string | null = null;  // G2 Phase 2a: continuous native-power audit line (read-only)
   const hasDevPlan = !!base.devPlanInputs?.stages?.length;
   const ciBand = (p: number) => ({
     lower: Math.max(0.01, p - base.ciHalfWidth),
@@ -504,6 +505,18 @@ export function computeOption(
     ptrs = fullPlan.pApproval;
     ptrsCI = ciBand(ptrs);
     enginePlanCostM = fullPlan.totalRiskAdjCostM;
+    // G2 Phase 2a display (READ-ONLY): when the current-trial stage carries sourced continuous
+    // stats, computeDevPlan ran native two-sample z-power on it (same gate: both stats > 0).
+    // Surface the inputs the engine used so the path is visible in the advisor. This RE-STATES
+    // already-resolved inputs — SD, Δ, n — and the standardized effect d = Δ/SD (the
+    // calibration's prior-mean anchor, matching the engine's dScale). It recomputes NO power
+    // and changes NO number (ptrs/eNPV above are untouched).
+    if (resolvedOutcomeSd != null && resolvedOutcomeSd > 0 && resolvedMde != null && resolvedMde > 0) {
+      const dRef = resolvedMde / resolvedOutcomeSd;
+      continuousDriver =
+        `Continuous endpoint: SD ${resolvedOutcomeSd} / Δ ${resolvedMde} (native scale) → d ${dRef.toFixed(2)}; ` +
+        `native two-sample z-power at n ${trialDesign.n} (not the response-rate proxy)`;
+    }
     if (regEndpoint) {
       const { level, flagged } = resolveRegAcceptanceLevel(regEndpoint);
       const LEVEL_LABEL: Record<typeof level, string> = {
@@ -796,6 +809,7 @@ export function computeOption(
     keyDrivers.push("Active comparator → harder efficacy bar (lower P of trial success)");
   }
   if (priorShiftDriver) keyDrivers.push(priorShiftDriver);
+  if (continuousDriver) keyDrivers.push(continuousDriver);
   if (regDriver) keyDrivers.push(regDriver);
   for (const d of marketDrivers) keyDrivers.push(`Market: ${d}`);
   if (option.designType && option.designType !== base.baseTrialDesign.designType) {
