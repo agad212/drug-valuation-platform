@@ -143,6 +143,11 @@ type StageOutput = {
   endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
   comparatorSigma2?: number;
   comparatorSource?: string;
+  // Base re-pin (G3): registration-endpoint reg-acceptance observables (resolve-or-flag).
+  fdaGuidanceForEndpoint?: boolean;
+  priorFullApprovalsOnEndpoint?: "none" | "one_or_two" | "many";
+  acceleratedOnlyPrecedent?: boolean;
+  approvedInClassOnEndpoint?: boolean;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -267,6 +272,24 @@ NULL RESPONSE RATE — REQUIRED for each stage:
    OMIT both entirely for RATE/PROPORTION endpoints (ORR, CR, ctDNA/MRD clearance, pCR) and
    for time-to-event endpoints (OS/PFS/RFS — handled separately) — do NOT set them there.
 
+16. REGULATORY-ENDPOINT ACCEPTABILITY — on the REGISTRATION (final) stage, resolve how likely
+   FDA is to ACCEPT its endpoint as an approval basis, from OBSERVABLES (searched-or-FLAG,
+   never guessed). A hard clinical-outcome endpoint (OS, CR, organ function) needs nothing —
+   the engine treats it as the top level. For a SURROGATE/PRO registration endpoint set what
+   you can source: "fdaGuidanceForEndpoint" (does FDA guidance endorse it?),
+   "priorFullApprovalsOnEndpoint" ("none"/"one_or_two"/"many" FULL — non-accelerated — approvals
+   on THIS endpoint), "acceleratedOnlyPrecedent" (approvals exist only via accelerated approval),
+   "approvedInClassOnEndpoint". If you CANNOT confirm any of these, leave them unset — the
+   engine HOLDS the reg gate at the designation base rate and FLAGS it (it does NOT penalize).
+   Only set priorFullApprovalsOnEndpoint:"none" when you POSITIVELY establish no precedent
+   exists. Do NOT fabricate guidance or approval counts.
+
+17. BIOMARKER PREVALENCE — when a stage's trialDesign.populationType is "biomarker_selected",
+   set trialDesign.biomarkerPrevalence (the responder fraction, 0–1) when you can source it —
+   it sizes the effect-concentration lift the engine applies to that stage. If genuinely
+   unavailable, leave it unset (the engine uses a grounded default and flags it). Never invent
+   a prevalence.
+
 ABSOLUTE CONSTRAINT: Return EXACTLY 2 stages if currently in Phase 2, or EXACTLY 1 stage if currently in Phase 3. Never return 3 or more stages.
 
 RESPONSE FORMAT — return ONLY this JSON, no markdown:
@@ -386,6 +409,12 @@ Reason about the full development path. Return the current trial as stage 1 (use
           ? { outcomeSd: s.trialDesign.outcomeSd } : {}),
         ...(typeof s.trialDesign?.mdeOrExpectedDelta === "number" && s.trialDesign.mdeOrExpectedDelta > 0
           ? { mdeOrExpectedDelta: s.trialDesign.mdeOrExpectedDelta } : {}),
+        // Base re-pin: biomarker enrichment lift signal. When populationType is
+        // biomarker_selected, computeDevPlan enriches THIS stage's prior per-stage; a sourced
+        // responder prevalence sizes the lift (else DEFAULT + flag). Resolve-or-flag: emit
+        // biomarkerPrevalence when known; never fabricate one.
+        ...(typeof s.trialDesign?.biomarkerPrevalence === "number" && s.trialDesign.biomarkerPrevalence > 0 && s.trialDesign.biomarkerPrevalence <= 1
+          ? { biomarkerPrevalence: s.trialDesign.biomarkerPrevalence } : {}),
       };
 
       // Stage 1 (current trial) — lock design to what was passed in
@@ -424,6 +453,14 @@ Reason about the full development path. Return the current trial as stage 1 (use
           ? Math.round(s.comparatorSigma2 * 10000) / 10000  // 4 decimal places
           : 0,
         comparatorSource: typeof s.comparatorSource === "string" ? s.comparatorSource : undefined,
+        // Base re-pin (G3): registration-endpoint reg-acceptance observables (resolve-or-FLAG).
+        // Kept only when the generator resolves them; absent → the engine HOLDS the reg gate at
+        // the designation base rate and FLAGS (never auto-penalized). See RULE 16.
+        fdaGuidanceForEndpoint: typeof s.fdaGuidanceForEndpoint === "boolean" ? s.fdaGuidanceForEndpoint : undefined,
+        priorFullApprovalsOnEndpoint: (s.priorFullApprovalsOnEndpoint === "none" || s.priorFullApprovalsOnEndpoint === "one_or_two" || s.priorFullApprovalsOnEndpoint === "many")
+          ? s.priorFullApprovalsOnEndpoint : undefined,
+        acceleratedOnlyPrecedent: typeof s.acceleratedOnlyPrecedent === "boolean" ? s.acceleratedOnlyPrecedent : undefined,
+        approvedInClassOnEndpoint: typeof s.approvedInClassOnEndpoint === "boolean" ? s.approvedInClassOnEndpoint : undefined,
       };
     });
 

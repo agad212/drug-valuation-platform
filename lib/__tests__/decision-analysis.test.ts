@@ -5,7 +5,7 @@ import { computeStageRR, computeStageSuccess } from "../bayesian-rr";
 import { computeRevenuePV } from "../cashflow";
 import { buildBaseContext, computeOption, programBreadthMultiplier, isBiomarkerEnriched, type OptionInputs } from "../decision-analysis";
 import { deriveMarket, deriveEnrichedNiche, nicheIdentityHolds } from "../market-model";
-import { enrichEffectPrior, mixtureMoments, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "../effect-prior";
+import { enrichEffectPrior, resolveEnrichmentLift, mixtureMoments, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "../effect-prior";
 import type { TrialDesignInputs } from "../ptrs-trial";
 import type { Valuation } from "../types";
 
@@ -104,28 +104,47 @@ describe("Strategy Advisor — per-option P(approval) recompute", () => {
     expect(active.ptrs).toBeLessThan(a.ptrs - 1e-6); // harder bar → strictly lower
   });
 
-  it("biomarker-selected option RAISES P — and uses the SAME engine path as the what-if", () => {
-    const { base, mixture, devPlan } = mkBase();
+  it("biomarker enrichment (SOURCED prevalence): option-stage P == enriched what-if; non-vacuous; non-propagating", () => {
+    const { base, mixture } = mkBase();
     const a = computeOption(base, A);
-    const bio = computeOption(base, { id: "b", name: "Biomarker", populationType: "biomarker_selected" }, a);
-    expect(bio.ptrs).toBeGreaterThan(a.ptrs + 1e-6); // enrichment → strictly higher
+    // Option carries a SOURCED prevalence → computeDevPlan enriches stage-0 per-stage.
+    const bio = computeOption(base, { id: "b", name: "Biomarker", populationType: "biomarker_selected", biomarkerPrevalence: 0.3 }, a);
+    expect(bio.ptrs).toBeGreaterThan(a.ptrs + 1e-6);                       // enrichment → strictly higher
 
-    // Shared-code-path proof: the recompute's stage-0 success is the SAME computeStageRR
-    // + computeStageSuccess the what-if calls — not a parallel probability model.
-    const bioDesign: TrialDesignInputs = { ...broadDesign, populationType: "biomarker_selected" };
     const nullRR = 0.20;
-    const grid = computeStageRR(mixture, 200, nullRR, bioDesign, false).priorGrid;
-    const whatIfStage0 = computeStageSuccess(grid, 200, nullRR, bioDesign);
-    const optionPlanStage0 = computeDevPlan(mixture, 0.1, {
+    const bioDesign: TrialDesignInputs = { ...broadDesign, populationType: "biomarker_selected", biomarkerPrevalence: 0.3 };
+    const lift = resolveEnrichmentLift({ prevalence: 0.3 }).lift;          // the SAME shared resolver the engine uses
+    // What-if = enrich the prior, then run the SAME stage-success integral (Build-2 equivalence,
+    // on the ENRICHED path — not a bare stage that would hold at 0 and test nothing).
+    const enrichedGrid = computeStageRR(enrichEffectPrior(mixture, lift), 200, nullRR, bioDesign, false).priorGrid;
+    const whatIfStage0 = computeStageSuccess(enrichedGrid, 200, nullRR, bioDesign);
+    const plan = computeDevPlan(mixture, 0.1, {
       stages: [
         stage({ trialDesign: bioDesign, n: 200, nullResponseRate: nullRR }),
         stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 400, isCurrentTrial: false,
           trialDesign: { ...broadDesign, n: 400 }, nullResponseRate: nullRR }),
       ],
       regulatoryContext: "standard", regCostM: 1.0,
-    }, 0).stages[0].trialSuccessProbRaw;
-    expect(optionPlanStage0).toBeCloseTo(whatIfStage0, 9); // identical computation
-    void devPlan;
+    }, 0);
+    expect(plan.stages[0].trialSuccessProbRaw).toBeCloseTo(whatIfStage0, 9); // option stage-0 == enriched what-if
+
+    // NON-VACUOUS: enriched stage-0 is strictly ABOVE the un-enriched — FAILS if enrichment stops.
+    const bareGrid = computeStageRR(mixture, 200, nullRR, bioDesign, false).priorGrid;
+    const unenriched = computeStageSuccess(bareGrid, 200, nullRR, bioDesign);
+    expect(plan.stages[0].trialSuccessProbRaw).toBeGreaterThan(unenriched + 1e-3);
+
+    // NON-PROPAGATION: the broad Ph3 stage is UNAFFECTED by the Ph2 enrichment (confined per-stage).
+    // Its s1 equals the s1 of an identical plan whose Ph2 was never enriched — FAILS if the
+    // concentrated belief propagates forward.
+    const planNoEnrich = computeDevPlan(mixture, 0.1, {
+      stages: [
+        stage({ trialDesign: { ...broadDesign }, n: 200, nullResponseRate: nullRR }),
+        stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 400, isCurrentTrial: false,
+          trialDesign: { ...broadDesign, n: 400 }, nullResponseRate: nullRR }),
+      ],
+      regulatoryContext: "standard", regCostM: 1.0,
+    }, 0);
+    expect(plan.stages[1].trialSuccessProb).toBeCloseTo(planNoEnrich.stages[1].trialSuccessProb, 9);
   });
 
   it("breadth is NOT free: a multi-indication option's blended P is LOWER than the single-indication baseline", () => {
@@ -366,8 +385,8 @@ describe("Strategy Advisor — biomarker enrichment shifts the effect prior", ()
   });
 });
 
-// ─── Build 3: evidence-derived regulatory confidence (scenario-only) ────────────
-describe("Regulatory confidence — evidence-derived, scenario-only (Build 3)", () => {
+// ─── Regulatory confidence — evidence-derived, graded, UNIFIED (base re-pin) ────────
+describe("Regulatory confidence — evidence-derived graded scale (unified base + scenario)", () => {
   const design = (o: Partial<TrialDesignInputs> = {}): TrialDesignInputs => ({
     n: 200, endpointType: "surrogate", designType: "rct", populationType: "broad",
     placeboResponse: "low", regulatoryContext: "standard", ...o,
@@ -376,37 +395,41 @@ describe("Regulatory confidence — evidence-derived, scenario-only (Build 3)", 
     stage({ trialDesign: design(), n: 200, nullResponseRate: 0.20 }),
     stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 400, isCurrentTrial: false, trialDesign: design({ n: 400 }), nullResponseRate: 0.20 }),
   ];
-  const plan = (regEndpoint?: { endpointType: any; endpointEvidenceBasis?: any }) =>
+  const plan = (regEndpoint?: any) =>
     computeDevPlan(mixtureFromMssVariance(0.5, 0.2), 0.1,
       { stages: regStages(), regulatoryContext: "standard", regCostM: 1.0, ...(regEndpoint ? { regEndpoint } : {}) }, 1000);
 
-  it("deriveRegConfidence: hard > CONFIRMED-surrogate(=base) > INFERRED-surrogate; designation preserved; bounded", () => {
-    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toBeCloseTo(0.85, 6); // base preserved
-    expect(deriveRegConfidence({ designation: "standard", endpointType: "hard" })).toBeCloseTo(0.88, 6);                                          // +bonus
-    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" })).toBeCloseTo(0.73, 6);  // −penalty
+  it("deriveRegConfidence graded rungs: L1 hard 0.88 > L2 validated 0.85 ≥ held 0.85 > L3 accel 0.79 > L4 no-precedent 0.73; bounded", () => {
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "hard" })).toBeCloseTo(0.88, 6);                                          // L1 precedented outcome (+0.03)
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toBeCloseTo(0.85, 6); // L2 validated (0)
+    // INFERRED with NO observables → HELD at base rate (0.85), FLAGGED — NOT the old −0.12 L4.
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" })).toBeCloseTo(0.85, 6); // held (absence ≠ penalty)
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", acceleratedOnlyPrecedent: true } })).toBeCloseTo(0.79, 6);      // L3 (−0.06)
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", priorFullApprovalsOnEndpoint: "none" } })).toBeCloseTo(0.73, 6); // L4 positive-no-precedent (−0.12)
     expect(deriveRegConfidence({ designation: "btd", endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toBeCloseTo(0.92, 6);      // designation base flows through
     expect(deriveRegConfidence({ designation: "confirmatory", endpointType: "hard" })).toBeCloseTo(0.97, 6);                                      // 0.95+0.03 → capped at 0.97
   });
 
-  it("reg gate is SCENARIO-ONLY: base path keeps the flat lookup; regEndpoint switches to evidence-derived", () => {
-    expect(plan().regStage.pApproval).toBeCloseTo(0.85, 6);                                                    // no regEndpoint → flat REG_APPROVAL_PROB[standard]
-    expect(plan({ endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" }).regStage.pApproval).toBeCloseTo(0.73, 6);
-    expect(plan({ endpointType: "hard" }).regStage.pApproval).toBeCloseTo(0.88, 6);
+  it("reg gate is UNIFIED: base (no regEndpoint) holds at base rate; positive evidence resolves the graded scale", () => {
+    expect(plan().regStage.pApproval).toBeCloseTo(0.85, 6);                                                                    // base: last-stage surrogate, no observables → HELD at base rate
+    expect(plan({ endpointType: "surrogate", priorFullApprovalsOnEndpoint: "none" }).regStage.pApproval).toBeCloseTo(0.73, 6); // L4 positive no-precedent
+    expect(plan({ endpointType: "surrogate", acceleratedOnlyPrecedent: true }).regStage.pApproval).toBeCloseTo(0.79, 6);       // L3
+    expect(plan({ endpointType: "hard" }).regStage.pApproval).toBeCloseTo(0.88, 6);                                            // L1
   });
 
-  it("reg MOVES on evidence, ORTHOGONAL to trial P (no double-count)", () => {
-    const flat = plan(), inferred = plan({ endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" }), hard = plan({ endpointType: "hard" });
+  it("reg MOVES on POSITIVE evidence, ORTHOGONAL to trial P; unconfirmed HOLDS (no penalty)", () => {
+    const held = plan(), noPrec = plan({ endpointType: "surrogate", priorFullApprovalsOnEndpoint: "none" }), hard = plan({ endpointType: "hard" });
+    const inferred = plan({ endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" });
     // eslint-disable-next-line no-console
-    console.log(`[BUILD3] reg P: flat ${flat.regStage.pApproval} | INFERRED ${inferred.regStage.pApproval} | hard ${hard.regStage.pApproval}`);
-    // eslint-disable-next-line no-console
-    console.log(`[BUILD3] trial P (Ph2): flat ${flat.stages[0].trialSuccessProb} | INFERRED ${inferred.stages[0].trialSuccessProb} | hard ${hard.stages[0].trialSuccessProb}`);
-    expect(inferred.regStage.pApproval).toBeLessThan(flat.regStage.pApproval);
-    expect(hard.regStage.pApproval).toBeGreaterThan(flat.regStage.pApproval);
-    // Endpoint moves reg only, NOT trial P — now doubly true: ENDPOINT_N_FACTOR is DELETED,
-    // so even a hard registration endpoint gives byte-identical trial P (both stages).
-    expect(inferred.stages[0].trialSuccessProb).toBeCloseTo(flat.stages[0].trialSuccessProb, 9);
-    expect(hard.stages[0].trialSuccessProb).toBeCloseTo(flat.stages[0].trialSuccessProb, 12);
-    expect(hard.stages[1].trialSuccessProb).toBeCloseTo(flat.stages[1].trialSuccessProb, 12);
+    console.log(`[REPIN] reg P: held ${held.regStage.pApproval} | no-precedent ${noPrec.regStage.pApproval} | hard ${hard.regStage.pApproval} | INFERRED-held ${inferred.regStage.pApproval}`);
+    expect(noPrec.regStage.pApproval).toBeLessThan(held.regStage.pApproval);        // positive no-precedent → down (L4)
+    expect(hard.regStage.pApproval).toBeGreaterThan(held.regStage.pApproval);        // hard → up (L1)
+    expect(inferred.regStage.pApproval).toBeCloseTo(held.regStage.pApproval, 9);     // unconfirmed → HELD, no penalty (absence of evidence ≠ verdict)
+    // Endpoint acceptability moves reg only, NEVER trial P (both stages byte-identical across all reg variants).
+    for (const p of [noPrec, hard, inferred]) {
+      expect(p.stages[0].trialSuccessProb).toBeCloseTo(held.stages[0].trialSuccessProb, 12);
+      expect(p.stages[1].trialSuccessProb).toBeCloseTo(held.stages[1].trialSuccessProb, 12);
+    }
   });
 
   it("SANITY: reg confidence alone can't carry a weak-evidence asset to a high P", () => {
@@ -419,10 +442,10 @@ describe("Regulatory confidence — evidence-derived, scenario-only (Build 3)", 
     expect(weak.pApproval).toBeLessThan(0.60);                  // pAllTrials gated by ceilings → best reg can't rescue it
   });
 
-  it("OPTION path wires it via the SAME deriveRegConfidence (option == what-if)", () => {
-    // Base registration endpoint = surrogate (basis unset). An option that flips the
-    // registration endpoint's ACCEPTABILITY basis (→ INFERRED) changes ONLY reg (basis
-    // isn't a trial-P input), so the option's P scales by exactly the reg ratio.
+  it("OPTION path wires it via the SAME deriveRegConfidence (option == what-if); unconfirmed HOLDS", () => {
+    // Base registration endpoint = surrogate, no observables → HELD at base rate (0.85). An
+    // option that asserts POSITIVE no-precedent evidence resolves L4 (0.73) → changes ONLY reg
+    // (not a trial-P input), so the option's P scales by exactly the reg ratio 0.73/0.85.
     const v: Valuation = {
       asset: "REGDRUG", phase: "Phase 2", discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
       indications: [{ id: "i1", name: "X", peakSales: 1000e6, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
@@ -433,11 +456,14 @@ describe("Regulatory confidence — evidence-derived, scenario-only (Build 3)", 
     const base = buildBaseContext(v, out, { mss: 0.5, variance: 0.2, ptrs: 0.4 }, { trialInputs: design() }, null, devPlan)!;
     const A: OptionInputs = { id: "opt-a", name: "Baseline", isBaseline: true };
     const a = computeOption(base, A);
-    const inferred = computeOption(base, { id: "b", name: "Inferred surrogate", endpointEvidenceBasis: "INFERRED" }, a);
-    expect(inferred.ptrs).toBeLessThan(a.ptrs - 1e-6);                       // reg down → P down
-    // The reg factor is EXACTLY deriveRegConfidence (shared mechanism): P scales by 0.73/0.85.
-    expect(inferred.ptrs / a.ptrs).toBeCloseTo(
-      deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" }) / 0.85, 4);
+    // Positive no-precedent evidence → L4 (0.73). Option P scales by exactly 0.73/0.85.
+    const noPrec = computeOption(base, { id: "b", name: "No-precedent surrogate", priorFullApprovalsOnEndpoint: "none" }, a);
+    expect(noPrec.ptrs).toBeLessThan(a.ptrs - 1e-6);                         // reg down → P down
+    expect(noPrec.ptrs / a.ptrs).toBeCloseTo(
+      deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", priorFullApprovalsOnEndpoint: "none" } }) / 0.85, 4);
+    // Unconfirmed (INFERRED, no observables) → HELD at base rate → no move (absence ≠ penalty).
+    const inferred = computeOption(base, { id: "c", name: "Inferred surrogate", endpointEvidenceBasis: "INFERRED" }, a);
+    expect(inferred.ptrs).toBeCloseTo(a.ptrs, 6);
   });
 });
 
@@ -477,33 +503,37 @@ describe("Endpoint semantics — categorical trial-P factors deleted; reg accept
     expect(withTransition.stages[1].trialSuccessProbRaw).toBeLessThan(noTransition.stages[1].trialSuccessProbRaw);
   });
 
-  it("GRADED reg (E3) — L1 > L2 > L3 > L4 as 4 distinct deltas; Build-3 anchors preserved; bounded", () => {
+  it("GRADED reg — L1 > L2 > L3 > L4 as distinct deltas; unconfirmed HELD at base; bounded", () => {
     const L1 = deriveRegConfidence({ designation: "standard", endpointType: "hard" });                                                          // +0.03
     const L2 = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", fdaGuidanceForEndpoint: true } });      // 0
     const L3 = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", acceleratedOnlyPrecedent: true } });    // −0.06
-    const L4 = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate" } });                                    // −0.12
+    const L4 = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate", priorFullApprovalsOnEndpoint: "none" } }); // −0.12 (positive no-precedent)
+    const held = deriveRegConfidence({ designation: "standard", endpointType: "surrogate", regAcceptance: { endpointType: "surrogate" } });                                   // unconfirmed → base rate
     // eslint-disable-next-line no-console
-    console.log(`[EPSEM] reg levels L1=${L1} L2=${L2} L3=${L3} L4=${L4}`);
+    console.log(`[REPIN] reg levels L1=${L1} L2=${L2} L3=${L3} L4=${L4} held=${held}`);
     expect(L1).toBeCloseTo(0.88, 6);
     expect(L2).toBeCloseTo(0.85, 6);
     expect(L3).toBeCloseTo(0.79, 6);
     expect(L4).toBeCloseTo(0.73, 6);
+    expect(held).toBeCloseTo(0.85, 6);   // unconfirmed HOLDS at base rate — NOT auto-L4
     expect(L1).toBeGreaterThan(L2); expect(L2).toBeGreaterThan(L3); expect(L3).toBeGreaterThan(L4); // strictly ordered, distinct
-    // Build-3 anchors preserved as the scale endpoints:
+    // Anchors: L2 = CONFIRMED; L4 = positive no-precedent; INFERRED-without-observables → held (base).
     expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toBeCloseTo(0.85, 6); // = L2
-    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" })).toBeCloseTo(0.73, 6);  // = L4
+    expect(deriveRegConfidence({ designation: "standard", endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" })).toBeCloseTo(0.85, 6);  // held, NOT L4
     expect(deriveRegConfidence({ designation: "confirmatory", endpointType: "hard" })).toBeCloseTo(0.97, 6);                                      // bounded (cap)
   });
 
-  it("RESOLVED-OR-FLAGGED — validated/accelerated resolve unflagged; unconfirmable → L4 FLAGGED (never silent L2/L3)", () => {
+  it("RESOLVED-OR-FLAGGED — positive evidence resolves L1–L4; UNCONFIRMABLE → held_unconfirmed FLAGGED (never auto-L4)", () => {
     expect(resolveRegAcceptanceLevel({ endpointType: "hard" })).toEqual({ level: "L1_precedented_outcome", flagged: false });
     expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", priorFullApprovalsOnEndpoint: "many" })).toEqual({ level: "L2_validated_surrogate", flagged: false });
     expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", approvedInClassOnEndpoint: true })).toEqual({ level: "L2_validated_surrogate", flagged: false });
     expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", acceleratedOnlyPrecedent: true })).toEqual({ level: "L3_thin_precedent", flagged: false });
-    const unconfirmable = resolveRegAcceptanceLevel({ endpointType: "surrogate" }); // no observables, no CONFIRMED
-    expect(unconfirmable.level).toBe("L4_no_precedent");
-    expect(unconfirmable.flagged).toBe(true);
-    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toEqual({ level: "L2_validated_surrogate", flagged: false }); // back-compat
+    // L4 requires POSITIVE evidence of no precedent (approvals explicitly resolved to "none").
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", priorFullApprovalsOnEndpoint: "none" })).toEqual({ level: "L4_no_precedent", flagged: true });
+    // UNCONFIRMABLE (no observables, no CONFIRMED) → HELD at base rate, flagged — NEVER auto-L4.
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate" })).toEqual({ level: "held_unconfirmed", flagged: true });
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", endpointEvidenceBasis: "INFERRED" })).toEqual({ level: "held_unconfirmed", flagged: true }); // absence ≠ verdict
+    expect(resolveRegAcceptanceLevel({ endpointType: "surrogate", endpointEvidenceBasis: "CONFIRMED" })).toEqual({ level: "L2_validated_surrogate", flagged: false });
   });
 
   it("L3 threads through the SCENARIO-ONLY reg gate: accelerated-only precedent → mid-penalty; base still flat", () => {

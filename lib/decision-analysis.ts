@@ -16,7 +16,7 @@
 
 import { scoreLayer2, computeTrialNoise } from "./ptrs-trial";
 import { computeRevenuePV } from "./cashflow";
-import { mixtureFromMssVariance, mixtureSuccessProbability, mixtureMoments, enrichEffectPrior, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "./effect-prior";
+import { mixtureFromMssVariance, mixtureSuccessProbability, mixtureMoments, enrichEffectPrior, resolveEnrichmentLift, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "./effect-prior";
 import { computeDevPlan, resolveRegAcceptanceLevel } from "./dev-plan";
 import {
   deriveMarket, calibrateBaseMarket, deriveEnrichedNiche,
@@ -412,34 +412,28 @@ export function computeOption(
     // Re-run the full multi-stage development plan with this option's trial
     // design replacing stage 0 — the correct multi-stage P(approval) AND the
     // bottom-up risk-adjusted cost for THIS option's design.
-    let mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
-    // ── Biomarker enrichment (Build 2): shift the effect PRIOR upstream ──────────
-    // When the option enriches to a defined-responder population (and the base isn't
-    // already biomarker-selected), concentrate the effect prior (μ↑/σ² tighter) BEFORE
-    // computeDevPlan builds the grid — the integral then computes the higher P. This is
-    // the ONLY biomarker→P channel: we SUPPRESS the POP_N_FACTOR flip (keep the stage
-    // design's populationType at base) so biomarker is not double-counted. Same
-    // enrichEffectPrior mechanism as the what-if → the two agree at stage level.
+    const mixture = base.effectPrior?.mixture ?? mixtureFromMssVariance(base.mss, base.variance);
+    // ── Biomarker enrichment (base re-pin — unified per-stage) ───────────────────
+    // When the option enriches to a defined-responder population (and the base isn't already
+    // biomarker-selected), we mark the CURRENT-trial (stage-0) stage so computeDevPlan shifts
+    // THAT stage's prior (enrichEffectPrior μ↑/σ² tighter) — the SAME per-stage mechanism the
+    // base now uses. We NO LONGER enrich the whole mixture upstream: that propagated the
+    // subgroup concentration into later broad stages (a biomarker Ph2 wrongly de-risking a
+    // broad Ph3). Enrichment is confined to the enriched stage; later broad stages run on the
+    // un-enriched belief. Lift comes from the shared resolveEnrichmentLift (no reimplementation).
     const enrichable = isBiomarkerEnriched(option) && base.baseTrialDesign.populationType !== "biomarker_selected";
-    // SIZE the lift from the responder fraction when known: concentration ∝ 1/prevalence
-    // (a rarer responder subset concentrates the effect MORE). Anchored so f = DEFAULT at
-    // the reference prevalence, bounded by MAX; explicit enrichmentEffectLift always wins;
-    // no prevalence → DEFAULT fallback. Pinned to the concentration rationale, NOT a target P.
-    const enrichmentLift = !enrichable
-      ? 0
-      : option.enrichmentEffectLift != null
-        ? option.enrichmentEffectLift
-        : (option.biomarkerPrevalence != null && option.biomarkerPrevalence > 0
-            ? Math.min(MAX_ENRICHMENT_LIFT, DEFAULT_ENRICHMENT_LIFT * (BIOMARKER_PREVALENCE_DEFAULT / option.biomarkerPrevalence))
-            : DEFAULT_ENRICHMENT_LIFT);
+    const enrichmentLift = enrichable
+      ? resolveEnrichmentLift({ prevalence: option.biomarkerPrevalence, explicitLift: option.enrichmentEffectLift }).lift
+      : 0;
     if (enrichable && enrichmentLift > 0) {
+      // Display-only preview of the stage-0 shift (deterministic; matches what computeDevPlan
+      // applies to that stage). It does NOT enrich the propagated mixture.
       const before = mixtureMoments(mixture);
-      mixture = enrichEffectPrior(mixture, enrichmentLift);
-      const after = mixtureMoments(mixture);
+      const after = mixtureMoments(enrichEffectPrior(mixture, enrichmentLift));
       priorShiftDriver =
-        `Biomarker enrichment → effect prior shifted (μ ${(before.mss * 2).toFixed(2)}→${(after.mss * 2).toFixed(2)}, ` +
+        `Biomarker enrichment → effect prior shifted on the enriched stage (μ ${(before.mss * 2).toFixed(2)}→${(after.mss * 2).toFixed(2)}, ` +
         `σ² ${before.variance.toFixed(2)}→${after.variance.toFixed(2)}; lift ×${(1 + enrichmentLift).toFixed(2)}` +
-        `${option.enrichmentEffectLift == null ? ", grounded default" : ""}) → higher P via the integral`;
+        `${option.enrichmentEffectLift == null ? ", grounded default" : ""}) → higher P via the integral, confined to this stage`;
     }
     // Comparator (2a): route an active-comparator harder bar into the gating stage's
     // control response rate so the engine recomputes a LOWER P from it. Explicit
@@ -452,10 +446,14 @@ export function computeOption(
         : (option.comparatorType === "active"
             ? Math.min(0.9, baseNull + ACTIVE_COMPARATOR_NULL_BUMP)
             : undefined);
-    // Prior-shift is the sole enrichment channel → force the stage design's
-    // populationType back to base so biomarker enrichment never also flips POP_N_FACTOR.
+    // Carry the RESOLVED enrichment lift (incl. 0) onto stage-0 so computeDevPlan enriches THAT
+    // stage per-stage (non-propagating) by that exact amount — and FORCE populationType back to
+    // base so the stage's population can't independently re-trigger a DEFAULT enrichment inside
+    // computeDevPlan. This makes f=0 genuinely zeroable (no lift → baseline P), and keeps the
+    // explicit lift the single enrichment channel. Enrichment is the μ-shift, not a POP flip
+    // (POP_N_FACTOR retired), so cost/other stay unaffected.
     const recomputeTrialDesign = enrichable
-      ? { ...trialDesign, populationType: base.baseTrialDesign.populationType }
+      ? { ...trialDesign, populationType: base.baseTrialDesign.populationType, enrichmentEffectLift: enrichmentLift }
       : trialDesign;
     const stage0Override: DevStageInput = {
       ...baseStage0,
@@ -524,6 +522,7 @@ export function computeOption(
         L2_validated_surrogate: "validated surrogate",
         L3_thin_precedent:      "thin / accelerated-only precedent",
         L4_no_precedent:        "no-precedent / novel",
+        held_unconfirmed:       "unconfirmed — held at base rate",
       };
       regDriver =
         `Reg acceptability (evidence-derived — ${LEVEL_LABEL[level]}${flagged ? " ⚠ UNCONFIRMED" : ""}): ` +

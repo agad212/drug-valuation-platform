@@ -142,16 +142,22 @@ describe.each(FIXTURES)("Deterministic harness — %s", (file) => {
 // Bayesian fusion, ceilings and haircut FORMULA are frozen — a change here means a
 // math regression. The value legitimately moves ONLY when we deliberately pin a new
 // INPUT (a designation, a comparator, a classification), which is recorded below.
-// TTX = 0.09993 (live capture 2026-07-18; single-arm Ph2a + comp-anchored peak).
-// tau = 0.26751: re-baselined 2026-07-20 to the PINNED-input world — its fixture was
-// refreshed to a live capture on the deployed reproducibility pins (regContext
-// fast_track not btd; AD comparator nullRR 0.10; class-graveyard blended haircut) AND
-// the analog effect-size μ/σ² is now deterministic (μ 0.30 / σ² 0.13 from the
-// structured class facts, Part A). This is an INPUT pin, not an engine change; the
-// value sits at the low edge of the observed live band (27.1–37.9%), consistent with
-// the tight-σ² graveyard signal — reproducibility, not recalibration.
+// TTX = 0.09993 (live capture 2026-07-18) → RE-PINNED 2026-07-26 to 0.08986 by the base
+// re-pin capstone (ONE unified engine, no base/scenario split). Mechanism deltas: (1)
+// POP_N_FACTOR retired → biomarker enrichment is a per-stage enrichEffectPrior μ-shift; (2)
+// UNCONFIRMED-prevalence hold-at-zero — TTX's biomarker Ph2a has NO sourced prevalence, so it
+// earns lift 0 (held un-enriched) instead of the old flat POP 1.3× boost, which is why s0
+// falls 0.20646→0.18282 and pApproval 0.09993→0.08986 (an unconfirmed biomarker design no
+// longer receives unearned de-risking — mirrors the reg axis holding an unconfirmed endpoint
+// at base rate); (3) flat reg base rate → graded deriveRegConfidence, INFERRED-no-observables
+// HELD at base rate (reg unchanged at 0.85). NOT tuned toward the old value — this is the
+// honest hold-at-zero consequence. Per-stage non-propagation: Ph3 (broad) stays un-enriched.
+// tau = 0.26751: UNCHANGED by the capstone (broad population → no enrichment; reg L2/held at
+// fast_track base 0.85) — byte-identical, the control proving the unification left the
+// non-biomarker path untouched. (Prior 2026-07-20 re-baseline to the pinned-input world
+// stands: regContext fast_track; AD comparator nullRR 0.10; deterministic analog μ0.30/σ²0.13.)
 const FROZEN_PAPPROVAL: Record<string, number> = {
-  "ttx-mc138.fixture.json": 0.09993,
+  "ttx-mc138.fixture.json": 0.08986,
   "bms-986446.fixture.json": 0.26751,
 };
 

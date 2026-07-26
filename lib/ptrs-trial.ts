@@ -73,6 +73,12 @@ export type TrialDesignInputs = {
   // and flags — never a default (a default would move a FROZEN tripwire). See bayesian-rr.ts.
   outcomeSd?: number;                // outcome standard deviation on the endpoint's NATIVE scale
   mdeOrExpectedDelta?: number;       // expected treatment effect Δ (native scale) tracking the prior
+  // Base re-pin: per-stage biomarker enrichment signal (unified engine). When this stage is
+  // biomarker-selected, computeDevPlan applies enrichEffectPrior to THIS stage's belief only
+  // (non-propagating). Lift = explicit enrichmentEffectLift, else prevalence-scaled, else
+  // DEFAULT + flag (resolveEnrichmentLift). Replaces the retired POP_N_FACTOR boost.
+  biomarkerPrevalence?: number;      // responder fraction (0–1) — sizes the lift (f ∝ 1/prevalence)
+  enrichmentEffectLift?: number;     // explicit μ-lift when known (wins over prevalence)
 };
 
 export type TrialRiskFlag = {

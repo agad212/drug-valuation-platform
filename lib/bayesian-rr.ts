@@ -113,21 +113,13 @@ const GRID_MIN = 0.001;
 const GRID_MAX = 0.999;
 const GRID_STEP = (GRID_MAX - GRID_MIN) / (GRID_SIZE - 1);
 
-// Population type → effective sample size multiplier
-// Biomarker-selected populations are cleaner (less noise), so the same n
-// gives more statistical information. Rare/small populations are noisier.
-//
-// DEBT (Build 2): this is the BASE-PATH representation of biomarker enrichment
-// (effective-n / power), and it is baked into the FROZEN tripwires (e.g. TTX-MC138's
-// biomarker Ph2a → 0.09993). The SCENARIO axis models the SAME phenomenon upstream via
-// effect-prior.ts enrichEffectPrior (a truth-curve shift). Two representations of one
-// phenomenon; POP_N_FACTOR retirement + a frozen re-pin is queued as its own build —
-// do NOT modify this table here (it would move the tripwires).
-const POP_N_FACTOR: Record<PopulationType, number> = {
-  biomarker_selected: 1.3,
-  broad: 1.0,
-  rare_small: 0.8,
-};
+// Base re-pin (capstone): POP_N_FACTOR (the base-path biomarker effective-n boost, was
+// biomarker_selected 1.3 / broad 1.0 / rare_small 0.8) is DELETED. Biomarker enrichment now
+// runs the SAME upstream mechanism on both axes — effect-prior.ts enrichEffectPrior (a
+// truth-curve μ-shift), applied PER-STAGE in dev-plan.ts computeDevPlan (confined to the
+// enriched stage, non-propagating). Population type no longer scales trial power; nEff = n.
+// This retires the last base/scenario split — one unified engine — and moves the tripwires
+// (re-locked once against the unified engine).
 
 // Endpoint-semantics pass: the a-priori categorical ENDPOINT_N_FACTOR (hard 1.2 /
 // surrogate 1.0 / pro 0.7) was DELETED. It was a wrong-signed a-priori haircut on trial
@@ -463,10 +455,11 @@ export function rrTrialPower(
   if (theta <= 0 || theta >= 1) return theta >= 1 ? 1 : 0;
   if (n < 1) return 0;
 
-  // Endpoint type no longer scales power (ENDPOINT_N_FACTOR deleted — see note above);
-  // population enrichment is the remaining effective-n adjustment (POP_N_FACTOR, base path).
-  // design.endpointType is retained on the type for the reg gate + display, not read here.
-  const nEff = n * (POP_N_FACTOR[design.populationType] ?? 1.0);
+  // Neither endpoint type nor population type scales trial power any more:
+  // ENDPOINT_N_FACTOR (endpoint-semantics pass) and POP_N_FACTOR (base re-pin) are both
+  // DELETED. Biomarker enrichment is a per-stage prior μ-shift (enrichEffectPrior, applied
+  // in computeDevPlan), not an effective-n factor here. Effective n = the trial's n.
+  const nEff = n;
 
   const zA = Z_ALPHA[design.regulatoryContext] ?? 1.645;
 

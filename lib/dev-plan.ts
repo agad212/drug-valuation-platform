@@ -31,7 +31,7 @@ import type {
   EndpointType,
   RegulatoryContext,
 } from "./ptrs-trial";
-import { mixtureMoments, type EffectPriorMixture, type ClassStatus } from "./effect-prior";
+import { mixtureMoments, enrichEffectPrior, resolveEnrichmentLift, type EffectPriorMixture, type ClassStatus } from "./effect-prior";
 import { pinCostPerPatient, type TherapeuticArea } from "./financial-pins";
 import { graveyardHaircut } from "./class-risk";
 import {
@@ -102,18 +102,23 @@ const REG_ENDPOINT_SURROGATE_INFERRED_PENALTY = 0.12; // L4 no-precedent / novel
 const REG_CONFIDENCE_FLOOR = 0.50;
 const REG_CONFIDENCE_CAP = 0.97;
 
-// The 4-level graded regulatory-acceptance scale. Deltas apply on top of the designation
-// base rate; L1 > L2 > L3 > L4 by construction. L4 is FLAGGED at resolution time.
+// The graded regulatory-acceptance scale. Deltas apply on top of the designation base rate;
+// L1 > L2 > L3 > L4 by construction. L4 requires POSITIVE evidence of no precedent (flagged).
+// "held_unconfirmed" is the base-re-pin default: when acceptability is UNCONFIRMABLE (no
+// observables emitted), do NOT auto-penalize to L4 — HOLD at the base rate (delta 0) and FLAG.
+// Absence of evidence is a flag, not a verdict.
 export type RegAcceptanceLevel =
   | "L1_precedented_outcome"    // hard clinical outcome (OS, CR, organ function) — agency-preferred
   | "L2_validated_surrogate"    // FDA guidance accepts it OR ≥1 full in-class approval on it
   | "L3_thin_precedent"         // only accelerated-approval precedent on it (confirmation pending)
-  | "L4_no_precedent";          // no guidance, no approvals — novel/speculative → FLAGGED
+  | "L4_no_precedent"           // POSITIVE evidence of no precedent (approvals resolved = "none") → FLAGGED
+  | "held_unconfirmed";         // unconfirmable (no observables) → hold at base rate (delta 0), FLAGGED
 const REG_ACCEPTANCE_DELTA: Record<RegAcceptanceLevel, number> = {
   L1_precedented_outcome:  REG_ENDPOINT_HARD_BONUS,
   L2_validated_surrogate:  0,
   L3_thin_precedent:      -REG_ACCEPTANCE_THIN_PENALTY,
   L4_no_precedent:        -REG_ENDPOINT_SURROGATE_INFERRED_PENALTY,
+  held_unconfirmed:        0,   // base rate held; the flag (not a penalty) signals "unconfirmed"
 };
 
 // Observables the acceptance level is RESOLVED from. Emitted by the generators
@@ -128,8 +133,9 @@ export type RegAcceptanceObservables = {
   endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";              // back-compat signal when richer observables absent
 };
 
-// RESOLVE observables → level (+ flagged). Never silently returns L2/L3 when unconfirmable:
-// a surrogate with no resolvable precedent falls to L4 AND is flagged.
+// RESOLVE observables → level (+ flagged). L4 requires POSITIVE evidence of no precedent;
+// an unconfirmable endpoint (no observables) HOLDS at the base rate and is FLAGGED — never
+// auto-penalized to L4. Absence of evidence is a flag, not a verdict.
 export function resolveRegAcceptanceLevel(
   obs: RegAcceptanceObservables,
 ): { level: RegAcceptanceLevel; flagged: boolean } {
@@ -147,12 +153,15 @@ export function resolveRegAcceptanceLevel(
   // Only accelerated-approval precedent → real but conditional acceptance.
   if (obs.acceleratedOnlyPrecedent === true) return { level: "L3_thin_precedent", flagged: false };
 
-  // Back-compat: an explicit CONFIRMED (FDA-accepted) basis with no richer observables
-  // maps to a validated surrogate; INFERRED / unset falls through to the flagged floor.
+  // An explicit CONFIRMED (FDA-accepted) basis maps to a validated surrogate.
   if (obs.endpointEvidenceBasis === "CONFIRMED") return { level: "L2_validated_surrogate", flagged: false };
 
-  // No resolvable precedent (or unconfirmable) → conservative L4, FLAGGED (never silent L2/L3).
-  return { level: "L4_no_precedent", flagged: true };
+  // L4 only from POSITIVE evidence of no precedent (approvals explicitly resolved to "none").
+  if (obs.priorFullApprovalsOnEndpoint === "none") return { level: "L4_no_precedent", flagged: true };
+
+  // Unconfirmable (INFERRED / unset, no observables) → HOLD at base rate, FLAGGED.
+  // Absence of evidence is a flag, not an L4 verdict.
+  return { level: "held_unconfirmed", flagged: true };
 }
 
 export function deriveRegConfidence(opts: {
@@ -233,6 +242,13 @@ export type DevStageInput = {
   // Endpoint transparency
   endpointRationale?: string;            // plain-language: why this endpoint for this stage
   endpointEvidenceBasis?: "CONFIRMED" | "INFERRED"; // confirmed by company vs FDA precedent/inference
+  // Base re-pin (G3): registration-endpoint reg-acceptance observables. On the registration
+  // (last) stage these let the UNIFIED base reg gate resolve L1–L4 (resolveRegAcceptanceLevel),
+  // exactly like the scenario axis. Absent → hold-at-base-rate + flag (never auto-L4).
+  fdaGuidanceForEndpoint?: boolean;
+  priorFullApprovalsOnEndpoint?: "none" | "one_or_two" | "many";
+  acceleratedOnlyPrecedent?: boolean;
+  approvedInClassOnEndpoint?: boolean;
 };
 
 // Computed result for one stage
@@ -496,8 +512,29 @@ export function computeDevPlan(
       regulatoryContext: gateOrphanForEngine(stageInput.trialDesign.regulatoryContext, orphanConfirmed),
     };
 
+    // ── Per-stage biomarker enrichment (base re-pin — unified engine) ─────────
+    // If THIS stage is biomarker-selected, its belief is enriched (enrichEffectPrior μ-shift)
+    // for this stage's power/success ONLY — the SAME mechanism the scenario axis uses. It is
+    // NON-PROPAGATING: a later broad stage runs on the un-enriched belief, never inheriting the
+    // subgroup concentration (a biomarker Ph2 must not de-risk a broad Ph3). Replaces the
+    // retired POP_N_FACTOR. Lift resolved once, shared with the scenario axis; unconfirmable
+    // prevalence → DEFAULT + flag (never silent).
+    const stageEnriched =
+      td.populationType === "biomarker_selected" ||
+      td.enrichmentEffectLift != null ||
+      (td.biomarkerPrevalence != null && td.biomarkerPrevalence < 1);
+    // Base unconfirmed-prevalence policy: fallback "hold" → a biomarker stage with no sourced
+    // prevalence (and no explicit lift) holds at the un-enriched belief (lift 0) + flags, rather
+    // than earning the DEFAULT lift. Mirrors the reg axis (unconfirmed → hold at base rate).
+    // Scenario-supplied explicit lifts/prevalence still win (explicit/prevalence branches),
+    // so the sourced-prevalence path is unaffected.
+    const enrichment = stageEnriched
+      ? resolveEnrichmentLift({ prevalence: td.biomarkerPrevalence, explicitLift: td.enrichmentEffectLift, fallback: "hold" })
+      : { lift: 0, flagged: false };
+    const powerMixture = enrichment.lift > 0 ? enrichEffectPrior(currentMixture, enrichment.lift) : currentMixture;
+
     const rrResult = computeStageRR(
-      currentMixture,
+      powerMixture,
       stageInput.n,
       nullRR,
       rrDesign,
@@ -506,6 +543,16 @@ export function computeDevPlan(
       stageInput.observedN,
       stageInput.comparatorSigma2 ?? 0,
     );
+
+    // Propagation belief: the UN-enriched posterior, so the enrichment does NOT carry into the
+    // next stage. Only when this stage was enriched (else reuse rrResult — byte-identical).
+    const propagationResult = enrichment.lift > 0
+      ? computeStageRR(
+          currentMixture, stageInput.n, nullRR, rrDesign,
+          stageInput.isTimeToEvent === true, stageInput.observedResponseRate, stageInput.observedN,
+          stageInput.comparatorSigma2 ?? 0,
+        )
+      : rrResult;
 
     const trialSuccessProbRaw = rrResult.trialSuccessProb;
 
@@ -546,9 +593,11 @@ export function computeDevPlan(
     const modalityHaircut = graveyardHaircut(pGraveyard, MODALITY_META_RISK_HAIRCUT);
     const trialSuccessProb = clamp01(cappedTrialSuccessProb * modalityHaircut);
 
-    // Convert the posterior grid back to a Gaussian mixture for the next stage
+    // Convert the posterior grid back to a Gaussian mixture for the next stage.
+    // Uses the UN-enriched propagation posterior (propagationResult) so a biomarker stage's
+    // concentration does NOT carry forward; identical to rrResult when the stage wasn't enriched.
     const mixtureIfSuccess = gridToGaussianMixture(
-      rrResult.posteriorGrid,
+      propagationResult.posteriorGrid,
       currentMixture.length,
     );
     const { mss: mssIfSuccess, variance: varianceIfSuccess } = mixtureMoments(mixtureIfSuccess);
@@ -672,18 +721,26 @@ export function computeDevPlan(
   // Fix B: reg-approval prob uses the orphan-GATED context (unearned orphan → no uplift).
   // Review months (timeline) stay on the ORIGINAL context so the P-impact stays isolated.
   const engineRegContext = gateOrphanForEngine(inputs.regulatoryContext, orphanConfirmed);
-  // Build 3 (SCENARIO-ONLY): if a registration endpoint is supplied, derive reg confidence
-  // from evidence (designation base rate × endpoint acceptability) via the ONE canonical
-  // deriveRegConfidence, using the orphan-GATED context so Fix B still holds. Absent
-  // (base path) → the flat REG_APPROVAL_PROB lookup, so FROZEN tripwires are byte-identical.
-  const pApprovalGivenSuccess = inputs.regEndpoint
-    ? deriveRegConfidence({
-        designation: engineRegContext,
-        endpointType: inputs.regEndpoint.endpointType,
-        endpointEvidenceBasis: inputs.regEndpoint.endpointEvidenceBasis,
-        regAcceptance: inputs.regEndpoint, // full observables → resolveRegAcceptanceLevel
-      })
-    : (REG_APPROVAL_PROB[engineRegContext] ?? 0.85);
+  // Base re-pin: ONE reg gate for both axes. deriveRegConfidence always governs — the flat
+  // REG_APPROVAL_PROB base branch is retired. A scenario regEndpoint wins; otherwise build the
+  // acceptance observables from the LAST (registration) stage (endpoint + G3 observables), so
+  // the base resolves L1–L4 — or HOLDS at the base rate + flags when unconfirmable (never
+  // auto-L4). REG_APPROVAL_PROB[designation] remains the base rate INSIDE deriveRegConfidence.
+  const regStageInput = inputs.stages[inputs.stages.length - 1];
+  const regAcceptance: RegAcceptanceObservables = inputs.regEndpoint ?? {
+    endpointType: regStageInput.trialDesign.endpointType,
+    endpointEvidenceBasis: regStageInput.endpointEvidenceBasis,
+    ...(regStageInput.fdaGuidanceForEndpoint != null ? { fdaGuidanceForEndpoint: regStageInput.fdaGuidanceForEndpoint } : {}),
+    ...(regStageInput.priorFullApprovalsOnEndpoint != null ? { priorFullApprovalsOnEndpoint: regStageInput.priorFullApprovalsOnEndpoint } : {}),
+    ...(regStageInput.acceleratedOnlyPrecedent != null ? { acceleratedOnlyPrecedent: regStageInput.acceleratedOnlyPrecedent } : {}),
+    ...(regStageInput.approvedInClassOnEndpoint != null ? { approvedInClassOnEndpoint: regStageInput.approvedInClassOnEndpoint } : {}),
+  };
+  const pApprovalGivenSuccess = deriveRegConfidence({
+    designation: engineRegContext,
+    endpointType: regAcceptance.endpointType,
+    endpointEvidenceBasis: regAcceptance.endpointEvidenceBasis,
+    regAcceptance,
+  });
   const regCostM  = inputs.regCostM ?? 1.0;
   const reviewMonths = REVIEW_MONTHS_BY_REG_CONTEXT[inputs.regulatoryContext] ?? 12;
   const regStage: RegStage = {

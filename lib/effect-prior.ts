@@ -267,6 +267,40 @@ export function enrichEffectPrior(mixture: EffectPriorMixture, enrichmentFactor:
   }));
 }
 
+// Reference biomarker prevalence for lift-from-prevalence scaling. Mirrors
+// market-model.BIOMARKER_PREVALENCE_DEFAULT (0.35): the lift is anchored so f = DEFAULT at
+// this prevalence, and a rarer responder subset concentrates the effect MORE (f ∝ 1/prev).
+export const ENRICHMENT_REFERENCE_PREVALENCE = 0.35;
+
+// SHARED enrichment-lift resolver — the ONE place both axes (base computeDevPlan + scenario
+// decision-analysis) size the enrichEffectPrior lift, so neither reimplements the formula.
+// explicitLift wins; else prevalence-scaled (bounded by MAX); else the UNCONFIRMED fallback.
+//
+// Unconfirmed fallback (no sourced prevalence, no explicit lift):
+//   • "hold"    → lift 0, FLAGGED. The BASE path uses this: a biomarker design with no sourced
+//                 prevalence hasn't EARNED the prior-shift, so it holds at the un-enriched belief
+//                 and flags — exactly like the reg axis holds an unconfirmed endpoint at the base
+//                 rate rather than applying an unearned adjustment.
+//   • "default" → DEFAULT_ENRICHMENT_LIFT, FLAGGED. The SCENARIO axis default: a what-if where a
+//                 caller intentionally builds a biomarker option gets the illustrative lift.
+// Default is "default" so existing scenario callers are byte-identical.
+export function resolveEnrichmentLift(opts: {
+  prevalence?: number | null;
+  explicitLift?: number | null;
+  fallback?: "default" | "hold";
+}): { lift: number; flagged: boolean } {
+  if (opts.explicitLift != null) return { lift: opts.explicitLift, flagged: false };
+  if (opts.prevalence != null && opts.prevalence > 0) {
+    return {
+      lift: Math.min(MAX_ENRICHMENT_LIFT, DEFAULT_ENRICHMENT_LIFT * (ENRICHMENT_REFERENCE_PREVALENCE / opts.prevalence)),
+      flagged: false,
+    };
+  }
+  return opts.fallback === "hold"
+    ? { lift: 0, flagged: true }                        // BASE unconfirmed → hold un-enriched, FLAGGED
+    : { lift: DEFAULT_ENRICHMENT_LIFT, flagged: true }; // SCENARIO default → illustrative lift, FLAGGED
+}
+
 /**
  * Collapse a mixture to a single (mss, variance) pair via the law of total
  * variance:

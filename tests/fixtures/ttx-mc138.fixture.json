@@ -158,22 +158,22 @@
   },
   "expected": {
     "finalMss": 0.31319,
-    "pApproval": 0.09993,
-    "pAllTrialsSuccess": 0.11756,
-    "s0_trialSuccessProb": 0.20646,
-    "s0_trialSuccessProbRaw": 0.25807,
+    "pApproval": 0.08986,
+    "pAllTrialsSuccess": 0.10571,
+    "s0_trialSuccessProb": 0.18282,
+    "s0_trialSuccessProbRaw": 0.22853,
     "s0_modalityHaircut": 0.8,
-    "s1_trialSuccessProb": 0.56943,
+    "s1_trialSuccessProb": 0.57824,
     "s1_modalityHaircut": 0.8,
     "totalDurationMonths": 101.66667,
     "impliedLaunchYear": 2034,
     "s0_cpp": 140000,
     "s1_cpp": 215000,
-    "totalRiskAdjCostM": 20.94622,
+    "totalRiskAdjCostM": 19.51153,
     "peakSalesM": 625,
     "loeYear": 2039,
     "revenuePVM": 538.86035,
-    "eNPVM": 32.9,
-    "eROI": 1.57
+    "eNPVM": 28.9,
+    "eROI": 1.48
   }
 }
