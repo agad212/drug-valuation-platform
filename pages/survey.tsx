@@ -11,7 +11,9 @@ import {
   type SurveyQuestion,
 } from "../lib/survey-questions";
 
-const STORE_KEY = "rd-survey-v2";
+const STORE_KEY = "rd-survey-v3";
+const MULTI_SEP = "; ";
+const REQUIRED_INTRO_IDS = ["a_role", "a_org", "a_level"];
 
 type Status = "idle" | "sending" | "done" | "error";
 type AnswerMap = Record<string, string>;
@@ -58,10 +60,19 @@ export default function SurveyPage() {
   function setAnswer(id: string, value: string) {
     if (!segment) return;
     setAnswersBySegment((prev) => {
-      const next = { ...prev, [segment]: { ...(prev[segment] || {}), [id]: value } };
+      const segAnswers = { ...(prev[segment] || {}) };
+      if (value) segAnswers[id] = value;
+      else delete segAnswers[id];
+      const next = { ...prev, [segment]: segAnswers };
       persist(segment, next);
       return next;
     });
+  }
+
+  function toggleMulti(id: string, choice: string) {
+    const current = (answers[id] || "").split(MULTI_SEP).filter(Boolean);
+    const next = current.includes(choice) ? current.filter((c) => c !== choice) : [...current, choice];
+    setAnswer(id, next.join(MULTI_SEP));
   }
 
   const progress = useMemo(() => {
@@ -80,12 +91,12 @@ export default function SurveyPage() {
       setStatus("error");
       return;
     }
-    if (!(answers.q0 || "").trim()) {
-      setErrorMsg("Please fill in your name, role, and organization at the top — generic is fine.");
+    const missing = REQUIRED_INTRO_IDS.find((id) => !(answers[id] || "").trim());
+    if (missing) {
+      setErrorMsg("Please fill in the three quick questions about you at the top — they're fully anonymous.");
       setStatus("error");
-      const el = document.getElementById("q0");
+      const el = document.getElementById(`${missing}-label`);
       el?.scrollIntoView({ behavior: "smooth", block: "center" });
-      (el as HTMLInputElement | null)?.focus({ preventScroll: true });
       return;
     }
     setStatus("sending");
@@ -115,22 +126,70 @@ export default function SurveyPage() {
     }
   }
 
-  function autogrow(el: HTMLTextAreaElement) {
-    el.style.height = "auto";
-    el.style.height = Math.max(el.scrollHeight + 2, 64) + "px";
-  }
-
   const numbering = segment ? numberingFor(segment) : {};
 
   function renderQuestion(q: SurveyQuestion) {
     const num = numbering[q.id];
+    const labelBlock = (
+      <span className="q-label" id={`${q.id}-label`}>
+        {num ? <span className="q-num">{num}.</span> : null}
+        {q.label}
+        {q.optional ? <span className="optional-tag">Optional</span> : null}
+        {q.hint ? <span className="q-hint">{q.hint}</span> : null}
+      </span>
+    );
+
+    if (q.kind === "scale") {
+      const selected = answers[q.id] || "";
+      return (
+        <div className="question" key={q.id}>
+          {labelBlock}
+          <div className="scale-row" role="radiogroup" aria-labelledby={`${q.id}-label`}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button
+                type="button"
+                key={n}
+                className={"scale-dot" + (selected === String(n) ? " selected" : "")}
+                aria-pressed={selected === String(n)}
+                onClick={() => setAnswer(q.id, String(n))}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <div className="scale-anchors">
+            <span>{q.anchors?.min}</span>
+            <span>{q.anchors?.max}</span>
+          </div>
+          {q.stepLabels && selected ? <div className="scale-current">{q.stepLabels[Number(selected) - 1]}</div> : null}
+        </div>
+      );
+    }
+
+    if (q.kind === "multi") {
+      const selected = (answers[q.id] || "").split(MULTI_SEP).filter(Boolean);
+      return (
+        <div className="question" key={q.id}>
+          {labelBlock}
+          <span className="q-hint" style={{ marginTop: -6, marginBottom: 8, display: "block" }}>
+            Select all that apply.
+          </span>
+          <div className="choices" role="group" aria-labelledby={`${q.id}-label`}>
+            {(q.choices || []).map((c) => (
+              <label className={"choice" + (selected.includes(c) ? " selected" : "")} key={c}>
+                <input type="checkbox" checked={selected.includes(c)} onChange={() => toggleMulti(q.id, c)} />
+                {c}
+              </label>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     if (q.kind === "choice") {
       return (
         <div className="question" key={q.id}>
-          <span className="q-label" id={`${q.id}-label`}>
-            {num ? <span className="q-num">{num}.</span> : null}
-            {q.label}
-          </span>
+          {labelBlock}
           <div className="choices" role="radiogroup" aria-labelledby={`${q.id}-label`}>
             {(q.choices || []).map((c) => (
               <label className={"choice" + (answers[q.id] === c ? " selected" : "")} key={c}>
@@ -148,11 +207,8 @@ export default function SurveyPage() {
         </div>
       );
     }
-    const shared = {
-      id: q.id,
-      value: answers[q.id] || "",
-      placeholder: q.placeholder || "",
-    };
+
+    const shared = { id: q.id, value: answers[q.id] || "", placeholder: q.placeholder || "" };
     return (
       <div className="question" key={q.id}>
         <label className="q-label" htmlFor={q.id}>
@@ -164,14 +220,7 @@ export default function SurveyPage() {
         {q.kind === "text" ? (
           <input type="text" {...shared} onChange={(e) => setAnswer(q.id, e.target.value)} />
         ) : (
-          <textarea
-            {...shared}
-            style={q.sub || q.id === "q10" ? { minHeight: 64 } : undefined}
-            onChange={(e) => {
-              setAnswer(q.id, e.target.value);
-              autogrow(e.target);
-            }}
-          />
+          <textarea {...shared} onChange={(e) => setAnswer(q.id, e.target.value)} />
         )}
       </div>
     );
@@ -206,13 +255,12 @@ export default function SurveyPage() {
           </div>
         ) : (
           <>
-            <span className="eyebrow">Research interview &middot; ~5 minutes</span>
+            <span className="eyebrow">Research survey &middot; ~2 minutes</span>
             <h1>How biopharma teams and investors make value-driven decisions</h1>
             <p className="intro">
-              Thanks for your time. <strong>I&rsquo;m not pitching anything</strong> — I&rsquo;m trying to understand
-              how biopharma teams and their investors actually make high-stakes decisions where a drug asset&rsquo;s
-              value or risk-adjusted value drives the call, and where that process breaks down today. Totally candid
-              answers are the most useful thing you can give me.
+              Thanks for your time. <strong>I&rsquo;m not pitching anything</strong> — I&rsquo;m researching how
+              biopharma teams and their investors make high-stakes decisions where a drug asset&rsquo;s risk-adjusted
+              value drives the call, and where that process breaks down today.
             </p>
 
             <div className="privacy-note">
@@ -221,8 +269,8 @@ export default function SurveyPage() {
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
               </svg>
               <span>
-                Please don&rsquo;t feel pressured to share specifics that touch on confidential information —
-                answering in very broad terms is just as valued.
+                <strong>No question asks about specific assets, programs, or numbers</strong> — everything is
+                answerable in general terms.
               </span>
             </div>
 
@@ -247,14 +295,14 @@ export default function SurveyPage() {
                 {intro.map(renderQuestion)}
 
                 <div className="part-header">
-                  <span className="eyebrow">Part 1 &middot; About 2.5 minutes</span>
-                  <h2>The real decision</h2>
-                  <p>Product-agnostic — just how a recent decision actually happened.</p>
+                  <span className="eyebrow">Part 1 &middot; About 1 minute</span>
+                  <h2>How these decisions happen today</h2>
+                  <p>In general terms only — nothing about specific assets or programs.</p>
                 </div>
                 {part1.map(renderQuestion)}
 
                 <div className="part-header">
-                  <span className="eyebrow">Part 2 &middot; About 2.5 minutes</span>
+                  <span className="eyebrow">Part 2 &middot; About 1 minute</span>
                   <h2>Concept fit</h2>
                   <p>Quick context on what I&rsquo;m building, then a few questions.</p>
                 </div>
@@ -410,10 +458,10 @@ export default function SurveyPage() {
         .rdsvy .concept p { margin: 0 0 10px; }
         .rdsvy .concept p:last-child { margin-bottom: 0; }
 
-        .rdsvy .question { margin: 36px 0 0; }
+        .rdsvy .question { margin: 34px 0 0; }
         .rdsvy .q-label { display: block; font-weight: 600; font-size: 1rem; margin-bottom: 10px; }
         .rdsvy .q-num { color: var(--accent); font-weight: 700; margin-right: 6px; }
-        .rdsvy .q-hint { display: block; font-weight: 400; color: var(--muted); font-size: 0.88rem; margin-top: 4px; }
+        .rdsvy .q-hint { display: block; font-weight: 400; color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
         .rdsvy .optional-tag {
           font-size: 0.72rem;
           font-weight: 600;
@@ -433,7 +481,7 @@ export default function SurveyPage() {
           font: inherit;
           font-size: 1rem;
         }
-        .rdsvy textarea { min-height: 92px; resize: vertical; }
+        .rdsvy textarea { min-height: 84px; resize: vertical; }
         .rdsvy select { appearance: auto; cursor: pointer; }
         .rdsvy textarea:focus-visible, .rdsvy input:focus-visible, .rdsvy select:focus-visible, .rdsvy button:focus-visible {
           outline: 2px solid var(--focus);
@@ -451,10 +499,45 @@ export default function SurveyPage() {
           border-radius: 8px;
           padding: 11px 14px;
           cursor: pointer;
-          font-size: 0.98rem;
+          font-size: 0.95rem;
         }
         .rdsvy .choice.selected { border-color: var(--accent); background: var(--accent-soft); }
         .rdsvy .choice input { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; flex: none; }
+
+        .rdsvy .scale-row { display: flex; gap: 8px; }
+        .rdsvy .scale-dot {
+          flex: 1 1 0;
+          padding: 12px 0;
+          font: inherit;
+          font-weight: 600;
+          font-size: 1rem;
+          background: var(--surface);
+          color: var(--ink);
+          border: 1px solid var(--line);
+          border-radius: 8px;
+          cursor: pointer;
+        }
+        .rdsvy .scale-dot.selected {
+          background: var(--accent);
+          border-color: var(--accent);
+          color: var(--ground);
+        }
+        .rdsvy .scale-anchors {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          margin-top: 6px;
+          color: var(--muted);
+          font-size: 0.8rem;
+        }
+        .rdsvy .scale-anchors span:last-child { text-align: right; }
+        .rdsvy .scale-current {
+          margin-top: 6px;
+          text-align: center;
+          color: var(--accent);
+          font-size: 0.9rem;
+          font-weight: 600;
+        }
 
         .rdsvy .send-panel {
           margin-top: 64px;

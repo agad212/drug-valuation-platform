@@ -275,7 +275,10 @@ export default function SurveyAdminPage() {
                   ) : (
                     segResponses.map((r, idx) => {
                       const n = segResponses.length - idx; // newest first → highest number
-                      const who = r.answers.q0 || "Anonymous";
+                      const who =
+                        r.answers.q0 ||
+                        [r.answers.a_role, r.answers.a_level, r.answers.a_org].filter(Boolean).join(" · ") ||
+                        "Anonymous";
                       const open = !!expanded[r.id];
                       const questions = QUESTIONS_BY_SEGMENT[seg.id];
                       return (
@@ -291,7 +294,16 @@ export default function SurveyAdminPage() {
                               {questions.filter((q) => r.answers[q.id]).map((q) => (
                                 <div key={q.id} className="qa">
                                   <dt>{q.short}</dt>
-                                  <dd>{r.answers[q.id]}</dd>
+                                  <dd>
+                                    {q.kind === "scale"
+                                      ? `${r.answers[q.id]}/5` +
+                                        (q.stepLabels
+                                          ? ` — ${q.stepLabels[Number(r.answers[q.id]) - 1] || ""}`
+                                          : q.anchors
+                                          ? ` (1=${q.anchors.min}, 5=${q.anchors.max})`
+                                          : "")
+                                      : r.answers[q.id]}
+                                  </dd>
                                 </div>
                               ))}
                             </dl>
