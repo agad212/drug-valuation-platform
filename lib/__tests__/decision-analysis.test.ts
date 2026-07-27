@@ -200,7 +200,7 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     return { base };
   }
   const A: OptionInputs = { id: "opt-a", name: "Baseline", isBaseline: true };
-  const NICHE: OptionInputs = { id: "b", name: "Niche", nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 200000, nichePeakSharePct: 35 };
+  const NICHE: OptionInputs = { id: "b", name: "Niche", nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 200000, nichePeakSharePct: 35, nicheWacComp: "analog targeted agent ~$200k/yr", nicheShareComp: "analog defined-responder launch ~35%" };
 
   it("base anchor: deriveMarket + calibration + Option A reproduce the base peak", () => {
     expect(deriveMarket({ tamM: 4000, penetrationPct: 25 }).peakSalesM).toBeCloseTo(1000, 6);
@@ -239,10 +239,39 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
 
   it("net is COMPUTED not signed: a strong niche exceeds base, a weak niche falls below", () => {
     const { base } = mkMarketBase(); // base peak 1000
-    const strong = computeOption(base, { id: "b", name: "Strong", nicheEligiblePatients: 30000, nicheAnnualPriceUsd: 250000, nichePeakSharePct: 40 }, undefined);
-    const weak   = computeOption(base, { id: "c", name: "Weak",   nicheEligiblePatients: 8000,  nicheAnnualPriceUsd: 120000, nichePeakSharePct: 20 }, undefined);
+    const strong = computeOption(base, { id: "b", name: "Strong", nicheEligiblePatients: 30000, nicheAnnualPriceUsd: 250000, nichePeakSharePct: 40, nicheWacComp: "premium precision comp ~$250k/yr", nicheShareComp: "dominant analog launch ~40%" }, undefined);
+    const weak   = computeOption(base, { id: "c", name: "Weak",   nicheEligiblePatients: 8000,  nicheAnnualPriceUsd: 120000, nichePeakSharePct: 20, nicheWacComp: "low-price comp ~$120k/yr", nicheShareComp: "crowded analog ~20%" }, undefined);
     expect(strong.peakSalesM).toBeGreaterThan(base.peakSalesM); // 30k×250k×40% = $3000M
     expect(weak.peakSalesM).toBeLessThan(base.peakSalesM);      // 8k×120k×20%  = $192M
+  });
+
+  it("RESOLVE-OR-FLAG (#14): an UNCITED WAC/share is NOT trusted — falls back to the labeled bounded default + FLAG", () => {
+    const { base } = mkMarketBase();
+    // Emits an aggressive $180k / 38% but names NO comp → the engine drops both for the bounded default.
+    const uncited = computeOption(base, {
+      id: "b", name: "Uncited niche",
+      nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 180000, nichePeakSharePct: 38,
+    }, undefined);
+    // 20,000 × $200k default × 35% default = $1400M — the uncited $180k/38% is NOT used.
+    expect(uncited.peakSalesM).toBeCloseTo(1400, 0);
+    const mkt = uncited.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
+    expect(mkt).toMatch(/UNSOURCED/);   // both WAC and share flagged, not silently trusted
+    expect(mkt).not.toMatch(/180k/);    // the uncited number does not appear as a pinned value
+  });
+
+  it("SOURCED (#14): a WAC/share PINNED to a named comp IS used, and the provenance cites the comp", () => {
+    const { base } = mkMarketBase();
+    const sourced = computeOption(base, {
+      id: "b", name: "Sourced niche",
+      nicheEligiblePatients: 20000,
+      nicheAnnualPriceUsd: 150000, nicheWacComp: "vismodegib BCC ~$150k/yr",
+      nichePeakSharePct: 30,       nicheShareComp: "sonidegib analog ~30%",
+    }, undefined);
+    // 20,000 × $150k × 30% = $900M — the CITED values are used (not the $200k/35% default).
+    expect(sourced.peakSalesM).toBeCloseTo(900, 0);
+    const mkt = sourced.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
+    expect(mkt).toMatch(/vismodegib/);
+    expect(mkt).not.toMatch(/UNSOURCED/);
   });
 
   it("prevalence-only enrichment derives the COUNT from base eligible, price/share are absolute defaults", () => {

@@ -103,6 +103,12 @@ export type OptionInputs = {
   // eligible count from the base eligible pop when an absolute count isn't supplied.
   biomarkerPrevalence?: number;    // 0–1 (or >1 to broaden): eligible-pool fraction vs base
   nicheMarketBasis?: string;       // one-line basis (comp / prevalence source / labeled default)
+  // WAC and peak share must each be PINNED to a NAMED comparator, or they fall back to a
+  // labeled bounded default + FLAG (resolve-or-flag). A number WITHOUT its comp is treated as
+  // UNSOURCED — the engine does not trust an uncited market input (same discipline as the reg
+  // observables and biomarker prevalence).
+  nicheWacComp?: string;           // named comparator therapy + basis for the niche annual WAC
+  nicheShareComp?: string;         // named analog launch + basis for the niche peak share
   // Build 2 — effect-concentration factor for the enriched (biomarker+) population:
   // the fractional μ lift the responder subset shows vs the ITT population (pinned to
   // the drug's biomarker-subgroup data / analog precedent; labeled estimate + bounded
@@ -601,20 +607,31 @@ export function computeOption(
               : null);
 
       if (nicheEligiblePatients != null) {
-        // Price and share are ABSOLUTE (LLM-sourced from comparators, or a labeled default) —
-        // NEVER base price × premium or base penetration × mult.
-        const nicheAnnualPriceUsd = option.nicheAnnualPriceUsd ?? NICHE_PRICE_DEFAULT_USD;
-        const nichePeakSharePct   = option.nichePeakSharePct   ?? NICHE_SHARE_DEFAULT_PCT;
+        // Price and share must each be PINNED to a NAMED comparator (nicheWacComp / nicheShareComp).
+        // An uncited number is NOT trusted: it falls back to a LABELED, BOUNDED default + a FLAG —
+        // resolve-or-flag, the same discipline as the reg observables and biomarker prevalence.
+        // NEVER base price × premium or base penetration × mult. (The market MATH below is unchanged;
+        // only where WAC and share COME FROM is gated.)
+        const wacSourced   = option.nicheAnnualPriceUsd != null && !!option.nicheWacComp?.trim();
+        const shareSourced = option.nichePeakSharePct   != null && !!option.nicheShareComp?.trim();
+        const nicheAnnualPriceUsd = wacSourced   ? option.nicheAnnualPriceUsd! : NICHE_PRICE_DEFAULT_USD;
+        const nichePeakSharePct   = shareSourced ? option.nichePeakSharePct!   : NICHE_SHARE_DEFAULT_PCT;
         const niche = deriveEnrichedNiche({ nicheEligiblePatients, nicheAnnualPriceUsd, nichePeakSharePct });
         peakSalesM = niche.peakSalesM;
-        const dflts = [
-          option.nicheAnnualPriceUsd == null ? `price default $${(NICHE_PRICE_DEFAULT_USD / 1000).toFixed(0)}k/yr` : null,
-          option.nichePeakSharePct == null ? `share default ${NICHE_SHARE_DEFAULT_PCT}%` : null,
-          (option.nicheEligiblePatients == null) ? `count from base eligible × prevalence ${(option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT)}` : null,
+        const sourcing = [
+          wacSourced
+            ? `WAC $${(nicheAnnualPriceUsd / 1000).toFixed(0)}k/yr pinned to ${option.nicheWacComp!.trim()}`
+            : `WAC $${(NICHE_PRICE_DEFAULT_USD / 1000).toFixed(0)}k/yr [UNSOURCED estimate — precision-therapy midpoint, no comp cited]`,
+          shareSourced
+            ? `share ${nichePeakSharePct.toFixed(0)}% pinned to ${option.nicheShareComp!.trim()}`
+            : `share ${NICHE_SHARE_DEFAULT_PCT}% [UNSOURCED estimate — defined-responder midpoint, no comp cited]`,
+          option.nicheEligiblePatients == null
+            ? `count from base eligible × prevalence ${(option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT)}`
+            : null,
         ].filter(Boolean);
         marketDrivers.push(niche.provenance +
           (option.nicheMarketBasis ? ` — ${option.nicheMarketBasis}` : "") +
-          (dflts.length ? ` [labeled default(s): ${dflts.join("; ")}]` : ""));
+          ` [${sourcing.join("; ")}]`);
       } else {
         // No base eligible count to anchor a niche — leave the market at base rather than
         // invent a multiplier. (Persist annual WAC at auto-value to enable re-derivation.)

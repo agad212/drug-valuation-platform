@@ -256,14 +256,21 @@ a multiple of the base:
   - "nicheEligiblePatients": the ABSOLUTE eligible-patient COUNT for the niche = (indication eligible
       population) × (biomarker prevalence). Source the prevalence per asset where you can (e.g. PTCH1
       mutations ~2% of the indication); compute and emit the resulting patient count.
-  - "nicheAnnualPriceUsd": an ABSOLUTE annual WAC ($/patient/yr) reasoned from PRECISION-THERAPY
-      COMPARABLES in this space (e.g. "targeted agents in this indication price ~$180,000/yr"). NOT
-      base price × a premium — an absolute dollar figure.
-  - "nichePeakSharePct": an ABSOLUTE peak share % reasoned from the niche's competitive dynamics
-      (companion-Dx targeting, less competition). NOT base penetration × a multiple.
-  - "nicheMarketBasis": ONE line stating the basis — the comparator name for the price, the
-      prevalence source for the count, and note any value you had to DEFAULT (e.g. "price default
-      $200k/yr — no niche comp found").
+  - "nicheAnnualPriceUsd": an ABSOLUTE annual WAC ($/patient/yr) PINNED to a NAMED precision-therapy
+      comparator — put the comp in "nicheWacComp" (e.g. nicheWacComp: "vismodegib (Erivedge), BCC list
+      price ~$120k/yr"). NOT base price × a premium. RESOLVE-OR-FLAG: if you cannot name a comp, OMIT
+      nicheAnnualPriceUsd — the engine applies a labeled, bounded default ($200k/yr) and FLAGS it. Do
+      NOT emit a confident price you cannot cite (an uncited number is treated as unsourced and dropped
+      for the flagged default).
+  - "nichePeakSharePct": an ABSOLUTE peak share % PINNED to a NAMED analog launch's observed
+      defined-responder penetration — put the analog in "nicheShareComp". NOT base penetration × a
+      multiple. RESOLVE-OR-FLAG: if you cannot name an analog, OMIT nichePeakSharePct — the engine
+      applies a labeled, bounded default (35%) and FLAGS it. Do NOT emit an aggressive uncited share.
+  - "nicheWacComp" / "nicheShareComp": the NAMED comparator + basis for the WAC and the share.
+      REQUIRED whenever you emit the corresponding number; if you cannot source it, omit BOTH the
+      number and its comp. Searched-or-flagged, never guessed — same discipline as the reg observables.
+  - "nicheMarketBasis": ONE line summarising the market basis — the count's prevalence source plus the
+      price and share comps.
   The engine computes net peak = count × price × share — which can land ABOVE or BELOW the base.
   Do NOT assume enrichment lowers revenue; let it be computed from the absolutes.
   - ADDED INDICATIONS → "addedIndicationMarkets": an array of { "tamM": <$M = eligible × annual WAC>,
@@ -389,9 +396,11 @@ FULL OPTION SCHEMA
 
   // ── Niche market ABSOLUTE parameters (engine RE-DERIVES peak bottom-up; NOT base × factor) ──
   "nicheEligiblePatients": number, // absolute eligible-patient COUNT = indication eligible pop × prevalence
-  "nicheAnnualPriceUsd": number,   // absolute WAC $/yr from precision-therapy comparators (not base × premium)
-  "nichePeakSharePct": number,     // absolute peak share % from niche competitive dynamics (not base × mult)
-  "nicheMarketBasis": string,      // one line: price comp / prevalence source / any defaulted value
+  "nicheAnnualPriceUsd": number,   // absolute WAC $/yr PINNED to a named comp (omit if uncitable → engine flags a bounded default)
+  "nicheWacComp": string,          // named precision-therapy comp + basis for the WAC (REQUIRED with nicheAnnualPriceUsd)
+  "nichePeakSharePct": number,     // absolute peak share % PINNED to a named analog (omit if uncitable → engine flags a bounded default)
+  "nicheShareComp": string,        // named analog launch + basis for the share (REQUIRED with nichePeakSharePct)
+  "nicheMarketBasis": string,      // one line: count prevalence source + price/share comps
   "addedIndicationMarkets": [{ "tamM": number, "penetrationPct": number }], // one per ADDED indication (summed)
 
   // ── Commercial overrides ──
