@@ -262,6 +262,11 @@ export type OptionResult = {
     wac:   { value: number; comp: string | null; sourced: boolean; inBand: boolean };
     share: { value: number; comp: string | null; sourced: boolean; inBand: boolean };
   };
+
+  // Lifted resolve-or-flag booleans (ADDITIVE — already computed by the engine; surfaced so the
+  // read-only self-check can aggregate them without recomputing anything).
+  regUnconfirmed?: boolean;       // registration-endpoint acceptability held/unconfirmed
+  enrichmentUnsourced?: boolean;  // biomarker enrichment lift came from an unsourced fallback
 };
 
 // Resolve a niche market param under resolve-or-flag + an out-of-band clamp:
@@ -430,6 +435,10 @@ export function computeOption(
   let priorShiftDriver: string | null = null; // Build 2: biomarker enrichment prior-shift audit line
   let regDriver: string | null = null;         // Build 3: evidence-derived reg-confidence audit line
   let continuousDriver: string | null = null;  // G2 Phase 2a: continuous native-power audit line (read-only)
+  // Self-check: lift the engine's existing resolve-or-flag booleans onto the result so the
+  // read-only checker can aggregate them (ADDITIVE — surfaces an already-computed value, no number changes).
+  let regUnconfirmed = false;       // reg-endpoint acceptability held/unconfirmed (from resolveRegAcceptanceLevel)
+  let enrichmentUnsourced = false;  // biomarker enrichment lift resolved from a fallback (unsourced prevalence)
   const hasDevPlan = !!base.devPlanInputs?.stages?.length;
   const ciBand = (p: number) => ({
     lower: Math.max(0.01, p - base.ciHalfWidth),
@@ -460,9 +469,11 @@ export function computeOption(
     // broad Ph3). Enrichment is confined to the enriched stage; later broad stages run on the
     // un-enriched belief. Lift comes from the shared resolveEnrichmentLift (no reimplementation).
     const enrichable = isBiomarkerEnriched(option) && base.baseTrialDesign.populationType !== "biomarker_selected";
-    const enrichmentLift = enrichable
-      ? resolveEnrichmentLift({ prevalence: option.biomarkerPrevalence, explicitLift: option.enrichmentEffectLift }).lift
-      : 0;
+    const enrichmentResolved = enrichable
+      ? resolveEnrichmentLift({ prevalence: option.biomarkerPrevalence, explicitLift: option.enrichmentEffectLift })
+      : { lift: 0, flagged: false };
+    const enrichmentLift = enrichmentResolved.lift;
+    enrichmentUnsourced = enrichable && enrichmentResolved.flagged; // lifted for the self-check (no number change)
     if (enrichable && enrichmentLift > 0) {
       // Display-only preview of the stage-0 shift (deterministic; matches what computeDevPlan
       // applies to that stage). It does NOT enrich the propagated mixture.
@@ -555,6 +566,7 @@ export function computeOption(
     }
     if (regEndpoint) {
       const { level, flagged } = resolveRegAcceptanceLevel(regEndpoint);
+      regUnconfirmed = flagged; // lifted for the self-check (no number change)
       const LEVEL_LABEL: Record<typeof level, string> = {
         L1_precedented_outcome: "precedented clinical outcome",
         L2_validated_surrogate: "validated surrogate",
@@ -907,6 +919,7 @@ export function computeOption(
     durationMonths,
     keyDrivers, ptrsDrivers,
     nicheProvenance,
+    regUnconfirmed, enrichmentUnsourced,
   };
 }
 

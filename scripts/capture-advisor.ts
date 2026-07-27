@@ -27,6 +27,7 @@ import { inferTherapeuticArea, inferModality, classifyComps } from "../lib/finan
 import { classGraveyardProbability, graveyardHaircut } from "../lib/class-risk";
 import { buildBaseContext, computeAllOptions, type OptionInputs } from "../lib/decision-analysis";
 import { resolveRegAcceptanceLevel } from "../lib/dev-plan";
+import { selfCheck, viewFromDevPlan, viewFromOption, optionViewsFrom, flagsFromOption } from "../lib/self-check";
 import type { EvidenceStepInput } from "../lib/effect-prior";
 import type { DevStageInput } from "../lib/dev-plan";
 import type { Valuation } from "../lib/types";
@@ -319,6 +320,33 @@ async function main() {
     console.log(`\n  [${r.option.id}] ${r.option.name}`);
     console.log(`     P(approval) = ${pct(r.ptrs)}${flag}   eNPV=$${r.eNPVM}M  peak=$${r.peakSalesM}M  devCost=$${r.devCostM}M`);
     if (r.keyDrivers?.length) for (const d of r.keyDrivers) console.log(`       • ${d}`);
+  }
+
+  // ── SELF-CHECK (read-only plausibility layer; OBSERVES & FLAGS, never adjusts) ──
+  console.log("\n═══════════════════════════════════════════════════════════════════");
+  console.log("5. SELF-CHECK  (read-only; impossible→BLOCKER, suspicious/flags→WARN; adjusts nothing)");
+  console.log("═══════════════════════════════════════════════════════════════════");
+  const asOfYear = new Date().getFullYear();
+  const baseReport = selfCheck({
+    view: viewFromDevPlan(devPlan, { launchYear, loeYear, asOfYear }),
+    options: optionViewsFrom(results),
+  });
+  console.log("[SELF-CHECK] base valuation + option set:");
+  console.log(JSON.stringify(baseReport, null, 2));
+  let totalBlockers = baseReport.blockers;
+  for (const r of results) {
+    const rep = selfCheck({ view: viewFromOption(r, { launchYear, loeYear, asOfYear }), flags: flagsFromOption(r) });
+    totalBlockers += rep.blockers;
+    if (rep.blockers > 0 || rep.warns > 0) {
+      console.log(`[SELF-CHECK] ${r.option.id} "${r.option.name}": ${rep.blockers} BLOCKER(s), ${rep.warns} WARN(s)`);
+      console.log(JSON.stringify(rep, null, 2));
+    }
+  }
+  if (totalBlockers > 0) {
+    console.error(`\n✗ SELF-CHECK: ${totalBlockers} BLOCKER(s) — impossible output detected (read-only; nothing was adjusted)`);
+    process.exitCode = 2;
+  } else {
+    console.log(`\n  ✓ SELF-CHECK: 0 blockers${baseReport.warns ? ` (${baseReport.warns} warn(s))` : ""}`);
   }
 
   console.log("\n───────────────────────────────────────────────────────────────────");

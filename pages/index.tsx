@@ -16,6 +16,7 @@ import EffectPriorChain from "../components/EffectPriorChain";
 import StrategicAssessment from "../components/StrategicAssessment";
 import { buildBaseContext } from "../lib/decision-analysis";
 import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
+import { selfCheck, viewFromDevPlan } from "../lib/self-check";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, computeLoeYear } from "../lib/financial-pins";
 import { classGraveyardProbability } from "../lib/class-risk";
@@ -532,6 +533,12 @@ export default function HomePage() {
       revenuePVM,
     );
   }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief, v.indication, layer2Result]);
+
+  // Read-only self-check over the finished base valuation (observes & flags; never adjusts).
+  const valuationSelfReport = useMemo(
+    () => (devPlan ? selfCheck({ view: viewFromDevPlan(devPlan, { launchYear: v.launchYear, loeYear: v.loeYear, asOfYear: new Date().getFullYear() }) }) : null),
+    [devPlan, v.launchYear, v.loeYear],
+  );
 
   // Single source of truth for the displayed P(approval): a genuine user
   // override wins, else the dev plan governs, else the phase baseline. Used by
@@ -1632,6 +1639,7 @@ export default function HomePage() {
               </button>
             </div>
           ) : (
+          <>
           <div className="animate-fade-up metrics-grid">
             <MetricCard
               label={devPlan ? "eNPV" : "rNPV"}
@@ -1665,6 +1673,27 @@ export default function HomePage() {
               sub={devPlan ? "eNPV / Expected R&D" : "rNPV / Dev Cost"}
             />
           </div>
+          {valuationSelfReport && (valuationSelfReport.blockers > 0 || valuationSelfReport.warns > 0) && (
+            <div className="animate-fade-up" style={{
+              marginTop: 10, padding: "10px 14px", borderRadius: 10,
+              border: `1px solid ${valuationSelfReport.blockers > 0 ? "#ef4444" : "#f59e0b"}`,
+              background: valuationSelfReport.blockers > 0 ? "rgba(239,68,68,0.08)" : "rgba(245,158,11,0.08)",
+            }}>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--text-muted)", marginBottom: 4 }}>
+                Self-check {valuationSelfReport.blockers > 0 ? `— ${valuationSelfReport.blockers} blocker(s)` : `— ${valuationSelfReport.warns} warning(s)`} · read-only, adjusts nothing
+              </div>
+              {valuationSelfReport.checks.filter((c) => !c.pass && c.severity === "BLOCKER").map((c) => (
+                <div key={c.id} style={{ fontSize: 12, color: "#ef4444", fontWeight: 700, padding: "1px 0" }}>⛔ {c.explain}</div>
+              ))}
+              {valuationSelfReport.checks.filter((c) => !c.pass && c.severity === "WARN").map((c) => (
+                <div key={c.id} style={{ fontSize: 12, color: "#f59e0b", padding: "1px 0" }}>⚠ {c.explain}</div>
+              ))}
+              {valuationSelfReport.flags.map((f) => (
+                <div key={f.id} style={{ fontSize: 12, color: "#f59e0b", padding: "1px 0" }}>⚠ {f.explain}</div>
+              ))}
+            </div>
+          )}
+          </>
           )}
 
           {/* Inputs */}

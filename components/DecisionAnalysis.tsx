@@ -28,6 +28,7 @@ import {
 } from "../lib/decision-analysis";
 import type { EffectPrior } from "../lib/effect-prior";
 import type { DevPlanResult } from "../lib/dev-plan";
+import { selfCheck, viewFromOption, flagsFromOption } from "../lib/self-check";
 
 // ─── Prop types ────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,14 @@ function ResultCard({
   const color = OPTION_COLORS[index] ?? "#6b7280";
   const label = OPTION_LABELS[index] ?? String(index + 1);
   const { eROI, marginalEROI, eNPVM, eNPVLowM, eNPVHighM, ptrs, ptrsCI, peakSalesM, devCostM, deltaENPVM, deltaCostM, keyDrivers, voiENPVM, durationMonths } = result;
+
+  // Read-only self-check for this option (observes & flags; never adjusts a value).
+  const selfReport = selfCheck({ view: viewFromOption(result), flags: flagsFromOption(result) });
+  const selfBlockers = selfReport.checks.filter((c) => !c.pass && c.severity === "BLOCKER");
+  const selfWarns: { id: string; explain: string }[] = [
+    ...selfReport.checks.filter((c) => !c.pass && c.severity === "WARN").map((c) => ({ id: c.id, explain: c.explain })),
+    ...selfReport.flags.map((f) => ({ id: f.id, explain: f.explain })),
+  ];
 
   const eROIColor = eROI == null ? "var(--text-muted)" : eROI >= 2 ? "#10b981" : eROI >= 1 ? "#3b82f6" : "#ef4444";
   const margColor = marginalEROI == null ? "var(--text-muted)" : marginalEROI >= 1 ? "#10b981" : marginalEROI >= 0 ? "#3b82f6" : "#ef4444";
@@ -303,6 +312,20 @@ function ResultCard({
             ))}
           </div>
         )}
+
+        {/* Self-check (read-only plausibility layer; observes & flags, never adjusts) */}
+        <div>
+          <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.07em" }}>Checks</div>
+          {selfBlockers.length === 0 && selfWarns.length === 0 && (
+            <div style={{ fontSize: 11, color: "var(--text-faint)" }}>✓ self-check: no issues</div>
+          )}
+          {selfBlockers.map((c) => (
+            <div key={c.id} style={{ fontSize: 11, color: "#ef4444", fontWeight: 700, padding: "2px 0" }}>⛔ {c.explain}</div>
+          ))}
+          {selfWarns.map((w) => (
+            <div key={w.id} style={{ fontSize: 11, color: "#f59e0b", padding: "2px 0" }}>⚠ {w.explain}</div>
+          ))}
+        </div>
       </div>
     </div>
   );
