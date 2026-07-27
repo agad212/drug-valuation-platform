@@ -80,6 +80,16 @@ export const NICHE_PRICE_DEFAULT_USD = 200_000;      // typical precision-therap
 export const NICHE_SHARE_DEFAULT_PCT = 35;           // differentiated defined-responder peak share
 export const BIOMARKER_PREVALENCE_DEFAULT = 0.35;    // enriched-eligible fraction when unsourced
 
+// HEURISTIC, PRE-CALIBRATION plausibility bands for a CITED niche WAC / peak share — hand-set
+// (like Option B's magnitude bands), NOT empirical. A cited value that lands outside its band is
+// clamped + flagged: the comps array carries {drug, peakSalesM} only (no per-comp WAC), so a
+// cited price rides entirely on the LLM's number with nothing structured to check it against
+// except this band — "cite any comp, then state any number" is the hole this closes. When a
+// calibration record of observed targeted-launch WAC/share distributions exists, REPLACE these
+// with empirical percentiles. Do NOT enshrine as truth.
+export const NICHE_WAC_BAND_USD = { min: 150_000, max: 300_000 };  // heuristic, pre-calibration
+export const NICHE_SHARE_BAND_PCT = { min: 20, max: 50 };          // heuristic, pre-calibration
+
 /**
  * Re-derive a niche market bottom-up from its OWN absolute parameters:
  *   nicheTamM   = nicheEligiblePatients × nicheAnnualPriceUsd / 1e6   (eligible × price)

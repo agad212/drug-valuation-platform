@@ -21,6 +21,7 @@ import { computeDevPlan, resolveRegAcceptanceLevel } from "./dev-plan";
 import {
   deriveMarket, calibrateBaseMarket, deriveEnrichedNiche,
   NICHE_PRICE_DEFAULT_USD, NICHE_SHARE_DEFAULT_PCT, BIOMARKER_PREVALENCE_DEFAULT,
+  NICHE_WAC_BAND_USD, NICHE_SHARE_BAND_PCT,
   type MarketParams, type BaseMarket,
 } from "./market-model";
 import type {
@@ -252,7 +253,38 @@ export type OptionResult = {
   // Explanations
   keyDrivers: string[];
   ptrsDrivers: string;
+
+  // Structured niche-market provenance (the SOURCE OF TRUTH; the keyDriver string is only the
+  // human-facing surface). The seam to the Option B critic AND to calibration backtests — both
+  // need "was this sourced, to what, in band?" as queryable data, not prose. Present only when
+  // the niche market was re-derived.
+  nicheProvenance?: {
+    wac:   { value: number; comp: string | null; sourced: boolean; inBand: boolean };
+    share: { value: number; comp: string | null; sourced: boolean; inBand: boolean };
+  };
 };
+
+// Resolve a niche market param under resolve-or-flag + an out-of-band clamp:
+//   • cited (number + named comp) & IN band  → trust the cited value
+//   • cited but OUT of band                  → clamp to the band edge + flag (citation & number
+//                                              must agree; a comp alone can't vouch for any number)
+//   • uncited or omitted                     → hold at the labeled BOUNDED default + flag
+// Returns the USED value plus its structured provenance. Never returns a confident, unvouched value.
+function resolveNicheParam(
+  raw: number | undefined,
+  comp: string | undefined,
+  band: { min: number; max: number },
+  fallback: number,
+): { value: number; comp: string | null; sourced: boolean; inBand: boolean } {
+  const c = comp?.trim() || null;
+  if (raw != null && c) {
+    const inBand = raw >= band.min && raw <= band.max;
+    const value = inBand ? raw : Math.min(band.max, Math.max(band.min, raw));
+    return { value, comp: c, sourced: true, inBand };
+  }
+  // uncited or omitted → hold at the neutral bounded default (which sits inside the band)
+  return { value: fallback, comp: c, sourced: false, inBand: true };
+}
 
 // ─── Calculation Parameter Tables ─────────────────────────────────────────────
 
@@ -577,6 +609,7 @@ export function computeOption(
   // === base.peakSalesM, so Option A / no market change reproduces the base exactly.
   let peakSalesM: number;
   const marketDrivers: string[] = [];
+  let nicheProvenance: OptionResult["nicheProvenance"];
   const baseMarket: BaseMarket = base.market ?? calibrateBaseMarket(base.peakSalesM);
 
   if (option.peakSalesMOverride != null) {
@@ -607,24 +640,30 @@ export function computeOption(
               : null);
 
       if (nicheEligiblePatients != null) {
-        // Price and share must each be PINNED to a NAMED comparator (nicheWacComp / nicheShareComp).
-        // An uncited number is NOT trusted: it falls back to a LABELED, BOUNDED default + a FLAG —
-        // resolve-or-flag, the same discipline as the reg observables and biomarker prevalence.
-        // NEVER base price × premium or base penetration × mult. (The market MATH below is unchanged;
-        // only where WAC and share COME FROM is gated.)
-        const wacSourced   = option.nicheAnnualPriceUsd != null && !!option.nicheWacComp?.trim();
-        const shareSourced = option.nichePeakSharePct   != null && !!option.nicheShareComp?.trim();
-        const nicheAnnualPriceUsd = wacSourced   ? option.nicheAnnualPriceUsd! : NICHE_PRICE_DEFAULT_USD;
-        const nichePeakSharePct   = shareSourced ? option.nichePeakSharePct!   : NICHE_SHARE_DEFAULT_PCT;
-        const niche = deriveEnrichedNiche({ nicheEligiblePatients, nicheAnnualPriceUsd, nichePeakSharePct });
+        // Price and share must each be PINNED to a NAMED comparator (nicheWacComp / nicheShareComp)
+        // AND land inside the heuristic band. resolveNicheParam enforces resolve-or-flag: cited-in-band
+        // → trust; cited-out-of-band → clamp + flag; uncited/omitted → labeled BOUNDED default + flag.
+        // Same discipline as the reg observables and biomarker prevalence. NEVER base price × premium
+        // or base penetration × mult. (The market MATH below is unchanged; only where WAC and share
+        // COME FROM is gated — deriveEnrichedNiche receives the resolved values.)
+        const wac   = resolveNicheParam(option.nicheAnnualPriceUsd, option.nicheWacComp,   NICHE_WAC_BAND_USD,   NICHE_PRICE_DEFAULT_USD);
+        const share = resolveNicheParam(option.nichePeakSharePct,   option.nicheShareComp, NICHE_SHARE_BAND_PCT, NICHE_SHARE_DEFAULT_PCT);
+        nicheProvenance = { wac, share };
+        const niche = deriveEnrichedNiche({ nicheEligiblePatients, nicheAnnualPriceUsd: wac.value, nichePeakSharePct: share.value });
         peakSalesM = niche.peakSalesM;
+        const wacStr = wac.sourced
+          ? (wac.inBand
+              ? `WAC $${(wac.value / 1000).toFixed(0)}k/yr pinned to ${wac.comp}`
+              : `WAC $${(wac.value / 1000).toFixed(0)}k/yr [cited ${wac.comp} but OUT-OF-BAND → clamped to heuristic band $${NICHE_WAC_BAND_USD.min / 1000}k–$${NICHE_WAC_BAND_USD.max / 1000}k]`)
+          : `WAC $${(wac.value / 1000).toFixed(0)}k/yr [UNSOURCED estimate — precision-therapy midpoint (heuristic), no comp cited]`;
+        const shareStr = share.sourced
+          ? (share.inBand
+              ? `share ${share.value.toFixed(0)}% pinned to ${share.comp}`
+              : `share ${share.value.toFixed(0)}% [cited ${share.comp} but OUT-OF-BAND → clamped to heuristic band ${NICHE_SHARE_BAND_PCT.min}–${NICHE_SHARE_BAND_PCT.max}%]`)
+          : `share ${share.value.toFixed(0)}% [UNSOURCED estimate — defined-responder midpoint (heuristic), no comp cited]`;
         const sourcing = [
-          wacSourced
-            ? `WAC $${(nicheAnnualPriceUsd / 1000).toFixed(0)}k/yr pinned to ${option.nicheWacComp!.trim()}`
-            : `WAC $${(NICHE_PRICE_DEFAULT_USD / 1000).toFixed(0)}k/yr [UNSOURCED estimate — precision-therapy midpoint, no comp cited]`,
-          shareSourced
-            ? `share ${nichePeakSharePct.toFixed(0)}% pinned to ${option.nicheShareComp!.trim()}`
-            : `share ${NICHE_SHARE_DEFAULT_PCT}% [UNSOURCED estimate — defined-responder midpoint, no comp cited]`,
+          wacStr,
+          shareStr,
           option.nicheEligiblePatients == null
             ? `count from base eligible × prevalence ${(option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT)}`
             : null,
@@ -867,6 +906,7 @@ export function computeOption(
     voiENPVM, voiVsDirectM,
     durationMonths,
     keyDrivers, ptrsDrivers,
+    nicheProvenance,
   };
 }
 

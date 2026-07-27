@@ -240,9 +240,9 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
   it("net is COMPUTED not signed: a strong niche exceeds base, a weak niche falls below", () => {
     const { base } = mkMarketBase(); // base peak 1000
     const strong = computeOption(base, { id: "b", name: "Strong", nicheEligiblePatients: 30000, nicheAnnualPriceUsd: 250000, nichePeakSharePct: 40, nicheWacComp: "premium precision comp ~$250k/yr", nicheShareComp: "dominant analog launch ~40%" }, undefined);
-    const weak   = computeOption(base, { id: "c", name: "Weak",   nicheEligiblePatients: 8000,  nicheAnnualPriceUsd: 120000, nichePeakSharePct: 20, nicheWacComp: "low-price comp ~$120k/yr", nicheShareComp: "crowded analog ~20%" }, undefined);
-    expect(strong.peakSalesM).toBeGreaterThan(base.peakSalesM); // 30k×250k×40% = $3000M
-    expect(weak.peakSalesM).toBeLessThan(base.peakSalesM);      // 8k×120k×20%  = $192M
+    const weak   = computeOption(base, { id: "c", name: "Weak",   nicheEligiblePatients: 8000,  nicheAnnualPriceUsd: 160000, nichePeakSharePct: 20, nicheWacComp: "modest-price comp ~$160k/yr", nicheShareComp: "crowded analog ~20%" }, undefined);
+    expect(strong.peakSalesM).toBeGreaterThan(base.peakSalesM); // 30k×$250k×40% = $3000M (both in-band, cited)
+    expect(weak.peakSalesM).toBeLessThan(base.peakSalesM);      // 8k×$160k×20%  = $256M (both in-band, cited)
   });
 
   it("RESOLVE-OR-FLAG (#14): an UNCITED WAC/share is NOT trusted — falls back to the labeled bounded default + FLAG", () => {
@@ -257,6 +257,9 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     const mkt = uncited.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
     expect(mkt).toMatch(/UNSOURCED/);   // both WAC and share flagged, not silently trusted
     expect(mkt).not.toMatch(/180k/);    // the uncited number does not appear as a pinned value
+    // Structured provenance (source of truth for the critic / calibration): held at the default.
+    expect(uncited.nicheProvenance!.wac).toMatchObject({ value: 200000, comp: null, sourced: false });
+    expect(uncited.nicheProvenance!.share).toMatchObject({ value: 35, comp: null, sourced: false });
   });
 
   it("SOURCED (#14): a WAC/share PINNED to a named comp IS used, and the provenance cites the comp", () => {
@@ -272,6 +275,26 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     const mkt = sourced.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
     expect(mkt).toMatch(/vismodegib/);
     expect(mkt).not.toMatch(/UNSOURCED/);
+    expect(sourced.nicheProvenance!.wac).toMatchObject({ value: 150000, sourced: true, inBand: true });
+    expect(sourced.nicheProvenance!.share).toMatchObject({ value: 30, sourced: true, inBand: true });
+  });
+
+  it("OUT-OF-BAND (#14): a CITED value outside its heuristic band is CLAMPED + flagged, not trusted", () => {
+    const { base } = mkMarketBase();
+    // Cites a comp but states $500k/yr (> $300k band max) and 70% (> 50% band max) → both clamp.
+    const oob = computeOption(base, {
+      id: "b", name: "Out-of-band niche",
+      nicheEligiblePatients: 20000,
+      nicheAnnualPriceUsd: 500000, nicheWacComp: "ultra-premium cell therapy",
+      nichePeakSharePct: 70,       nicheShareComp: "hypothetical monopoly",
+    }, undefined);
+    // clamps to $300k WAC and 50% share: 20,000 × $300k × 50% = $3000M (NOT 20k×$500k×70% = $7000M).
+    expect(oob.peakSalesM).toBeCloseTo(3000, 0);
+    expect(oob.nicheProvenance!.wac).toMatchObject({ value: 300000, sourced: true, inBand: false });
+    expect(oob.nicheProvenance!.share).toMatchObject({ value: 50, sourced: true, inBand: false });
+    const mkt = oob.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
+    expect(mkt).toMatch(/OUT-OF-BAND/);
+    expect(mkt).toMatch(/\$300k\/yr/);  // the USED (clamped) value is shown, not the raw cited $500k
   });
 
   it("prevalence-only enrichment derives the COUNT from base eligible, price/share are absolute defaults", () => {
