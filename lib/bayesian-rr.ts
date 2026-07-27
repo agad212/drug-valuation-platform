@@ -24,6 +24,7 @@
 
 import { normalCDF, enrichEffectPrior, DEFAULT_ENRICHMENT_LIFT } from "./effect-prior";
 import type { EffectPriorMixture } from "./effect-prior";
+import { tteEventsFromAccrual, schoenfeldZ, type TteAccrual } from "./tte-power";
 import type {
   EndpointType,
   DesignType,
@@ -74,6 +75,34 @@ export type RRTrialDesign = {
   // (from the prior mean + effectiveNull) — precision only; the effect stays in the prior.
   // Absent → proportion path (byte-identical). See CONTINUOUS-FAMILY POWER below.
   continuous?: { outcomeSd: number; expectedDelta: number; dScale?: number };
+
+  // ── Layer 1 DESIGN SPEC (design-aware power). All OPTIONAL; absent → today's single-look path,
+  //    byte-identical. alpha + tte carry real power math this pass; sequential/adaptive/bayesian are
+  //    DEFINED so Layer 2 can later populate them, but are carried-but-INERT (no power math yet).
+  //    Deterministic only — no LLM; a design parameter sets precision/bar/structure, never effect
+  //    magnitude (that stays in the prior over θ, integrated in computeStageSuccess).
+
+  // Family 2 — free significance level. Present → z_α = Φ⁻¹(1 − α[/2]) (see computeZAlpha); absent →
+  // the regulatoryContext category (Z_ALPHA). REPLACES the category, never stacks.
+  alpha?: { value: number; sided?: 1 | 2; multiplicity?: number };
+
+  // Family 3 — native TTE (Schoenfeld log-rank), RCT this pass. `expectedHR` is anchored to the prior
+  // mean's margin via `hrScale` (resolved in computeStageRR) — a monotone reparam of (θ−null), NOT a
+  // new effect. `events` is INFORMATION (√d): an explicit count or derived from the accrual sub-model.
+  // Gated on the RESOLVED hrScale, NEVER on isTimeToEvent (that would move TTX). Replaces the RR-proxy
+  // for RCT-TTE; single-arm/basket TTE is not resolved this pass → stays on the RR-proxy, unchanged.
+  tte?: {
+    expectedHR: number;
+    events?: number;
+    accrual?: TteAccrual;
+    hrScale?: number; // resolved in computeStageRR — precision/anchor only
+    eventsResolved?: number; // resolved in computeStageRR
+  };
+
+  // Carried-but-INERT this pass (the spec target for Layer 2; NO power math consumes these yet):
+  sequential?: { lookFractions: number[]; spending?: "OBF" | "POCOCK" | "LDL"; futility?: unknown }; // Phase 2
+  adaptive?: { kind?: string; [k: string]: unknown }; // FLAG-ONLY (later)
+  bayesian?: { refTheta?: number; postThreshold?: number; predictive?: unknown }; // Phase 2 / deferred
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -154,6 +183,7 @@ const GRID_STEP = (GRID_MAX - GRID_MIN) / (GRID_SIZE - 1);
 // path, byte-identical. TTE family (HR + #events / Schoenfeld) is deferred to Phase 2b.
 const CONTINUOUS_D_CAP = 3.0;        // Cohen's d ceiling — d>3 is implausible; keeps power bounded
 const CONTINUOUS_MIN_MARGIN = 0.02;  // floor for (priorMean − null) so the calibration can't blow up
+const TTE_LN_HR_CAP = 2.0;           // |ln HR| ceiling (HR≈0.14) — keeps native-TTE power bounded
 
 // Regulatory context → one-sided significance level z-value
 // BTD/orphan programs get regulatory flexibility (lower bar).
@@ -167,6 +197,50 @@ const Z_ALPHA: Record<RegulatoryContext, number> = {
   fast_track: 1.645,   // Fast Track does NOT ease the statistical bar (== standard)
   confirmatory: 1.96,  // α = 0.025 one-sided
 };
+
+// ─── Layer 1, Family 2: alpha-as-parameter ─────────────────────────────────────
+// z_α is the ONLY significance channel. Today it's a regulatoryContext CATEGORY lookup (above); with
+// a free alpha it becomes a parameter. computeZAlpha REPLACES the category when design.alpha is
+// present, and returns the IDENTICAL category expression when it is absent (the FROZEN invariant).
+// alpha moves the BAR (difficulty), never the effect — same channel as the category, now continuous.
+
+// Inverse standard-normal CDF (Acklam's rational approximation; |abs error| < 1.15e-9).
+function normalInv(p: number): number {
+  if (p <= 0) return -Infinity;
+  if (p >= 1) return Infinity;
+  const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2, -3.066479806614716e1, 2.506628277459239];
+  const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+  const plow = 0.02425, phigh = 1 - plow;
+  if (p < plow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p <= phigh) {
+    const q = p - 0.5, r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  }
+  const q = Math.sqrt(-2 * Math.log(1 - p));
+  return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+}
+
+// Free alpha → z_α. Bonferroni-split by `multiplicity` if given; one- or two-sided.
+function zFromAlpha(alpha: number, sided: 1 | 2 = 1, multiplicity?: number): number {
+  const m = multiplicity && multiplicity > 0 ? multiplicity : 1;
+  const aEff = Math.max(1e-9, Math.min(0.5, alpha / m));
+  const tail = sided === 2 ? aEff / 2 : aEff;
+  return normalInv(1 - tail);
+}
+
+// The significance bar for a stage: free alpha REPLACES the category (never stacks); absent → the
+// EXACT category expression used before Layer 1. This is what keeps FROZEN assets byte-identical.
+function computeZAlpha(design: RRTrialDesign): number {
+  if (design.alpha != null && Number.isFinite(design.alpha.value)) {
+    return zFromAlpha(design.alpha.value, design.alpha.sided ?? 1, design.alpha.multiplicity);
+  }
+  return Z_ALPHA[design.regulatoryContext] ?? 1.645;
+}
 
 // ─── Math primitives ─────────────────────────────────────────────────────
 
@@ -461,13 +535,21 @@ export function rrTrialPower(
   // in computeDevPlan), not an effective-n factor here. Effective n = the trial's n.
   const nEff = n;
 
-  const zA = Z_ALPHA[design.regulatoryContext] ?? 1.645;
+  const zA = computeZAlpha(design);
 
   // G2 Phase 2a: CONTINUOUS-family native power. Gated on the boundary calibration dScale
   // (set only when sourced outcomeSd + expectedDelta are present — computeStageRR fills it).
   // Absent → fall through to the proportion path below (byte-identical).
   if (design.continuous?.dScale != null) {
     return continuousStagePower(theta, nullRR, nEff, zA, design, capSingleArmToRct);
+  }
+
+  // Layer 1: NATIVE-TTE (Schoenfeld log-rank). Gated on the RESOLVED hrScale — set ONLY when
+  // design.tte is present + valid on an RCT (in computeStageRR), NEVER on isTimeToEvent (keying on
+  // isTimeToEvent would move TTX, which is a single-arm TTE-on-proxy). Absent → falls through to the
+  // proportion path below (byte-identical). Replaces the RR-proxy for RCT-TTE; does not stack on it.
+  if (design.tte?.hrScale != null) {
+    return tteStagePower(theta, nullRR, design, zA);
   }
 
   if (design.designType === "rct") {
@@ -549,6 +631,20 @@ function continuousStagePower(
   const oneSample = normalCDF(d * Math.sqrt(nOne) - zA);
   if (!capSingleArmToRct) return oneSample;
   return Math.min(oneSample, twoSample(nEff / 2));
+}
+
+// NATIVE-TTE (Schoenfeld log-rank) power(θ) for a 1:1 RCT — Layer 1, Family 3. The prior's θ-margin
+// maps to a hazard ratio through the anchored hrScale (computeStageRR sets it so that at θ=priorMean,
+// |ln HR| = |ln expectedHR|, exactly like the 2a continuous dScale): |ln HR(θ)| = hrScale·max(θ−null,0),
+// capped. HR is thus a MONOTONE REPARAMETERISATION of the prior's margin, NOT a new effect; events
+// (d, resolved once) is INFORMATION only, entering solely as √d inside schoenfeldZ. At θ ≤ null →
+// HR = 1 → Z = −z_α → power = the type-I rate, as it must. The n used elsewhere describes patients;
+// TTE power is driven by events, not n (no double-count).
+function tteStagePower(theta: number, nullRR: number, design: RRTrialDesign, zA: number): number {
+  const t = design.tte!;
+  const lnHR = Math.min(TTE_LN_HR_CAP, t.hrScale! * Math.max(theta - nullRR, 0));
+  const hrTheta = Math.exp(-lnHR); // benefit → HR ≤ 1; |ln HR| scales with the prior's θ-margin
+  return normalCDF(schoenfeldZ(hrTheta, t.eventsResolved!, zA));
 }
 
 // ─── Comparator distribution grid ────────────────────────────────────────────
@@ -895,18 +991,48 @@ export function computeStageRR(
   // scales linearly with (θ − effectiveNull). Only when BOTH sourced stats are present and
   // valid; otherwise `powerDesign === design` → the exact proportion path (byte-identical).
   // Effect stays in the prior; SD is precision only. See continuousStagePower.
-  const powerDesign: RRTrialDesign =
-    design.continuous && design.continuous.outcomeSd > 0 && design.continuous.expectedDelta > 0
-      ? {
-          ...design,
-          continuous: {
-            ...design.continuous,
-            dScale:
-              (design.continuous.expectedDelta / design.continuous.outcomeSd) /
-              Math.max(priorMoments.mean - effectiveNull, CONTINUOUS_MIN_MARGIN),
-          },
-        }
-      : design;
+  let powerDesign: RRTrialDesign = design;
+  if (design.continuous && design.continuous.outcomeSd > 0 && design.continuous.expectedDelta > 0) {
+    powerDesign = {
+      ...design,
+      continuous: {
+        ...design.continuous,
+        dScale:
+          (design.continuous.expectedDelta / design.continuous.outcomeSd) /
+          Math.max(priorMoments.mean - effectiveNull, CONTINUOUS_MIN_MARGIN),
+      },
+    };
+  } else if (
+    // Layer 1 NATIVE-TTE resolution (RCT only this pass). Resolve events (explicit count or the
+    // accrual sub-model) and the hrScale anchor ONCE here (needs priorMean + effectiveNull), mirroring
+    // the 2a dScale — precision/anchor only, effect stays in the prior. hrScale is what GATES the native
+    // path in rrTrialPower. Single-arm/basket TTE is not resolved (no validated one-sample log-rank this
+    // pass) → it stays on the RR-proxy, byte-identical. Do NOT re-apply SURROGATE_TRANSLATION_SIGMA2:
+    // a native-TTE stage reads its already-widened incoming prior.
+    design.tte &&
+    design.designType === "rct" &&
+    design.tte.expectedHR > 0 &&
+    design.tte.expectedHR !== 1
+  ) {
+    const events =
+      design.tte.events != null && design.tte.events > 0
+        ? design.tte.events
+        : design.tte.accrual
+        ? tteEventsFromAccrual(design.tte.accrual, design.tte.expectedHR, 0.5)
+        : NaN;
+    if (Number.isFinite(events) && events > 0) {
+      powerDesign = {
+        ...design,
+        tte: {
+          ...design.tte,
+          eventsResolved: events,
+          hrScale:
+            Math.abs(Math.log(design.tte.expectedHR)) /
+            Math.max(priorMoments.mean - effectiveNull, CONTINUOUS_MIN_MARGIN),
+        },
+      };
+    }
+  }
 
   // 2. Compute P(stage success) via numerical integration (with comparator uncertainty)
   const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, powerDesign, comparatorSigma2);
