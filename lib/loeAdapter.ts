@@ -142,7 +142,7 @@ async function inferBiologicLOE(appLabel: string, appNo: string): Promise<{
       loeDate: `${fallbackYear}-12-31`,
       reasons: [
         `${appLabel} is a biologic (BLA). Could not retrieve approval date from FDA.`,
-        `Using default estimate (+8 years). Check the FDA Purple Book for accurate exclusivity data.`,
+        `Using default estimate (current year + 8, a coarse placeholder — not a sourced LOE). Check the FDA Purple Book for accurate exclusivity data.`,
       ],
       sources: [{ label: `FDA Purple Book — ${appLabel}`, url: purpleBookUrl }],
     };
@@ -247,7 +247,7 @@ export async function inferLOE(drugName: string): Promise<{
   if (!app) {
     return {
       loeDate: fallbackDate,
-      reasons: [`"${drugName}" not found in FDA database. Using default estimate (+8 years).`],
+      reasons: [`"${drugName}" not found in FDA database. Using default estimate (current year + 8, a coarse placeholder — not a sourced LOE).`],
       sources: [{ label: "Estimate — not found in FDA database" }],
     };
   }

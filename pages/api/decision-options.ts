@@ -313,6 +313,11 @@ RULE 6 — Be realistic. Think like a pharma executive, not an optimizer.
     set "populationType":"biomarker_selected" (and "biomarkerPrevalence" = the responder fraction when
     you know it). This is what tells the engine to CONCENTRATE THE EFFECT (raise P via the prior) and to
     re-derive the niche market. Do NOT rely on inclusionCriteria:"tight" to convey biomarker selection.
+    ONE SIGNAL PER OPTION: if you set "populationType":"biomarker_selected", do NOT ALSO set
+    "inclusionCriteria":"tight" for the SAME narrowing — the biomarker field already shrinks the market,
+    and adding "tight" double-counts it. Only pair "tight" with a biomarker option when there is a
+    SEPARATE, genuinely non-biomarker narrowing axis (e.g. 2L+ only, or a severity cut) — and name that
+    separate axis in changesSummary.
   - GENERIC narrowing that is NOT biomarker (by disease severity, line of therapy, age, geography):
     use "inclusionCriteria":"tight". This shrinks the eligible COUNT (market) only — it does NOT
     concentrate the effect and must NOT be used to imply a responder-enriched population.
