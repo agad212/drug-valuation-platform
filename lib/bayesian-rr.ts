@@ -25,6 +25,7 @@
 import { normalCDF, enrichEffectPrior, DEFAULT_ENRICHMENT_LIFT } from "./effect-prior";
 import type { EffectPriorMixture } from "./effect-prior";
 import { tteEventsFromAccrual, schoenfeldZ, type TteAccrual } from "./tte-power";
+import { sequentialBoundaries, pCrossGivenBoundaries, expectedInfoFractionGivenBoundaries, type SpendingFunction } from "./sequential-power";
 import type {
   EndpointType,
   DesignType,
@@ -99,10 +100,27 @@ export type RRTrialDesign = {
     eventsResolved?: number; // resolved in computeStageRR
   };
 
-  // Carried-but-INERT this pass (the spec target for Layer 2; NO power math consumes these yet):
-  sequential?: { lookFractions: number[]; spending?: "OBF" | "POCOCK" | "LDL"; futility?: unknown }; // Phase 2
+  // Family 1 — group-sequential / interim (Phase 2, efficacy-only). lookFractions + spending define
+  // the efficacy boundaries; zBoundaries + pCrossTable are RESOLVED in computeStageRR (θ-independent
+  // boundaries + a drift→P(cross) interpolation table). Futility is a fast-follow (not this pass).
+  sequential?: {
+    lookFractions: number[];
+    spending?: "OBF" | "POCOCK" | "LDL"; // LDL reserved (fast-follow) → falls back to OBF this pass
+    futility?: unknown; // fast-follow (not computed this pass)
+    zBoundaries?: number[]; // resolved: efficacy boundaries (θ-independent)
+    pCrossTable?: { drift: number[]; p: number[] }; // resolved: drift→P(cross) interpolation table
+  };
   adaptive?: { kind?: string; [k: string]: unknown }; // FLAG-ONLY (later)
-  bayesian?: { refTheta?: number; postThreshold?: number; predictive?: unknown }; // Phase 2 / deferred
+  // Family 5 — single-look Bayesian posterior-threshold (Phase 2, proportion family). analysisPrior is
+  // a DECISION-RULE Beta {a,b} — NEVER the effect mixture (enforced by type; a mixture cannot reach it).
+  // kStar is RESOLVED in computeStageRR. predictive (sequential PP) is deferred.
+  bayesian?: {
+    refTheta?: number;
+    postThreshold?: number;
+    analysisPrior?: { a: number; b: number };
+    predictive?: unknown; // sequential predictive-probability (deferred → rides on Family 1)
+    kStar?: number; // resolved in computeStageRR (proportion family only)
+  };
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -240,6 +258,86 @@ function computeZAlpha(design: RRTrialDesign): number {
     return zFromAlpha(design.alpha.value, design.alpha.sided ?? 1, design.alpha.multiplicity);
   }
   return Z_ALPHA[design.regulatoryContext] ?? 1.645;
+}
+
+// ─── Layer 1 Phase 2, Family 5: single-look Bayesian posterior-threshold ────────
+// Regularized incomplete beta I_x(a,b) — Numerical Recipes continued fraction. Serves BOTH the
+// posterior tail P(θ>θ0 | Beta) AND the binomial power tail P(X≥k | n,θ) = I_θ(k, n−k+1). Validated
+// as a PRIMITIVE before anything consumes it (I_{0.5}(a,a)=0.5, I_x(1,1)=x, I_{0.5}(15,6)=0.020695).
+function betacf(a: number, b: number, x: number): number {
+  const MAXIT = 200, EPS = 3e-12, FPMIN = 1e-300;
+  const qab = a + b, qap = a + 1, qam = a - 1;
+  let c = 1;
+  let d = 1 - (qab * x) / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= MAXIT; m++) {
+    const m2 = 2 * m;
+    let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d; h *= d * c;
+    aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d; const del = d * c; h *= del;
+    if (Math.abs(del - 1) < EPS) break;
+  }
+  return h;
+}
+
+/** Regularized incomplete beta I_x(a,b) ∈ [0,1]. */
+export function betai(a: number, b: number, x: number): number {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const lnFront = lnGamma(a + b) - lnGamma(a) - lnGamma(b) + a * Math.log(x) + b * Math.log(1 - x);
+  const front = Math.exp(lnFront);
+  return x < (a + 1) / (a + b + 2) ? (front * betacf(a, b, x)) / a : 1 - (front * betacf(b, a, 1 - x)) / b;
+}
+
+// P(θ > θ0 | k responders in n) under a Beta(a,b) ANALYSIS prior (a decision-rule parameter — NEVER
+// the effect mixture) = P(Beta(a+k, b+n−k) > θ0) = 1 − I_{θ0}(a+k, b+n−k).
+function posteriorExceed(k: number, n: number, theta0: number, prior: { a: number; b: number }): number {
+  return 1 - betai(prior.a + k, prior.b + (n - k), theta0);
+}
+
+// Smallest responder count k in [0,n] with posterior P(θ>θ0) ≥ c (monotone increasing in k → binary
+// search). Returns n+1 when even all-responders can't clear c (the design can never declare success).
+export function bayesianCritK(n: number, theta0: number, c: number, prior: { a: number; b: number }): number {
+  if (posteriorExceed(n, n, theta0, prior) < c) return n + 1;
+  let lo = 0, hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (posteriorExceed(mid, n, theta0, prior) >= c) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+// Frequentist power of the Bayesian rule at true θ: P(X ≥ k* | Binom(n,θ)) = I_θ(k*, n−k*+1). Effect
+// enters ONLY through θ here; the analysis prior already resolved to k* (single-locus).
+export function bayesianThresholdPower(theta: number, n: number, kStar: number): number {
+  if (kStar > n) return 0;
+  if (kStar <= 0) return 1;
+  return betai(kStar, n - kStar + 1, theta);
+}
+
+// Linear interpolation on the precomputed drift→P(cross) table (built once per stage in
+// computeStageRR; the sequential boundaries are θ-independent, P(cross) is a smooth monotone
+// function of the drift). O(log n) lookup per θ.
+function interpPCross(table: { drift: number[]; p: number[] }, drift: number): number {
+  const { drift: xs, p: ys } = table;
+  if (drift <= xs[0]) return ys[0];
+  if (drift >= xs[xs.length - 1]) return ys[ys.length - 1];
+  let lo = 0, hi = xs.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (xs[mid] <= drift) lo = mid;
+    else hi = mid;
+  }
+  const w = (drift - xs[lo]) / (xs[hi] - xs[lo]);
+  return ys[lo] + w * (ys[hi] - ys[lo]);
 }
 
 // ─── Math primitives ─────────────────────────────────────────────────────
@@ -537,56 +635,46 @@ export function rrTrialPower(
 
   const zA = computeZAlpha(design);
 
-  // G2 Phase 2a: CONTINUOUS-family native power. Gated on the boundary calibration dScale
-  // (set only when sourced outcomeSd + expectedDelta are present — computeStageRR fills it).
-  // Absent → fall through to the proportion path below (byte-identical).
+  // Layer 1 Phase 2: single-look BAYESIAN posterior-threshold REPLACES the frequentist proportion
+  // rule (kStar resolved in computeStageRR ONLY for the proportion family). Effect still enters only
+  // through θ in the binomial tail. Absent → the frequentist family path below.
+  if (design.bayesian?.kStar != null) {
+    return bayesianThresholdPower(theta, n, design.bayesian.kStar);
+  }
+
+  // ── Base single-look power over the endpoint family (Phase 1 — computations UNCHANGED, captured
+  //    into a value so the Phase-2 group-sequential wrapper can compose over it). ──
+  let basePower: number;
   if (design.continuous?.dScale != null) {
-    return continuousStagePower(theta, nullRR, nEff, zA, design, capSingleArmToRct);
+    // G2 Phase 2a: CONTINUOUS-family native power. Gated on the boundary calibration dScale.
+    basePower = continuousStagePower(theta, nullRR, nEff, zA, design, capSingleArmToRct);
+  } else if (design.tte?.hrScale != null) {
+    // NATIVE-TTE (Schoenfeld). Gated on the RESOLVED hrScale (RCT only), NEVER on isTimeToEvent.
+    basePower = tteStagePower(theta, nullRR, design, zA);
+  } else if (design.designType === "rct") {
+    basePower = twoProportionRctPower(theta, nullRR, nEff, zA, comparatorSigma2);
+  } else {
+    // Single-arm (or basket): one-proportion test vs historical control. comparatorSigma2 is the
+    // historical-benchmark uncertainty. Capped at the RCT-equivalent (Fix C).
+    const nSingleArm = design.designType === "basket" ? Math.max(1, nEff / 3) : Math.max(1, nEff);
+    const seCrit = Math.sqrt((nullRR * (1 - nullRR)) / nSingleArm);
+    const thetaCrit = nullRR + zA * seCrit;
+    const seObs = Math.sqrt((theta * (1 - theta)) / nSingleArm + comparatorSigma2);
+    const singleArmPower = seObs < 1e-10 ? (theta > thetaCrit ? 1 : 0) : normalCDF((theta - thetaCrit) / seObs);
+    basePower = !capSingleArmToRct ? singleArmPower : Math.min(singleArmPower, twoProportionRctPower(theta, nullRR, nEff, zA, 0));
   }
 
-  // Layer 1: NATIVE-TTE (Schoenfeld log-rank). Gated on the RESOLVED hrScale — set ONLY when
-  // design.tte is present + valid on an RCT (in computeStageRR), NEVER on isTimeToEvent (keying on
-  // isTimeToEvent would move TTX, which is a single-arm TTE-on-proxy). Absent → falls through to the
-  // proportion path below (byte-identical). Replaces the RR-proxy for RCT-TTE; does not stack on it.
-  if (design.tte?.hrScale != null) {
-    return tteStagePower(theta, nullRR, design, zA);
+  // Layer 1 Phase 2: GROUP-SEQUENTIAL wrapper. Gated on the RESOLVED pCrossTable (built in
+  // computeStageRR from the θ-independent efficacy boundaries). Recovers the standardized drift
+  // ξ = Φ⁻¹(basePower) + z_α and returns P(cross) — composing over proportion / continuous / native-
+  // TTE base power alike (it reads only the scalar base power). Absent → basePower (byte-identical).
+  if (design.sequential?.pCrossTable != null) {
+    const bp = Math.min(1 - 1e-12, Math.max(1e-12, basePower));
+    const drift = Math.min(20, Math.max(-20, normalInv(bp) + zA));
+    return interpPCross(design.sequential.pCrossTable, drift);
   }
 
-  if (design.designType === "rct") {
-    return twoProportionRctPower(theta, nullRR, nEff, zA, comparatorSigma2);
-  }
-
-  // Single-arm (or basket): one-proportion test vs historical control.
-  // comparatorSigma2 represents uncertainty in that historical benchmark —
-  // higher for informal/sparse historical data, lower for well-studied SOC.
-  const nSingleArm = design.designType === "basket"
-    ? Math.max(1, nEff / 3)  // basket splits across ~3 cohorts
-    : Math.max(1, nEff);
-
-  // Critical observed RR to reject H₀ (based on null distribution alone)
-  const seCrit = Math.sqrt(nullRR * (1 - nullRR) / nSingleArm);
-  const thetaCrit = nullRR + zA * seCrit;
-
-  // Power: P(observed RR > θ_crit | θ_true), with comparator uncertainty
-  // widening the denominator — makes the test less conclusive when the
-  // historical benchmark itself is uncertain.
-  const seObs = Math.sqrt(theta * (1 - theta) / nSingleArm + comparatorSigma2);
-  const singleArmPower = seObs < 1e-10
-    ? (theta > thetaCrit ? 1 : 0)
-    : normalCDF((theta - thetaCrit) / seObs);
-
-  // Fix C: a single-arm / historical-control design is NEVER more conclusive than a
-  // concurrent-controlled RCT run with the SAME patients — the RCT removes confounding
-  // and secular trends the single-arm cannot. The one-proportion formula otherwise
-  // rewards putting all n on treatment (smaller treatment-arm variance), which lets
-  // single-arm spuriously exceed the RCT at low θ. Cap single-arm power at the
-  // equivalent RCT's power (concurrent control ⇒ comparatorSigma2 = 0 for that
-  // hypothetical). Targeted monotonicity fix — RCT power and overall calibration are
-  // unchanged; historical-control uncertainty (comparatorSigma2 > 0) still pushes the
-  // single-arm strictly below this ceiling.
-  if (!capSingleArmToRct) return singleArmPower;
-  const rctEquivalentPower = twoProportionRctPower(theta, nullRR, nEff, zA, 0);
-  return Math.min(singleArmPower, rctEquivalentPower);
+  return basePower;
 }
 
 // Two-proportion z-test power (equal allocation). For RCTs the control arm is measured
@@ -939,6 +1027,18 @@ export type StageRRResult = {
   /** Downsampled comparator density for chart display. null when comparatorSigma2 ≈ 0. */
   comparatorGrid: { theta: number[]; density: number[] } | null;
   counterfactuals: { label: string; pSuccess: number }[];
+  // ── Layer 1 Phase 2 OUTPUTS (surfaced, NOT wired into cost/eNPV this pass). ──
+  sequentialDesign?: {
+    zBoundaries: number[];
+    expectedInfoFraction: number; // E[information] as a fraction of max, at the prior-mean effect
+    expectedN: number; // expectedInfoFraction × n (an OUTPUT metric; does not feed dev cost)
+  };
+  bayesianDesign?: {
+    kStar: number;
+    emergentAlpha: number; // frequentist type-I of the posterior rule at θ = refTheta (transparency)
+    analysisPriorSourced: boolean; // false → reference Beta(1,1) default was used (flagged)
+  };
+  designFlags?: string[]; // resolve-or-flag notes (PP-deferred, bayesian-inert-on-non-proportion, …)
 };
 
 /**
@@ -1034,6 +1134,61 @@ export function computeStageRR(
     }
   }
 
+  // ── Layer 1 Phase 2 resolution (θ-independent markers; mirrors dScale/hrScale). Absent spec →
+  //    no markers set → the exact single-look path in rrTrialPower (FROZEN byte-identical). ──
+  const designFlags: string[] = [];
+  let sequentialDesign: StageRRResult["sequentialDesign"];
+  let bayesianDesign: StageRRResult["bayesianDesign"];
+
+  const seqLooks = design.sequential?.lookFractions;
+  const wantSeq = Array.isArray(seqLooks) && seqLooks.length >= 1;
+  const endpointIsProportion = !design.continuous && !design.tte;
+  const wantBayes = design.bayesian != null && design.bayesian.postThreshold != null;
+
+  if (wantSeq && wantBayes) {
+    // sequential + Bayesian = predictive-probability = DEFERRED. Resolve NEITHER marker → base
+    // single-look path. Flag it; never a fabricated combination.
+    designFlags.push("sequential+bayesian (predictive-probability) deferred — using base single-look power");
+  } else if (wantSeq) {
+    const spending: SpendingFunction = design.sequential!.spending === "POCOCK" ? "POCOCK" : "OBF";
+    if (design.sequential!.spending === "LDL") designFlags.push("LDL spending not implemented this pass — using OBF");
+    // design.alpha (or the inverted category) is the TOTAL α; the spending function distributes it
+    // across looks and the boundaries REPLACE the single-look z_α.
+    const alphaTotal =
+      design.alpha?.value != null && Number.isFinite(design.alpha.value)
+        ? design.alpha.value
+        : 1 - normalCDF(Z_ALPHA[design.regulatoryContext] ?? 1.645);
+    const seq = sequentialBoundaries(alphaTotal, seqLooks!, spending);
+    // drift→P(cross) interpolation table (boundaries θ-independent; P(cross) smooth in drift).
+    const driftGrid: number[] = [];
+    const pGrid: number[] = [];
+    for (let d = -3; d <= 8.0001; d += 0.1) {
+      driftGrid.push(d);
+      pGrid.push(pCrossGivenBoundaries(seq.zBoundaries, seqLooks!, d));
+    }
+    powerDesign = {
+      ...powerDesign,
+      sequential: { ...design.sequential!, zBoundaries: seq.zBoundaries, pCrossTable: { drift: driftGrid, p: pGrid } },
+    };
+    // E[N] at the prior-mean effect (OUTPUT only; NOT wired into cost). Recover the drift from the
+    // base (non-sequential) power at the prior mean.
+    const baseAtMean = rrTrialPower(priorMoments.mean, effectiveNull, n, { ...powerDesign, sequential: undefined, bayesian: undefined }, comparatorSigma2);
+    const bpm = Math.min(1 - 1e-12, Math.max(1e-12, baseAtMean));
+    const meanDrift = Math.min(20, Math.max(-20, normalInv(bpm) + computeZAlpha(design)));
+    const eInfoFrac = expectedInfoFractionGivenBoundaries(seq.zBoundaries, seqLooks!, meanDrift);
+    sequentialDesign = { zBoundaries: seq.zBoundaries, expectedInfoFraction: eInfoFrac, expectedN: eInfoFrac * n };
+  } else if (wantBayes && endpointIsProportion) {
+    const prior = design.bayesian!.analysisPrior ?? { a: 1, b: 1 };
+    const priorSourced = design.bayesian!.analysisPrior != null;
+    if (!priorSourced) designFlags.push("Bayesian analysis prior unspecified — using reference Beta(1,1), not sourced");
+    const refT = design.bayesian!.refTheta ?? effectiveNull;
+    const kStar = bayesianCritK(n, refT, design.bayesian!.postThreshold!, prior);
+    powerDesign = { ...powerDesign, bayesian: { ...design.bayesian!, kStar } };
+    bayesianDesign = { kStar, emergentAlpha: bayesianThresholdPower(refT, n, kStar), analysisPriorSourced: priorSourced };
+  } else if (wantBayes && !endpointIsProportion) {
+    designFlags.push("Bayesian posterior-threshold applies to the proportion family only — inert on continuous/TTE this pass; using base power");
+  }
+
   // 2. Compute P(stage success) via numerical integration (with comparator uncertainty)
   const trialSuccessProb = computeStageSuccess(priorGrid, n, effectiveNull, powerDesign, comparatorSigma2);
 
@@ -1071,5 +1226,8 @@ export function computeStageRR(
     comparatorSigma2,
     comparatorGrid,
     counterfactuals,
+    sequentialDesign,
+    bayesianDesign,
+    designFlags: designFlags.length ? designFlags : undefined,
   };
 }
