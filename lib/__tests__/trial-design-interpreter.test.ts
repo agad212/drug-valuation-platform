@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateDesignSpec } from "../trial-design-interpreter";
+import { validateDesignSpec, resolveStageTarget } from "../trial-design-interpreter";
 // computeStageRR is imported HERE (in the test) to prove the spec is Layer-1-consumable — the
 // interpreter module itself imports NO Layer-1 power function (the no-leak import-graph proof).
 import { computeStageRR, type RRTrialDesign } from "../bayesian-rr";
@@ -105,6 +105,34 @@ describe("Layer 2 interpreter — two-stage validation gate (non-vacuity)", () =
     const res = validateDesignSpec("give me a group sequential design" as unknown);
     expect(res.rejected).toBe(true);
     expect(res.spec).toEqual({});
+  });
+});
+
+describe("Layer 2 interpreter — stage-addressable (stageTarget)", () => {
+  it("unstated stageTarget with design content → defaults to pivotal, SURFACED as an assumption (never silent whole-plan)", () => {
+    const { spec, assumptions } = validateDesignSpec({ designType: "rct", sequential: { lookFractions: [0.5, 1] } });
+    expect(spec.stageTarget).toBe("pivotal");
+    expect(assumptions.some((a) => a.field === "stageTarget" && a.source === "default")).toBe(true);
+  });
+  it("explicit stageTarget → carried as a user assumption", () => {
+    const { spec, assumptions } = validateDesignSpec({ sequential: { lookFractions: [0.5, 1] }, stageTarget: "Phase 3" });
+    expect(spec.stageTarget).toBe("Phase 3");
+    expect(assumptions.some((a) => a.field === "stageTarget" && a.source === "user")).toBe(true);
+  });
+  it("empty spec → no stageTarget (nothing to address)", () => {
+    expect(validateDesignSpec({}).spec.stageTarget).toBeUndefined();
+  });
+  it("resolveStageTarget: phase match / pivotal / index / out-of-range→flag / unresolved→flag", () => {
+    const stages = [{ phase: "Phase 2" }, { phase: "Phase 3" }];
+    expect(resolveStageTarget("Phase 3", stages).index).toBe(1);
+    expect(resolveStageTarget("pivotal", stages).index).toBe(1);
+    expect(resolveStageTarget(0, stages).index).toBe(0);
+    const oob = resolveStageTarget(9, stages);
+    expect(oob.index).toBe(1);
+    expect(oob.flag?.code).toBe("stage-target-out-of-range");
+    const un = resolveStageTarget("Phase 1", stages);
+    expect(un.index).toBe(1);
+    expect(un.flag?.code).toBe("stage-target-unresolved");
   });
 });
 

@@ -8,6 +8,7 @@ import { deriveMarket, deriveEnrichedNiche, nicheIdentityHolds } from "../market
 import { enrichEffectPrior, resolveEnrichmentLift, mixtureMoments, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "../effect-prior";
 import type { TrialDesignInputs } from "../ptrs-trial";
 import type { Valuation } from "../types";
+import type { FamilyFlag } from "../trial-design-interpreter";
 
 const baseDesign: TrialDesignInputs = {
   n: 45, endpointType: "surrogate", designType: "single_arm",
@@ -689,5 +690,90 @@ describe("Continuous endpoint — native two-sample power via sourced SD + Δ (G
     // the Build-3 OPTION ratio test unchanged prove follow-up 2 altered no computed value.)
     expect(cont.ptrs).toBeGreaterThan(0); expect(cont.ptrs).toBeLessThan(1);
     expect(Math.abs(cont.ptrs - prop.ptrs)).toBeGreaterThan(1e-6); // engine ran native power (not the display)
+  });
+});
+
+// ── Layer 2 spec-delivery BRIDGE — a described design targets a stage, drives P through the full plan ──
+describe("Layer 2 spec-delivery bridge — stage-addressable design → full-plan valuation", () => {
+  const bDesign: TrialDesignInputs = { n: 200, endpointType: "surrogate", designType: "rct", populationType: "broad", placeboResponse: "moderate", regulatoryContext: "standard" };
+  function mkBase() {
+    const v: Valuation = {
+      asset: "BRIDGE", phase: "Phase 2", discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
+      indications: [{ id: "i1", name: "RP", peakSales: 1000e6, tamM: 4000, penetrationPct: 25, annualPriceUsd: 100000, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
+    };
+    const revenuePV = computeRevenuePV({ ...v, peakSales: 1000e6, launchYear: 2032, loeYear: 2044 });
+    const out = { ptrs: 0.4, revenuePV, devCostPV: 300e6, rnpv: 0 };
+    const mixture = mixtureFromMssVariance(0.5, 0.2);
+    const stages: DevStageInput[] = [
+      stage({ trialDesign: bDesign, n: 200, nullResponseRate: 0.4 }), // moderate power (below the base-rate ceiling) so design changes are visible
+      stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 400, isCurrentTrial: false, trialDesign: { ...bDesign, n: 400 }, nullResponseRate: 0.4 }),
+    ];
+    const devPlan = computeDevPlan(mixture, 0.1, { stages, regulatoryContext: "standard", regCostM: 1.0 }, revenuePV / 1e6);
+    const base = buildBaseContext(v, out, { mss: 0.5, variance: 0.2, ptrs: 0.4 }, { trialInputs: bDesign }, null, devPlan)!;
+    return { base, stages };
+  }
+
+  it("FROZEN: no designSpec → identical option P; no designProvenance", () => {
+    const { base } = mkBase();
+    const a = computeOption(base, { id: "x", name: "no-design" });
+    const b = computeOption(base, { id: "x", name: "no-design", designSpec: undefined });
+    expect(b.ptrs).toBe(a.ptrs);
+    expect(b.designProvenance).toBeUndefined();
+  });
+
+  it("PRESENT end-to-end: futility on the PIVOTAL stage moves the option's P through the full plan; E[N] + assumption surface", () => {
+    const { base } = mkBase();
+    const noDesign = computeOption(base, { id: "x", name: "base" });
+    const fut = computeOption(base, {
+      id: "x", name: "fut",
+      designSpec: { stageTarget: "pivotal", alpha: { value: 0.001, sided: 1 }, sequential: { lookFractions: [0.5, 1], spending: "OBF", futility: { futilityType: "beta-spending", binding: false, beta: 0.1 } } },
+      designAssumptions: [{ field: "stageTarget", value: "pivotal", source: "default" }],
+    });
+    expect(fut.designProvenance!.stageTargetIndex).toBe(1); // pivotal = the Ph3 stage (index 1)
+    expect(fut.designProvenance!.sequentialDesign).toBeTruthy(); // E[N] surfaced (NOT wired into cost)
+    expect(fut.designProvenance!.assumptions.some((x) => x.field === "stageTarget")).toBe(true);
+    expect(fut.ptrs).not.toBeCloseTo(noDesign.ptrs, 4); // the described design moved P through the full plan
+  });
+
+  it("STAGE-TARGETING: stage 0 vs pivotal affect DIFFERENT stages → different plan P; out-of-range → clamp + flag", () => {
+    const { base } = mkBase();
+    const strict = { value: 0.001, sided: 1 as const }; // strict bar → power drops (below ceiling) → visible per-stage effect
+    const t0 = computeOption(base, { id: "x", name: "t0", designSpec: { stageTarget: 0, alpha: strict } });
+    const t1 = computeOption(base, { id: "x", name: "t1", designSpec: { stageTarget: 1, alpha: strict } });
+    expect(t0.designProvenance!.stageTargetIndex).toBe(0);
+    expect(t1.designProvenance!.stageTargetIndex).toBe(1);
+    expect(t0.ptrs).not.toBeCloseTo(t1.ptrs, 6);
+    const oob = computeOption(base, { id: "x", name: "oob", designSpec: { stageTarget: 9, alpha: strict } });
+    expect(oob.designProvenance!.stageTargetIndex).toBe(1);
+    expect(oob.designProvenance!.flags.some((f) => f.code === "stage-target-out-of-range")).toBe(true);
+  });
+
+  it("FALLBACK flags (interpreter designFlags) surface on OptionResult — both 'not computable' + 'computed with Y'", () => {
+    const { base } = mkBase();
+    const designFlags: FamilyFlag[] = [
+      { code: "cp-futility-unsupported", severity: "fallback", message: "conditional-power futility not computable yet" },
+      { code: "cp-futility-fallback", severity: "info", message: "computed with efficacy-only" },
+    ];
+    const r = computeOption(base, {
+      id: "x", name: "cp",
+      designSpec: { stageTarget: "pivotal", sequential: { lookFractions: [0.5, 1], spending: "OBF" } },
+      designFlags,
+    });
+    expect(r.designProvenance!.flags.filter((f) => /cp-futility/.test(f.code))).toHaveLength(2);
+  });
+
+  it("OTHER STAGES UNCHANGED (computeDevPlan level): a stage-1 spec leaves stage-0 trialSuccessProb identical", () => {
+    const { stages } = mkBase();
+    const mix = mixtureFromMssVariance(0.5, 0.2);
+    const inputs = { stages, regulatoryContext: "standard" as const, regCostM: 1.0 };
+    const plain = computeDevPlan(mix, 0.1, inputs, 0);
+    const stages2 = stages.map((s, i) => (i === 1 ? { ...s, trialDesign: { ...s.trialDesign, sequential: { lookFractions: [0.5, 1], spending: "OBF" as const } } } : s));
+    const withSpec = computeDevPlan(mix, 0.1, { ...inputs, stages: stages2 }, 0);
+    // Upstream stage-0 is byte-identical (propagation flows forward; a pivotal-stage spec cannot reach back).
+    expect(withSpec.stages[0].trialSuccessProb).toBe(plain.stages[0].trialSuccessProb);
+    // The spec REACHED the targeted stage (proven by the design output appearing there, not by the
+    // ceiling-masked trialSuccessProb — stage-1's propagated prior is strong enough to sit at the base-rate ceiling).
+    expect(plain.stages[1].sequentialDesign).toBeUndefined();
+    expect(withSpec.stages[1].sequentialDesign).toBeTruthy();
   });
 });

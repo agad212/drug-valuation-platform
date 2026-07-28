@@ -317,6 +317,18 @@ export type DevStage = DevStageInput & {
   comparatorGrid?: { theta: number[]; density: number[] } | null; // comparator density for chart
   comparatorSigma2Effective: number; // actual comparatorSigma2 used in computation
   counterfactuals?: { label: string; pSuccess: number }[];
+
+  // ── Layer 2 design-aware power outputs (present only when a design spec targeted THIS stage) ──
+  designFlags?: string[]; // resolve-or-flag notes from computeStageRR (PP-deferred, CP-deferred, …)
+  sequentialDesign?: {
+    zBoundaries: number[];
+    expectedInfoFraction: number; // E[N]/max at the prior-mean effect — a SURFACED output, NOT wired to cost
+    expectedN: number;
+    futilityZBoundaries?: number[];
+    futilityBinding?: boolean;
+    achievedTypeI?: number; // binding: the verified H0 type-I after the fixed-point (≈ α)
+  };
+  bayesianDesign?: { kStar: number; emergentAlpha: number; analysisPriorSourced: boolean };
 };
 
 export type RegStage = {
@@ -508,6 +520,15 @@ export function computeDevPlan(
       endpointType:      stageInput.trialDesign.endpointType,
       populationType:    stageInput.trialDesign.populationType,
       ...(continuous ? { continuous } : {}),
+      // Layer 2 spec-delivery bridge: OPTIONAL design-aware power families, GATED on presence. Absent
+      // (every existing call + both tripwire fixtures) → these spreads add NOTHING → rrDesign is the
+      // identical object → computeStageRR receives identical arguments → FROZEN byte-identical. The
+      // effect stays in the prior (single-locus); computeStageRR resolves the markers. No default design,
+      // no default look-schedule, no default alpha is injected here.
+      ...(td.alpha ? { alpha: td.alpha } : {}),
+      ...(td.tte ? { tte: td.tte } : {}),
+      ...(td.sequential ? { sequential: td.sequential } : {}),
+      ...(td.bayesian ? { bayesian: td.bayesian } : {}),
       // Fix B: gate the orphan significance-bar benefit on indication-confirmation.
       regulatoryContext: gateOrphanForEngine(stageInput.trialDesign.regulatoryContext, orphanConfirmed),
     };
@@ -709,6 +730,11 @@ export function computeDevPlan(
       comparatorGrid:    rrResult.comparatorGrid,
       comparatorSigma2Effective: rrResult.comparatorSigma2,
       counterfactuals:   rrResult.counterfactuals,
+      // Layer 2: surface design-aware outputs ONLY when present (a design spec targeted this stage).
+      // Absent → nothing added → the DevStage is byte-identical to today.
+      ...(rrResult.designFlags ? { designFlags: rrResult.designFlags } : {}),
+      ...(rrResult.sequentialDesign ? { sequentialDesign: rrResult.sequentialDesign } : {}),
+      ...(rrResult.bayesianDesign ? { bayesianDesign: rrResult.bayesianDesign } : {}),
     });
 
     // Advance drug truth for next stage: assume this stage succeeds

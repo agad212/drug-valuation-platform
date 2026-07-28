@@ -18,6 +18,8 @@ import { scoreLayer2, computeTrialNoise } from "./ptrs-trial";
 import { computeRevenuePV } from "./cashflow";
 import { mixtureFromMssVariance, mixtureSuccessProbability, mixtureMoments, enrichEffectPrior, resolveEnrichmentLift, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "./effect-prior";
 import { computeDevPlan, resolveRegAcceptanceLevel } from "./dev-plan";
+import { resolveStageTarget } from "./trial-design-interpreter";
+import type { TrialDesignSpec, FamilyFlag, Assumption } from "./trial-design-interpreter";
 import {
   deriveMarket, calibrateBaseMarket, deriveEnrichedNiche,
   NICHE_PRICE_DEFAULT_USD, NICHE_SHARE_DEFAULT_PCT, BIOMARKER_PREVALENCE_DEFAULT,
@@ -110,6 +112,14 @@ export type OptionInputs = {
   // observables and biomarker prevalence).
   nicheWacComp?: string;           // named comparator therapy + basis for the niche annual WAC
   nicheShareComp?: string;         // named analog launch + basis for the niche peak share
+
+  // ── Layer 2 spec-delivery bridge: a described-trial design for THIS option (from the interpreter).
+  //    designSpec = validated design params (stage-addressable via spec.stageTarget); designFlags /
+  //    designAssumptions carry the interpreter's flags/assumptions through to OptionResult. Absent →
+  //    no design applied → the option's existing path (FROZEN byte-identical).
+  designSpec?: TrialDesignSpec;
+  designFlags?: FamilyFlag[];
+  designAssumptions?: Assumption[];
   // Build 2 — effect-concentration factor for the enriched (biomarker+) population:
   // the fractional μ lift the responder subset shows vs the ITT population (pinned to
   // the drug's biomarker-subgroup data / analog precedent; labeled estimate + bounded
@@ -263,6 +273,17 @@ export type OptionResult = {
     share: { value: number; comp: string | null; sourced: boolean; inBand: boolean };
   };
 
+  // Layer 2 design-bridge provenance (present only when a design spec was applied): where it targeted,
+  // the interpreter + stage-target-resolution flags, the assumptions, the targeted stage's
+  // computeStageRR flags, and the surfaced E[N] (a design OUTPUT — NOT wired into cost this pass).
+  designProvenance?: {
+    stageTargetIndex: number;
+    flags: FamilyFlag[];
+    assumptions: Assumption[];
+    stageFlags?: string[];
+    sequentialDesign?: { zBoundaries: number[]; expectedInfoFraction: number; expectedN: number; futilityBinding?: boolean; achievedTypeI?: number };
+  };
+
   // Lifted resolve-or-flag booleans (ADDITIVE — already computed by the engine; surfaced so the
   // read-only self-check can aggregate them without recomputing anything).
   regUnconfirmed?: boolean;       // registration-endpoint acceptability held/unconfirmed
@@ -397,6 +418,30 @@ export function isBiomarkerEnriched(option: OptionInputs): boolean {
 
 // ─── Core Calculation ─────────────────────────────────────────────────────────
 
+// Layer 2 spec-delivery bridge: thread a validated design spec's power families onto its TARGETED
+// stage (resolved against the actual plan), leaving all other stages untouched. Pure. The families
+// are structurally assignable to TrialDesignInputs (input shapes only; computeStageRR resolves the
+// markers). Effect stays in the prior; this sets power/structure on one stage (single-locus).
+function applyDesignSpec(
+  stages: DevStageInput[],
+  spec: TrialDesignSpec,
+): { stages: DevStageInput[]; targetIndex: number; resolverFlag?: FamilyFlag } {
+  const { index, flag } = resolveStageTarget(spec.stageTarget, stages.map((s) => ({ phase: s.phase, name: s.name })));
+  const s = stages[index];
+  const newTrialDesign = {
+    ...s.trialDesign,
+    ...(spec.continuous ? { outcomeSd: spec.continuous.outcomeSd, mdeOrExpectedDelta: spec.continuous.expectedDelta } : {}),
+    ...(spec.alpha ? { alpha: spec.alpha } : {}),
+    ...(spec.tte ? { tte: spec.tte } : {}),
+    ...(spec.sequential ? { sequential: spec.sequential } : {}),
+    ...(spec.bayesian ? { bayesian: spec.bayesian } : {}),
+  };
+  const newStage: DevStageInput = { ...s, trialDesign: newTrialDesign, ...(spec.n != null ? { n: spec.n } : {}) };
+  const out = stages.slice();
+  out[index] = newStage;
+  return { stages: out, targetIndex: index, resolverFlag: flag };
+}
+
 export function computeOption(
   base: BaseContext,
   option: OptionInputs,
@@ -431,6 +476,7 @@ export function computeOption(
   // is still honored (market size is the revenue model's job, not the engine's).
   let ptrs: number;
   let ptrsCI: { lower: number; upper: number };
+  let designProvenance: OptionResult["designProvenance"];
   let enginePlanCostM: number | null = null;  // per-option risk-adjusted cost when the engine ran
   let priorShiftDriver: string | null = null; // Build 2: biomarker enrichment prior-shift audit line
   let regDriver: string | null = null;         // Build 3: evidence-derived reg-confidence audit line
@@ -537,11 +583,24 @@ export function computeOption(
           ...(option.approvedInClassOnEndpoint != null ? { approvedInClassOnEndpoint: option.approvedInClassOnEndpoint } : {}),
         }
       : undefined;
+    // Layer 2 spec-delivery bridge: build the plan stages, then (if a design was described for this
+    // option) thread its power families onto the TARGETED stage only — other stages unchanged. Absent
+    // designSpec → planStages is the exact current array → byte-identical.
+    let bridgeStages: DevStageInput[] = [stage0Override, ...base.devPlanInputs!.stages.slice(1)];
+    if (option.designSpec) {
+      const applied = applyDesignSpec(bridgeStages, option.designSpec);
+      bridgeStages = applied.stages;
+      designProvenance = {
+        stageTargetIndex: applied.targetIndex,
+        flags: [...(option.designFlags ?? []), ...(applied.resolverFlag ? [applied.resolverFlag] : [])],
+        assumptions: option.designAssumptions ?? [],
+      };
+    }
     const fullPlan = computeDevPlan(
       mixture,
       base.ciHalfWidth,
       {
-        stages: [stage0Override, ...base.devPlanInputs!.stages.slice(1)],
+        stages: bridgeStages,
         regulatoryContext: base.devPlanInputs!.regulatoryContext,
         regCostM: base.devPlanInputs!.regCostM,
         modalityClassStatus: base.devPlanInputs!.modalityClassStatus,
@@ -551,6 +610,12 @@ export function computeOption(
     );
     ptrs = fullPlan.pApproval;
     ptrsCI = ciBand(ptrs);
+    // Surface the targeted stage's design-aware outputs (computeStageRR flags + E[N]; E[N] NOT wired to cost).
+    if (designProvenance) {
+      const st = fullPlan.stages[designProvenance.stageTargetIndex];
+      if (st?.designFlags) designProvenance.stageFlags = st.designFlags;
+      if (st?.sequentialDesign) designProvenance.sequentialDesign = st.sequentialDesign;
+    }
     enginePlanCostM = fullPlan.totalRiskAdjCostM;
     // G2 Phase 2a display (READ-ONLY): when the current-trial stage carries sourced continuous
     // stats, computeDevPlan ran native two-sample z-power on it (same gate: both stats > 0).
@@ -919,6 +984,7 @@ export function computeOption(
     durationMonths,
     keyDrivers, ptrsDrivers,
     nicheProvenance,
+    designProvenance,
     regUnconfirmed, enrichmentUnsourced,
   };
 }

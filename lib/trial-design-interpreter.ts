@@ -49,6 +49,11 @@ export type TrialDesignSpec = {
     futility?: { futilityType: "beta-spending" | "none"; binding?: boolean; beta?: number; spending?: SpendingShape };
   };
   bayesian?: { refTheta: number; postThreshold: number; analysisPrior?: { a: number; b: number } };
+  // Which STAGE the described design addresses (a design param — WHICH trial, not a computed number).
+  // A phase label ("Phase 3"), "pivotal"/"registration"/"last", or a 0-based stage index. Resolved to
+  // a concrete stage against the actual plan by resolveStageTarget (at the bridge). Unstated → pivotal,
+  // as a SURFACED assumption — never a silent whole-plan application.
+  stageTarget?: number | string;
 };
 
 export type TteAccrualSpec = {
@@ -243,7 +248,44 @@ export function validateDesignSpec(raw: unknown): InterpretResult {
     flags.push({ code: "predictive-probability-fallback", severity: "info", message: `computed with the frequentist group-sequential design (Bayesian rule dropped)` });
   }
 
+  // ── STAGE-ADDRESSABLE: which stage does this design target? A design param (WHICH trial), not a
+  //    computed number. Unstated → pivotal (registration), emitted as a SURFACED assumption — never a
+  //    silent whole-plan application. The concrete index is resolved against the real plan by
+  //    resolveStageTarget at the bridge (out-of-range/unresolvable → flag + fallback to pivotal).
+  const hasContent = Object.keys(spec).length > 0;
+  if (typeof r.stageTarget === "number" && Number.isInteger(r.stageTarget) && r.stageTarget >= 0) {
+    spec.stageTarget = r.stageTarget;
+    assumptions.push({ field: "stageTarget", value: r.stageTarget, source: "user" });
+  } else if (typeof r.stageTarget === "string" && r.stageTarget.trim()) {
+    spec.stageTarget = r.stageTarget.trim();
+    assumptions.push({ field: "stageTarget", value: r.stageTarget.trim(), source: "user" });
+  } else if (hasContent) {
+    spec.stageTarget = "pivotal";
+    assumptions.push({ field: "stageTarget", value: "pivotal (registration stage) — default; name a stage to change", source: "default" });
+  }
+
   return { spec, flags, assumptions, rejected: false };
+}
+
+// Resolve a stageTarget (phase label / "pivotal" / 0-based index) to a concrete stage index against
+// the ACTUAL plan. Pure — takes plain stage descriptors (no Layer-1 import). Out-of-range or
+// unresolvable → the pivotal (last) stage + a fallback flag (never a silent mis-target).
+export function resolveStageTarget(
+  stageTarget: number | string | undefined,
+  stages: { phase?: string; name?: string }[],
+): { index: number; flag?: FamilyFlag } {
+  const last = stages.length - 1;
+  if (last < 0) return { index: 0 };
+  if (stageTarget === undefined) return { index: last };
+  if (typeof stageTarget === "number") {
+    if (Number.isInteger(stageTarget) && stageTarget >= 0 && stageTarget <= last) return { index: stageTarget };
+    return { index: last, flag: { code: "stage-target-out-of-range", severity: "fallback", message: `stageTarget index ${stageTarget} out of range (0..${last}) — applied to the pivotal (registration) stage` } };
+  }
+  const s = stageTarget.trim().toLowerCase();
+  if (s === "pivotal" || s === "registration" || s === "last" || s === "confirmatory") return { index: last };
+  const idx = stages.findIndex((st) => (st.phase ?? "").toLowerCase().includes(s) || (st.name ?? "").toLowerCase().includes(s));
+  if (idx >= 0) return { index: idx };
+  return { index: last, flag: { code: "stage-target-unresolved", severity: "fallback", message: `stageTarget "${stageTarget}" matched no stage — applied to the pivotal (registration) stage` } };
 }
 
 function validLookFractions(looks: unknown[]): boolean {

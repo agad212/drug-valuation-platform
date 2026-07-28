@@ -79,6 +79,22 @@ export type TrialDesignInputs = {
   // DEFAULT + flag (resolveEnrichmentLift). Replaces the retired POP_N_FACTOR boost.
   biomarkerPrevalence?: number;      // responder fraction (0–1) — sizes the lift (f ∝ 1/prevalence)
   enrichmentEffectLift?: number;     // explicit μ-lift when known (wins over prevalence)
+
+  // ── Layer 2 spec-delivery bridge: design-aware power families (OPTIONAL; gated on presence). When a
+  //    (Layer-2 interpreter) design spec targets THIS stage, these ride here and computeDevPlan spreads
+  //    them into the stage's RRTrialDesign so computeStageRR computes the design-aware power (Phase 1/2/
+  //    futility: alpha / native-TTE / group-sequential / single-look Bayesian). Absent → today's EXACT
+  //    path, byte-identical. Input shapes only (no resolved markers — Layer 1 resolves those). These are
+  //    inlined (not imported from bayesian-rr) to avoid an import cycle; structurally assignable to
+  //    RRTrialDesign's fields.
+  alpha?: { value: number; sided?: 1 | 2; multiplicity?: number };
+  tte?: { expectedHR: number; events?: number; accrual?: { controlMedianMonths: number; accrualMonths: number; followupMonths: number; dropoutHazardPerMonth?: number; nTotal: number } };
+  sequential?: {
+    lookFractions: number[];
+    spending?: "OBF" | "POCOCK" | "LDL";
+    futility?: { futilityType: "beta-spending" | "conditional-power" | "none"; binding?: boolean; beta?: number; spending?: "OBF" | "POCOCK" };
+  };
+  bayesian?: { refTheta?: number; postThreshold?: number; analysisPrior?: { a: number; b: number } };
 };
 
 export type TrialRiskFlag = {
