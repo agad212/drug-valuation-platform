@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sequentialBoundaries, pCrossGivenBoundaries, expectedInfoFractionGivenBoundaries } from "../sequential-power";
+import { sequentialBoundaries, pCrossGivenBoundaries, expectedInfoFractionGivenBoundaries, resolveFutilityDesign } from "../sequential-power";
 import { betai, bayesianCritK, bayesianThresholdPower, lnGamma, computeStageRR, mixtureToBeta, betaToGrid, gridMoments, type RRTrialDesign } from "../bayesian-rr";
 
 // Layer 1 Phase 2 — VALIDATION IS THE ACCEPTANCE. Primitive (betai) validated FIRST, then the
@@ -117,6 +117,55 @@ describe("Phase 2 — single-look Bayesian posterior-threshold", () => {
   });
 });
 
+// ══ 4b. FUTILITY (β-spending): efficacy-unchanged, binding α=α, non-binding identical, monotonicity ══
+const XI_DESIGN = 3.24; // design alternative drift (~90% single-look target); ξ_design = readout of the prior
+describe("Phase 2 futility — the three load-bearing checks + monotonicity", () => {
+  it("EFFICACY-UNCHANGED: the two efficacy-path entry points agree bit-for-bit through the extended recursion", () => {
+    const { zBoundaries, expectedInfoFraction } = sequentialBoundaries(0.025, [0.5, 1], "OBF");
+    // no-futility crossing via the standalone entry == via the closure (both run the aZ-absent path)
+    expect(expectedInfoFractionGivenBoundaries(zBoundaries, [0.5, 1], 3.0)).toBe(expectedInfoFraction(3.0));
+    // and the boundaries are still the canonical values (extension did not perturb efficacy)
+    expect(zBoundaries[0]).toBeCloseTo(2.797, 2);
+    expect(zBoundaries[1]).toBeCloseTo(1.977, 2);
+  });
+
+  it("NON-BINDING: efficacy boundaries BYTE-IDENTICAL to efficacy-only; futility below; type-I = α", () => {
+    const effOnly = sequentialBoundaries(0.025, [0.25, 0.5, 0.75, 1], "OBF").zBoundaries;
+    const r = resolveFutilityDesign(0.025, [0.25, 0.5, 0.75, 1], "OBF", { binding: false, beta: 0.1, spending: "OBF" }, XI_DESIGN);
+    r.effZ.forEach((z, k) => expect(z).toBe(effOnly[k])); // exact same values (same solver)
+    r.futZ.slice(0, -1).forEach((a, k) => expect(a).toBeLessThan(r.effZ[k])); // futility strictly below efficacy
+    expect(r.achievedAlpha).toBeCloseTo(0.025, 4); // non-binding type-I unchanged
+  });
+
+  it("BINDING α-GATE: after the fixed-point re-solve, P(cross efficacy | H0) = α within 1e-4", () => {
+    const r = resolveFutilityDesign(0.025, [0.25, 0.5, 0.75, 1], "OBF", { binding: true, beta: 0.1, spending: "OBF" }, XI_DESIGN);
+    expect(Math.abs(r.achievedAlpha - 0.025)).toBeLessThan(1e-4); // THE non-negotiable correctness gate
+    const effOnly = sequentialBoundaries(0.025, [0.25, 0.5, 0.75, 1], "OBF").zBoundaries;
+    // binding recovers α → efficacy bar re-solved LOWER than efficacy-only
+    expect(r.effZ[r.effZ.length - 1]).toBeLessThan(effOnly[effOnly.length - 1]);
+  });
+
+  it("MONOTONICITY: E[N|H0] drops vs efficacy-only (both designs); power drops; β-spend targets 1−β", () => {
+    const looks = [0.25, 0.5, 0.75, 1];
+    const effOnly = sequentialBoundaries(0.025, looks, "OBF").zBoundaries;
+    const nb = resolveFutilityDesign(0.025, looks, "OBF", { binding: false, beta: 0.1, spending: "OBF" }, XI_DESIGN);
+    const bd = resolveFutilityDesign(0.025, looks, "OBF", { binding: true, beta: 0.1, spending: "OBF" }, XI_DESIGN);
+    // E[N|H0]: futility stops early under the null → both drop below efficacy-only (futility's purpose)
+    const eN_effOnly = expectedInfoFractionGivenBoundaries(effOnly, looks, 0);
+    expect(expectedInfoFractionGivenBoundaries(nb.effZ, looks, 0, nb.futZ)).toBeLessThan(eN_effOnly);
+    expect(expectedInfoFractionGivenBoundaries(bd.effZ, looks, 0, bd.futZ)).toBeLessThan(eN_effOnly);
+    // power at the design alternative drops vs efficacy-only when futility can stop you early
+    const pw_effOnly = pCrossGivenBoundaries(effOnly, looks, XI_DESIGN);
+    const pw_nb = pCrossGivenBoundaries(nb.effZ, looks, XI_DESIGN, nb.futZ);
+    const pw_bd = pCrossGivenBoundaries(bd.effZ, looks, XI_DESIGN, bd.futZ);
+    expect(pw_nb).toBeLessThan(pw_effOnly);
+    // β-spend TARGETS type-II = β at ξ_design → P(success|ξ_design) ≈ 1−β for BOTH (decisive final look);
+    // so binding and non-binding land at ~the same power there (NOT an ordering — a targeting check).
+    expect(pw_nb).toBeCloseTo(0.9, 1);
+    expect(pw_bd).toBeCloseTo(0.9, 1);
+  });
+});
+
 // ══ 5. Layer wiring via computeStageRR — non-vacuity, fallbacks, single-locus ══
 const RCT: RRTrialDesign = { designType: "rct", endpointType: "surrogate", populationType: "broad", regulatoryContext: "confirmatory" };
 const MIX = [{ w: 1, mu: 1.0, sigma2: 0.15 }]; // prior mean_rr ≈ 0.5
@@ -187,5 +236,43 @@ describe("Phase 2 — single-locus (effect stays in the prior on both paths)", (
     expect(skeptical.bayesianDesign!.kStar).toBeGreaterThan(uniform.bayesianDesign!.kStar);
     expect(uniform.priorMean).toBeCloseTo(before, 10);
     expect(skeptical.priorMean).toBeCloseTo(before, 10);
+  });
+});
+
+// ══ 6. Futility via computeStageRR — non-vacuity + fallback (the layer) ══
+describe("Phase 2 futility — via computeStageRR (non-vacuity + fallback)", () => {
+  const looks = [0.5, 1];
+  const seqOnly = { lookFractions: looks, spending: "OBF" as const };
+
+  it("BINDING FIRES: achievedTypeI = α within 1e-4; futility boundaries present; E[N] < efficacy-only", () => {
+    const effOnly = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: seqOnly });
+    const bind = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: { ...seqOnly, futility: { futilityType: "beta-spending", binding: true, beta: 0.1 } } });
+    expect(bind.sequentialDesign!.futilityZBoundaries).toBeTruthy();
+    expect(bind.sequentialDesign!.futilityBinding).toBe(true);
+    expect(Math.abs(bind.sequentialDesign!.achievedTypeI! - 0.025)).toBeLessThan(1e-4); // confirmatory α=0.025 held
+    expect(bind.sequentialDesign!.expectedInfoFraction).toBeLessThan(effOnly.sequentialDesign!.expectedInfoFraction);
+  });
+
+  it("NON-BINDING FIRES: efficacy boundaries BYTE-IDENTICAL to efficacy-only; power truncated", () => {
+    const effOnly = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: seqOnly });
+    const nb = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: { ...seqOnly, futility: { futilityType: "beta-spending", binding: false, beta: 0.1 } } });
+    nb.sequentialDesign!.zBoundaries.forEach((z, k) => expect(z).toBe(effOnly.sequentialDesign!.zBoundaries[k]));
+    expect(nb.sequentialDesign!.futilityZBoundaries).toBeTruthy();
+    expect(nb.trialSuccessProb).toBeLessThanOrEqual(effOnly.trialSuccessProb + 1e-9); // futility truncates power
+  });
+
+  it("EFFICACY-UNCHANGED (additive proof): futilityType:'none' → byte-identical to efficacy-only", () => {
+    const a = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: seqOnly });
+    const b = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: { ...seqOnly, futility: { futilityType: "none" } } });
+    expect(b.trialSuccessProb).toBe(a.trialSuccessProb);
+    expect(b.sequentialDesign!.futilityZBoundaries).toBeUndefined();
+  });
+
+  it("FALLBACK: conditional-power futility → inert + flag, efficacy-only value (deferred fast-follow)", () => {
+    const effOnly = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: seqOnly });
+    const cp = computeStageRR(MIX, 200, 0.15, { ...RCT, sequential: { ...seqOnly, futility: { futilityType: "conditional-power", binding: true } } });
+    expect(cp.designFlags?.some((f) => /conditional-power futility deferred/.test(f))).toBe(true);
+    expect(cp.trialSuccessProb).toBe(effOnly.trialSuccessProb);
+    expect(cp.sequentialDesign!.futilityZBoundaries).toBeUndefined();
   });
 });

@@ -25,7 +25,7 @@
 import { normalCDF, enrichEffectPrior, DEFAULT_ENRICHMENT_LIFT } from "./effect-prior";
 import type { EffectPriorMixture } from "./effect-prior";
 import { tteEventsFromAccrual, schoenfeldZ, type TteAccrual } from "./tte-power";
-import { sequentialBoundaries, pCrossGivenBoundaries, expectedInfoFractionGivenBoundaries, type SpendingFunction } from "./sequential-power";
+import { sequentialBoundaries, pCrossGivenBoundaries, expectedInfoFractionGivenBoundaries, resolveFutilityDesign, type SpendingFunction } from "./sequential-power";
 import type {
   EndpointType,
   DesignType,
@@ -106,7 +106,14 @@ export type RRTrialDesign = {
   sequential?: {
     lookFractions: number[];
     spending?: "OBF" | "POCOCK" | "LDL"; // LDL reserved (fast-follow) → falls back to OBF this pass
-    futility?: unknown; // fast-follow (not computed this pass)
+    // Futility (β-spending). binding re-solves the efficacy bar so type-I stays α; non-binding is
+    // advisory (efficacy untouched). conditional-power is deferred (fast-follow) → inert + flag.
+    futility?: {
+      futilityType: "beta-spending" | "conditional-power" | "none";
+      binding?: boolean;
+      beta?: number; // total type-II error spent on futility (default 0.10)
+      spending?: "OBF" | "POCOCK"; // β-spending shape (default OBF)
+    };
     zBoundaries?: number[]; // resolved: efficacy boundaries (θ-independent)
     pCrossTable?: { drift: number[]; p: number[] }; // resolved: drift→P(cross) interpolation table
   };
@@ -1032,6 +1039,9 @@ export type StageRRResult = {
     zBoundaries: number[];
     expectedInfoFraction: number; // E[information] as a fraction of max, at the prior-mean effect
     expectedN: number; // expectedInfoFraction × n (an OUTPUT metric; does not feed dev cost)
+    futilityZBoundaries?: number[]; // β-spending lower boundaries (present only with futility)
+    futilityBinding?: boolean; // true → efficacy re-solved so type-I held at α
+    achievedTypeI?: number; // binding: the VERIFIED H0 type-I after the fixed-point (should ≈ α)
   };
   bayesianDesign?: {
     kStar: number;
@@ -1158,25 +1168,51 @@ export function computeStageRR(
       design.alpha?.value != null && Number.isFinite(design.alpha.value)
         ? design.alpha.value
         : 1 - normalCDF(Z_ALPHA[design.regulatoryContext] ?? 1.645);
-    const seq = sequentialBoundaries(alphaTotal, seqLooks!, spending);
-    // drift→P(cross) interpolation table (boundaries θ-independent; P(cross) smooth in drift).
+
+    // Design-alternative drift ξ_design = READOUT of the prior mean (base, non-sequential power) —
+    // needed for β-spending futility. Single-locus: the effect stays in the prior; this only reads it.
+    const baseAtMean = rrTrialPower(priorMoments.mean, effectiveNull, n, { ...powerDesign, sequential: undefined, bayesian: undefined }, comparatorSigma2);
+    const bpm = Math.min(1 - 1e-12, Math.max(1e-12, baseAtMean));
+    const driftDesign = Math.min(20, Math.max(-20, normalInv(bpm) + computeZAlpha(design)));
+
+    const fut = design.sequential!.futility;
+    const useBeta = fut != null && fut.futilityType === "beta-spending" && driftDesign > 0.5;
+    let effZ: number[];
+    let futZ: number[] | undefined;
+    let futMeta: { futilityZBoundaries: number[]; futilityBinding: boolean; achievedTypeI: number } | undefined;
+    if (useBeta) {
+      const r = resolveFutilityDesign(
+        alphaTotal, seqLooks!, spending,
+        { binding: !!fut!.binding, beta: fut!.beta ?? 0.1, spending: fut!.spending === "POCOCK" ? "POCOCK" : "OBF" },
+        driftDesign,
+      );
+      effZ = r.effZ;
+      futZ = r.futZ;
+      futMeta = { futilityZBoundaries: r.futZ, futilityBinding: r.binding, achievedTypeI: r.achievedAlpha };
+      // Binding correctness gate (soft, observe-don't-halt): the re-solve must hold type-I at α.
+      if (r.binding && Math.abs(r.achievedAlpha - alphaTotal) > 1e-3) {
+        designFlags.push(`binding futility: type-I ${r.achievedAlpha.toFixed(5)} ≠ α ${alphaTotal.toFixed(5)} (solve did not converge)`);
+      }
+    } else {
+      if (fut && fut.futilityType === "conditional-power") designFlags.push("conditional-power futility deferred (fast-follow) — using efficacy-only");
+      else if (fut && fut.futilityType === "beta-spending") designFlags.push("β-spending futility not resolved: design drift at the prior mean too weak — efficacy-only");
+      effZ = sequentialBoundaries(alphaTotal, seqLooks!, spending).zBoundaries; // efficacy-only (byte-identical)
+    }
+
+    // drift→P(cross) table WITH futility baked in (futZ undefined → efficacy-only, byte-identical).
     const driftGrid: number[] = [];
     const pGrid: number[] = [];
     for (let d = -3; d <= 8.0001; d += 0.1) {
       driftGrid.push(d);
-      pGrid.push(pCrossGivenBoundaries(seq.zBoundaries, seqLooks!, d));
+      pGrid.push(pCrossGivenBoundaries(effZ, seqLooks!, d, futZ));
     }
     powerDesign = {
       ...powerDesign,
-      sequential: { ...design.sequential!, zBoundaries: seq.zBoundaries, pCrossTable: { drift: driftGrid, p: pGrid } },
+      sequential: { ...design.sequential!, zBoundaries: effZ, pCrossTable: { drift: driftGrid, p: pGrid } },
     };
-    // E[N] at the prior-mean effect (OUTPUT only; NOT wired into cost). Recover the drift from the
-    // base (non-sequential) power at the prior mean.
-    const baseAtMean = rrTrialPower(priorMoments.mean, effectiveNull, n, { ...powerDesign, sequential: undefined, bayesian: undefined }, comparatorSigma2);
-    const bpm = Math.min(1 - 1e-12, Math.max(1e-12, baseAtMean));
-    const meanDrift = Math.min(20, Math.max(-20, normalInv(bpm) + computeZAlpha(design)));
-    const eInfoFrac = expectedInfoFractionGivenBoundaries(seq.zBoundaries, seqLooks!, meanDrift);
-    sequentialDesign = { zBoundaries: seq.zBoundaries, expectedInfoFraction: eInfoFrac, expectedN: eInfoFrac * n };
+    // E[N] at the prior-mean effect (OUTPUT only; NOT wired into cost), with futility if present.
+    const eInfoFrac = expectedInfoFractionGivenBoundaries(effZ, seqLooks!, driftDesign, futZ);
+    sequentialDesign = { zBoundaries: effZ, expectedInfoFraction: eInfoFrac, expectedN: eInfoFrac * n, ...(futMeta ?? {}) };
   } else if (wantBayes && endpointIsProportion) {
     const prior = design.bayesian!.analysisPrior ?? { a: 1, b: 1 };
     const priorSourced = design.bayesian!.analysisPrior != null;
