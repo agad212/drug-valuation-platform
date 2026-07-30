@@ -44,10 +44,24 @@ RESOLVE-OR-FLAG (this is a judgment; be honest about uncertainty):
 - Emit one entry for EVERY non-lead indication listed below (never the lead — the lead is always
   independent and must not appear).
 - CLEAR signal in the evidence → the relationship + a rationale naming the signal.
+- A conditional-on or sequential-after call REQUIRES an EXPLICIT stated dependency in the evidence: the
+  development context must actually SAY this indication is gated on / funded after / timed behind
+  another. The following are NOT evidence of a dependency and MUST stay independent: shared mechanism or
+  target; same development phase; staggered or adjacent launch years; sitting under the same broad
+  therapeutic umbrella (e.g. two oncology indications); or an "expansion cohort" you infer without a
+  stated go-decision. Circumstantial co-timing is NOT gating — never infer a dependency from phase or dates.
+- A non-independent rationale MUST name the specific stated dependency it relies on (the actual program
+  language / source that says this indication is gated on / funded after / timed behind another). If you
+  cannot point to a concrete stated dependency, you MUST emit independent. A rationale that only says
+  "suggesting" / "likely gated" / "appears to be an expansion" WITHOUT a citable stated dependency is NOT
+  permitted for conditional/sequential — that is an inference, and an unsourced dependency is a flag
+  (→ independent), not a verdict.
 - AMBIGUOUS / no signal → "independent" with a rationale saying so (e.g. "no stated dependency —
   defaulting to independent"). Do NOT guess conditional/sequential when unsure: independent is the
   transparent default, and guessing a dependency silently moves the valuation. Never invent a program
   strategy that isn't supported by the evidence.
+- Over-calling conditional/sequential silently LOWERS the valuation exactly as a wrong number would;
+  when in doubt, INDEPENDENT.
 - "ref" must be the id of one of the indications listed (or the lead). Do not reference anything else.
 
 Base your calls ONLY on the asset facts and per-indication evidence provided (development strategy,
