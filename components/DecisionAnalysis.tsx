@@ -17,6 +17,7 @@ import {
   ResponsiveContainer, Cell, ScatterChart, Scatter, ZAxis,
 } from "recharts";
 import type { Valuation } from "../lib/types";
+import DevPathSpine from "./DevPathSpine";
 import {
   buildBaseContext,
   computeAllOptions,
@@ -306,6 +307,15 @@ function ResultCard({
                 {result.voiVsDirectM >= 0 ? "+" : ""}{fmtM(result.voiVsDirectM)} vs going direct (Option A)
               </div>
             )}
+          </div>
+        )}
+
+        {/* Per-option development path — the engine's already-computed plan for THIS option, rendered
+            with the same trial-box spine as the base dev-path (render-only; additive surfacing). */}
+        {result.devPlan && (
+          <div>
+            <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.07em" }}>Development path</div>
+            <DevPathSpine devPlan={result.devPlan} />
           </div>
         )}
 

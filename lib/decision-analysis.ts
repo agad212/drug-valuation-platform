@@ -288,6 +288,11 @@ export type OptionResult = {
   // read-only self-check can aggregate them without recomputing anything).
   regUnconfirmed?: boolean;       // registration-endpoint acceptability held/unconfirmed
   enrichmentUnsourced?: boolean;  // biomarker enrichment lift came from an unsourced fallback
+
+  // The per-option development plan (ADDITIVE — this is the fullPlan computeOption ALREADY builds via
+  // computeDevPlan to produce ptrs/cost; surfaced so the Advisor can render the per-option trial-box
+  // dev-path. Present only when the option ran the engine plan; no math change, no governed number moves).
+  devPlan?: DevPlanResult;
 };
 
 // Resolve a niche market param under resolve-or-flag + an out-of-band clamp:
@@ -477,6 +482,7 @@ export function computeOption(
   let ptrs: number;
   let ptrsCI: { lower: number; upper: number };
   let designProvenance: OptionResult["designProvenance"];
+  let optionDevPlan: DevPlanResult | undefined; // ADDITIVE: the fullPlan surfaced for the per-option dev-path
   let enginePlanCostM: number | null = null;  // per-option risk-adjusted cost when the engine ran
   let priorShiftDriver: string | null = null; // Build 2: biomarker enrichment prior-shift audit line
   let regDriver: string | null = null;         // Build 3: evidence-derived reg-confidence audit line
@@ -610,6 +616,7 @@ export function computeOption(
     );
     ptrs = fullPlan.pApproval;
     ptrsCI = ciBand(ptrs);
+    optionDevPlan = fullPlan; // ADDITIVE: surface the already-computed plan for the per-option dev-path
     // Surface the targeted stage's design-aware outputs (computeStageRR flags + E[N]; E[N] NOT wired to cost).
     if (designProvenance) {
       const st = fullPlan.stages[designProvenance.stageTargetIndex];
@@ -986,6 +993,7 @@ export function computeOption(
     nicheProvenance,
     designProvenance,
     regUnconfirmed, enrichmentUnsourced,
+    devPlan: optionDevPlan,
   };
 }
 
