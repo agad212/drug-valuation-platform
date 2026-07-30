@@ -44,12 +44,18 @@ RESOLVE-OR-FLAG (this is a judgment; be honest about uncertainty):
 - Emit one entry for EVERY non-lead indication listed below (never the lead — the lead is always
   independent and must not appear).
 - CLEAR signal in the evidence → the relationship + a rationale naming the signal.
-- A conditional-on or sequential-after call REQUIRES an EXPLICIT stated dependency in the evidence: the
-  development context must actually SAY this indication is gated on / funded after / timed behind
-  another. The following are NOT evidence of a dependency and MUST stay independent: shared mechanism or
-  target; same development phase; staggered or adjacent launch years; sitting under the same broad
-  therapeutic umbrella (e.g. two oncology indications); or an "expansion cohort" you infer without a
-  stated go-decision. Circumstantial co-timing is NOT gating — never infer a dependency from phase or dates.
+- A conditional-on or sequential-after call REQUIRES an EXPLICIT stated dependency: the context must
+  actually SAY this indication is gated on / funded on another's success (→ conditional-on), OR starts
+  after / is staggered behind / shares the trial resources or infrastructure of another (→ sequential-after).
+  The discriminator is STATED vs INFERRED. The following facts, ON THEIR OWN, are NOT a dependency — do
+  not INFER a relationship from them; default to independent UNLESS the context explicitly states the
+  gate or the timing/resource dependency: shared mechanism or target; same development phase; staggered
+  or adjacent launch years; sitting under the same broad therapeutic umbrella (e.g. two oncology
+  indications); or an inferred "expansion cohort." Co-timing you INFER from dates alone is NOT a signal.
+- sequential-after is a TIMING relationship, NOT a probability gate: use it when the context STATES the
+  indication starts after / is staggered behind / shares the earlier program's resources or
+  infrastructure — even when it is explicitly NOT go-decision-gated. A STATED staggering IS a valid
+  sequential-after signal (do not demote it to independent just because it is not a gate).
 - A non-independent rationale MUST name the specific stated dependency it relies on (the actual program
   language / source that says this indication is gated on / funded after / timed behind another). If you
   cannot point to a concrete stated dependency, you MUST emit independent. A rationale that only says
