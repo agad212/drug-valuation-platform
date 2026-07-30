@@ -7,7 +7,7 @@ import { ThemeToggle } from "../components/ThemeToggle";
 import AssistantPanel from "../components/AssistantPanel";
 import { useToast } from "../components/Toast";
 import type { Valuation, Indication, RevenueAnalysisResult, IndicationRevenueAnalysis } from "../lib/types";
-import { computeOutputs, computeRevenuePV } from "../lib/cashflow";
+import { computeOutputs, computeRevenuePV, type IndicationOutput } from "../lib/cashflow";
 import type { CtgovTrial } from "../lib/ctgov";
 import { isEnrollmentComplete } from "../lib/ctgov";
 import DecisionAnalysis from "../components/DecisionAnalysis";
@@ -384,7 +384,7 @@ function PnLTable({ v, out, pApproval, devPlan, onClose }: { v: Valuation; out: 
 }
 
 // ─── Indication Row ──────────────────────────────────────────────────────────
-function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isPrimary, governedDevCostM, onUpdate, onRemove }: {
+function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isPrimary, governedDevCostM, structural, onUpdate, onRemove }: {
   ind: Indication;
   globalPtrs: number;
   valuation: Valuation;
@@ -392,6 +392,11 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isP
   halted?: boolean;   // strategic assessment failed → don't show an ungoverned P(appr.)/rNPV verdict
   isPrimary?: boolean;            // first indication — the one the dev plan governs
   governedDevCostM?: number | null; // dev plan's risk-adjusted cost ($M); overrides devCostPV for the primary row
+  // The engine's STRUCTURAL contribution for this indication (own P, own/shifted launch, any conditional
+  // P-weight, and this indication's risk-adjusted cost share). Passed only for a governed multi-indication
+  // row; when present it DRIVES the revPV/dev-cost/rNPV cells so the rows sum EXACTLY to the headline eNPV
+  // (rows-Σ == Combined == headline) for every relationship — the cost-basis unification.
+  structural?: IndicationOutput | null;
   onUpdate: (id: string, updates: Partial<Indication>) => void;
   onRemove: (id: string) => void;
 }) {
@@ -415,6 +420,12 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isP
   const effectiveDevCost = governed ? governedDevCostM * 1e6 : (ind.devCostPV ?? 0);
   const rnpvAfterDev = Math.round(effectivePtrs * revenuePV - effectiveDevCost);
 
+  // When the engine's structural contribution is provided, the displayed revPV / dev-cost / rNPV come
+  // from it (not this row's independent re-derivation), so the rows reconcile to the headline exactly.
+  const useStructural = structural != null;
+  const dispRevPV = useStructural ? structural!.revenuePV : revenuePV;
+  const dispRnpv = useStructural ? structural!.rnpv : rnpvAfterDev;
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 2fr) 90px 68px 68px 64px 80px 80px 80px 24px", gap: 6, alignItems: "center", marginBottom: 6 }}>
       {cellInput("text", ind.name, "Indication name", (v) => onUpdate(ind.id, { name: v }))}
@@ -422,11 +433,13 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isP
       {cellInput("number", ind.launchYear ?? "", String(valuation.launchYear ?? ""), (v) => onUpdate(ind.id, { launchYear: v ? Number(v) : undefined }))}
       {cellInput("number", ind.loeYear ?? "", String(valuation.loeYear ?? ""), (v) => onUpdate(ind.id, { loeYear: v ? Number(v) : undefined }))}
       {cellInput("number", ind.ptrs != null ? +(ind.ptrs * 100).toFixed(1) : "", halted ? "—" : +(effectivePtrs * 100).toFixed(1) + "%", (v) => onUpdate(ind.id, { ptrs: v ? Number(v) / 100 : undefined }))}
-      {governed
+      {useStructural
+        ? <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }} title="Risk-adjusted dev cost — this indication's share of the development plan">{Math.round(structural!.devCostPV / 1e6)}</div>
+        : governed
         ? <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }} title="Risk-adjusted expected R&D from the development plan">{Math.round(governedDevCostM!)}</div>
         : cellInput("number", ind.devCostPV != null ? ind.devCostPV / 1e6 : "", String(Math.round((valuation.devCostPV ?? 0) / Math.max(1, numIndications) / 1e6)), (v) => onUpdate(ind.id, { devCostPV: v ? Number(v) * 1e6 : undefined }))}
-      <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(revenuePV)}</div>
-      <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "var(--font-mono)", textAlign: "right", color: halted ? "var(--text-faint)" : (rnpvAfterDev >= 0 ? "var(--accent)" : "var(--danger)") }}>{halted ? "—" : fmtMoney(rnpvAfterDev)}</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(dispRevPV)}</div>
+      <div style={{ fontSize: 12, fontWeight: 600, fontFamily: "var(--font-mono)", textAlign: "right", color: halted ? "var(--text-faint)" : (dispRnpv >= 0 ? "var(--accent)" : "var(--danger)") }}>{halted ? "—" : fmtMoney(dispRnpv)}</div>
       <button onClick={() => onRemove(ind.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: 16, lineHeight: 1, padding: 0, textAlign: "center" }}>×</button>
     </div>
   );
@@ -534,11 +547,6 @@ export default function HomePage() {
     );
   }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief, v.indication, layer2Result]);
 
-  // Read-only self-check over the finished base valuation (observes & flags; never adjusts).
-  const valuationSelfReport = useMemo(
-    () => (devPlan ? selfCheck({ view: viewFromDevPlan(devPlan, { launchYear: v.launchYear, loeYear: v.loeYear, asOfYear: new Date().getFullYear() }) }) : null),
-    [devPlan, v.launchYear, v.loeYear],
-  );
 
   // Single source of truth for the displayed P(approval): a genuine user
   // override wins, else the dev plan governs, else the phase baseline. Used by
@@ -562,6 +570,31 @@ export default function HomePage() {
   // (the cost/revenue asymmetry that produced tau's spurious −$710M). Display-only —
   // `out`/`display`/`base`/`devPlan` are unchanged, so no computed golden moves.
   const governedOut = useMemo(() => computeOutputs(chartValuation), [chartValuation]);
+
+  // >1 indication → the headline is the Σ of per-indication STRUCTURAL contributions (each at its own
+  // P, own launch, and any conditional P-weight), NOT devPlan.eNPVM (which is pooled revenue × the
+  // lead's single P). ≤1 indication keeps the exact single-indication path (devPlan.eNPVM).
+  const isMultiIndication = (v.indications?.length ?? 0) > 1;
+
+  // Read-only self-check over the finished base valuation (observes & flags; never adjusts). For >1
+  // indication the A8 aggregation blocker also fires: it asserts the DISPLAYED headline equals the Σ of
+  // per-indication STRUCTURAL contributions (governedOut.indicationOutputs) — the exact guard against a
+  // pooled-revenue × single-P headline. Defined AFTER governedOut so the structural Σ is available.
+  const valuationSelfReport = useMemo(
+    () => {
+      if (!devPlan) return null;
+      const view = viewFromDevPlan(devPlan, { launchYear: v.launchYear, loeYear: v.loeYear, asOfYear: new Date().getFullYear() });
+      if (isMultiIndication) {
+        view.multiIndication = {
+          headlineENPVM: governedOut.rnpv / 1e6,
+          componentRnpvsM: governedOut.indicationOutputs.map((o) => o.rnpv / 1e6),
+          labels: governedOut.indicationOutputs.map((o) => o.name),
+        };
+      }
+      return selfCheck({ view });
+    },
+    [devPlan, v.launchYear, v.loeYear, isMultiIndication, governedOut],
+  );
 
   // ── Expectation smoke detector: fires when devPlan result changes ─────────
   useEffect(() => {
@@ -1643,9 +1676,10 @@ export default function HomePage() {
           <div className="animate-fade-up metrics-grid">
             <MetricCard
               label={devPlan ? "eNPV" : "rNPV"}
-              value={fmtMoney(devPlan ? devPlan.eNPVM * 1e6 : out.rnpv)}
+              value={fmtMoney(isMultiIndication ? governedOut.rnpv : (devPlan ? devPlan.eNPVM * 1e6 : out.rnpv))}
               gradient="linear-gradient(135deg, #059669, #10b981)"
-              sub={devPlan ? `Dev plan · P(approval) ${fmtPct(devPlan.pApproval)}`
+              sub={isMultiIndication ? `Σ ${v.indications!.length} indications · each at its own P (structural)`
+                : devPlan ? `Dev plan · P(approval) ${fmtPct(devPlan.pApproval)}`
                 : briefStatus === "complete"
                   ? (devPlanLoading ? "Baseline — computing full analysis…" : "⚠ Baseline placeholder — dev path incomplete")
                   : (rnpvPositive ? "Risk-adjusted NPV" : "Negative — check inputs")}
@@ -1753,15 +1787,24 @@ export default function HomePage() {
                   ))}
                 </div>
                 {v.indications.map((ind, i) => (
-                  <IndicationRow key={ind.id} ind={ind} globalPtrs={governedPtrs} valuation={v} numIndications={v.indications!.length} halted={briefStatus === "failed"} isPrimary={i === 0} governedDevCostM={devPlan?.totalRiskAdjCostM ?? null} onUpdate={updateIndication} onRemove={removeIndication} />
+                  <IndicationRow key={ind.id} ind={ind} globalPtrs={governedPtrs} valuation={v} numIndications={v.indications!.length} halted={briefStatus === "failed"} isPrimary={i === 0} governedDevCostM={devPlan?.totalRiskAdjCostM ?? null} structural={isMultiIndication ? (governedOut.indicationOutputs.find((o) => o.id === ind.id) ?? null) : null} onUpdate={updateIndication} onRemove={removeIndication} />
                 ))}
                 {v.indications.length > 1 && (
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 2fr) 90px 68px 68px 64px 80px 80px 80px 24px", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)", gridColumn: "1 / 6" }}>Combined</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(out.devCostPV)}</div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(out.revenuePV)}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(governedOut.devCostPV)}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }}>{fmtMoney(governedOut.revenuePV)}</div>
                     <div style={{ fontSize: 12, fontWeight: 700, fontFamily: "var(--font-mono)", textAlign: "right", color: briefStatus === "failed" ? "var(--text-faint)" : (governedOut.rnpv >= 0 ? "var(--accent)" : "var(--danger)") }}>{briefStatus === "failed" ? "—" : fmtMoney(governedOut.rnpv)}</div>
                     <div />
+                  </div>
+                )}
+                {isMultiIndication && governedOut.indicationFlags.length > 0 && (
+                  <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+                    {governedOut.indicationFlags.map((fl, i) => (
+                      <div key={i} style={{ fontSize: 11, color: "var(--warning)", fontFamily: "var(--font-mono)", lineHeight: 1.4, display: "flex", gap: 6 }}>
+                        <span aria-hidden>⚠</span><span>{fl}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

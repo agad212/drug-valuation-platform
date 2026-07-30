@@ -115,17 +115,24 @@ function WaterfallChart({ valuation }: { valuation: Valuation }) {
 
   const data = useMemo(() => {
     const revPV = out.revenuePV;
-    const ptrsAdj = revPV * out.ptrs - revPV;
+    // Pre-cost risk-adjusted value the bridge must land on before dev cost. Single-indication:
+    // ptrs × revPV (byte-identical to the prior bridge). Multi-indication: rnpv + devCost = the Σ of
+    // per-indication structural contributions grossed back up by cost — so the risk step reflects the
+    // per-indication P mix, never a single blanket P on pooled revenue, and the bridge reconciles to
+    // the same rNPV total shown in the headline.
+    const isMulti = (valuation.indications?.length ?? 0) > 1;
+    const preCost = isMulti ? out.rnpv + out.devCostPV : revPV * out.ptrs;
+    const ptrsAdj = preCost - revPV;
     const devCost = -out.devCostPV;
     const rnpv = out.rnpv;
 
     return [
       { name: "Revenue PV", value: revPV, base: 0, isTotal: false },
       { name: "PTRS Adj.", value: ptrsAdj, base: Math.min(revPV, revPV + ptrsAdj), isTotal: false },
-      { name: "Dev Cost", value: devCost, base: Math.max(0, revPV * out.ptrs + devCost), isTotal: false },
+      { name: "Dev Cost", value: devCost, base: Math.max(0, preCost + devCost), isTotal: false },
       { name: "rNPV", value: rnpv, base: 0, isTotal: true },
     ];
-  }, [out]);
+  }, [out, valuation.indications]);
 
   return (
     <div>

@@ -123,6 +123,48 @@ describe("self-check — Class-A NON-VACUITY: each check fires on its deliberate
   });
 });
 
+describe("self-check — A8 multi-indication aggregation (the pooled×one-P guard)", () => {
+  // Two indications, each independently risked: lead P=0.30 × RevPV 800 − cost 50 = 190; second
+  // P=0.15 × RevPV 400 − cost 50 = 10 → structural Σ = 200. The pooled×lead-P headline a naive
+  // implementation would show is 0.30 × (800+400) − 100 = 260 — the exact bug A8 exists to catch.
+  const components = [190, 10]; // per-indication STRUCTURAL contributions ($M)
+  const structuralSum = 200;
+  const pooledOneP = 260; // 0.30 × pooled 1200 − 100 shared cost
+
+  it("headline == Σ structural contributions → A8 PASSES (0 blockers)", () => {
+    const r = selfCheck({ view: good({ multiIndication: { headlineENPVM: structuralSum, componentRnpvsM: components } }) });
+    expect(byId(r, "A8-multi-indication-aggregation")!.pass).toBe(true);
+    expect(r.blockers).toBe(0);
+  });
+
+  it("headline == pooled revenue × the lead's single P → A8 FIRES (a blocker)", () => {
+    const r = selfCheck({ view: good({ multiIndication: { headlineENPVM: pooledOneP, componentRnpvsM: components } }) });
+    const a8 = byId(r, "A8-multi-indication-aggregation")!;
+    expect(a8.pass).toBe(false);
+    expect(a8.severity).toBe("BLOCKER");
+    expect(a8.explain).toMatch(/pooled revenue|single P|Σ per-indication/);
+    expect(r.blockers).toBeGreaterThanOrEqual(1);
+  });
+
+  it("A8 never false-fires on a CONDITIONAL aggregation (components are already P-weighted)", () => {
+    // A conditional second indication's contribution is P-weighted (e.g. 0.30 × 10 = 3), so the
+    // structure-resolved Σ is 190 + 3 = 193 — NOT the naive standalone Σ (200). A headline that
+    // matches the resolved Σ passes; A8 targets the resolved aggregate, so no false positive.
+    const cond = [190, 3];
+    const r = selfCheck({ view: good({ multiIndication: { headlineENPVM: 193, componentRnpvsM: cond } }) });
+    expect(byId(r, "A8-multi-indication-aggregation")!.pass).toBe(true);
+  });
+
+  it("a single-indication surface leaves A8 absent (nothing to aggregate)", () => {
+    expect(byId(selfCheck({ view: good() }), "A8-multi-indication-aggregation")).toBeUndefined();
+  });
+
+  it("a non-finite component or headline trips A8 (cannot reconcile)", () => {
+    const r = selfCheck({ view: good({ multiIndication: { headlineENPVM: NaN, componentRnpvsM: components } }) });
+    expect(byId(r, "A8-multi-indication-aggregation")!.pass).toBe(false);
+  });
+});
+
 describe("self-check — known-good FROZEN assets pass all Class-A", () => {
   // Built from the real frozen tripwire numbers (TTX 0.08986, tau 0.26751). eNPV identity holds
   // with the back-solved revenuePVM. A Class-A check that fired on a known-good asset would itself

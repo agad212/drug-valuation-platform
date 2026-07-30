@@ -71,6 +71,11 @@ export type ValuationView = {
   // A6: fields the caller asserts MUST be finite / free of placeholders.
   surfacedNumbers?: Record<string, number | null | undefined>;
   surfacedStrings?: Record<string, string | null | undefined>;
+  // A8: multi-indication aggregation. `componentRnpvsM` are the per-indication STRUCTURAL
+  // contributions ($M) — each already at its own P, own launch, and any conditional P-weight (i.e.
+  // the resolved-structure contributions, NOT standalone rNPVs). The headline must equal their sum.
+  // Populated only when there is >1 indication; a single-indication surface leaves it undefined.
+  multiIndication?: { headlineENPVM: number; componentRnpvsM: number[]; labels?: string[] };
 };
 
 // A7 reads the whole option set, comparing each declared-change option's governed tuple to baseline.
@@ -315,6 +320,45 @@ function checkOptionsRederived(options: OptionView[]): Check | null {
   };
 }
 
+// A8 — multi-indication headline == Σ of per-indication STRUCTURAL contributions. This is the guard
+// against the exact bug it was written for: a headline computed as pooled-revenue × a SINGLE P (the
+// lead's), which does NOT equal the sum of independently-risked indications. Because the components
+// fed here are the resolved-structure contributions (a conditional indication's is already P-weighted;
+// a sequential one's launch is already shifted), the target is the CORRECTLY-aggregated Σ — this
+// never false-fires on a legitimate conditional/sequential aggregation, only on a flat pooled×one-P.
+function checkMultiIndicationAggregation(v: ValuationView): Check | null {
+  const mi = v.multiIndication;
+  if (!mi || !Array.isArray(mi.componentRnpvsM) || mi.componentRnpvsM.length === 0) return null;
+  if (!finite(mi.headlineENPVM) || mi.componentRnpvsM.some((x) => !finite(x))) {
+    return {
+      id: "A8-multi-indication-aggregation",
+      class: "A",
+      severity: "BLOCKER",
+      pass: false,
+      read: { headlineENPVM: mi.headlineENPVM ?? null, components: mi.componentRnpvsM.length },
+      explain: "multi-indication headline or a component is non-finite — cannot reconcile the aggregate",
+    };
+  }
+  const structuralSum = mi.componentRnpvsM.reduce((s, x) => s + x, 0);
+  const delta = Math.abs(mi.headlineENPVM - structuralSum);
+  const pass = delta <= identityTolM(structuralSum);
+  return {
+    id: "A8-multi-indication-aggregation",
+    class: "A",
+    severity: "BLOCKER",
+    pass,
+    read: {
+      headlineENPVM: Number(mi.headlineENPVM.toFixed(3)),
+      structuralSumM: Number(structuralSum.toFixed(3)),
+      components: mi.componentRnpvsM.length,
+      deltaM: Number(delta.toFixed(3)),
+    },
+    explain: pass
+      ? `headline eNPV ${mi.headlineENPVM.toFixed(1)}M reconciles with the Σ of ${mi.componentRnpvsM.length} per-indication structural contributions`
+      : `headline eNPV ${mi.headlineENPVM.toFixed(1)}M ≠ Σ per-indication structural contributions ${structuralSum.toFixed(1)}M (Δ ${delta.toFixed(1)}M) — the headline is not the sum of independently-risked indications (looks like pooled revenue × a single P)`,
+  };
+}
+
 // ══ CLASS B — SUSPICIOUS (threshold → WARN-only, provisional pre-calibration) ═════
 
 // B1 — eROI ceiling. WARN only, never blocks, never adjusts eROI. Threshold is a labeled guess.
@@ -367,7 +411,7 @@ function aggregateFlags(f: FlagInput): Flag[] {
 export function selfCheck(input: { view?: ValuationView; options?: OptionView[]; flags?: FlagInput }): CheckReport {
   const checks: Check[] = [];
   if (input.view) {
-    for (const c of [checkProbRange, checkProbMonotonic, checkENPVIdentity, checkTimeline, checkRevenueWindow, checkNoBadValues, checkEROICeiling]) {
+    for (const c of [checkProbRange, checkProbMonotonic, checkENPVIdentity, checkTimeline, checkRevenueWindow, checkNoBadValues, checkMultiIndicationAggregation, checkEROICeiling]) {
       const r = c(input.view);
       if (r) checks.push(r);
     }

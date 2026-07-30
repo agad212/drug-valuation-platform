@@ -94,6 +94,7 @@ export function computeOutputs(v: Valuation): {
   roi: number | undefined;
   mechLabel: string;
   indicationOutputs: IndicationOutput[];
+  indicationFlags: string[]; // structured multi-indication assumptions/flags (surfaced, never prose-only)
 } {
   const { ptrs: computedPtrs, mechLabel } = computePTRS(v);
   const ptrs = v.ptrs ?? computedPtrs;
@@ -103,31 +104,71 @@ export function computeOutputs(v: Valuation): {
   if (v.indications && v.indications.length > 0) {
     const n = v.indications.length;
     const globalDevCostShare = devCostPV / Math.max(1, n);
-    const indicationOutputs: IndicationOutput[] = v.indications.map((ind) => {
+    const indications = v.indications;
+    const byId = new Map(indications.map((ind) => [ind.id, ind]));
+    const indicationFlags: string[] = [];
+
+    // Each indication is risked under its RESOLVED structure — never a single blanket P on pooled
+    // revenue. Lead (index 0) is always independent; others read indicationRelationship (default
+    // independent + surfaced assumption). rnpv per row is the STRUCTURAL contribution to the aggregate.
+    const indicationOutputs: IndicationOutput[] = indications.map((ind, idx) => {
+      const isLead = idx === 0;
+      const rel = isLead ? "independent" : (ind.indicationRelationship ?? "independent");
+      if (!isLead && !ind.indicationRelationship) {
+        indicationFlags.push(`${ind.name}: relationship unstated — assumed INDEPENDENT (optimistic; set conditional/sequential if the go-decision or timeline depends on another indication)`);
+      }
+
+      // Effective launch. sequential-after:<id> → no earlier than the prerequisite's launch (fixes a
+      // later indication silently inheriting the lead's early launch). Otherwise own launch, falling
+      // back to the drug's — flagged for a non-lead, since inheriting the lead's early launch inflates PV.
+      const ownLaunch = ind.launchYear ?? v.launchYear;
+      let effLaunch = ownLaunch;
+      const seqId = typeof rel === "string" && rel.startsWith("sequential-after:") ? rel.slice("sequential-after:".length) : null;
+      if (seqId) {
+        const prereqLaunch = byId.get(seqId)?.launchYear ?? indications[0]?.launchYear ?? v.launchYear;
+        if (prereqLaunch != null) effLaunch = ind.launchYear != null ? Math.max(ind.launchYear, prereqLaunch) : prereqLaunch;
+        if (effLaunch !== ownLaunch) indicationFlags.push(`${ind.name}: sequential-after ${byId.get(seqId)?.name ?? seqId} — launch shifted to ${effLaunch} (≥ prerequisite; refine with an explicit later launch)`);
+      } else if (!isLead && ind.launchYear == null) {
+        indicationFlags.push(`${ind.name}: no launch year — inherited the lead's (${v.launchYear}); revenue may be inflated — set its own launch or mark it sequential`);
+      }
+
       const indPtrs = ind.ptrs ?? ptrs;
-      const indRevPV = computeRevenuePV({
-        ...v,
-        peakSales: ind.peakSales ?? v.peakSales,
-        launchYear: ind.launchYear ?? v.launchYear,
-        loeYear: ind.loeYear ?? v.loeYear,
-      });
+      const indRevPV = computeRevenuePV({ ...v, peakSales: ind.peakSales ?? v.peakSales, launchYear: effLaunch, loeYear: ind.loeYear ?? v.loeYear });
       const indDevCost = ind.devCostPV ?? globalDevCostShare;
-      return { ...ind, revenuePV: indRevPV, rnpv: Math.round(indPtrs * indRevPV - indDevCost), ptrs: indPtrs, devCostPV: indDevCost };
+      const standalone = indPtrs * indRevPV - indDevCost;
+
+      // conditional-on:<id> → this indication only proceeds if its prerequisite succeeds → P-weight the
+      // WHOLE contribution by P(prerequisite success). (Mechanism read-through into its PRIOR — raising
+      // its own P — is a deferred pass; its P stays standalone here.)
+      const condId = typeof rel === "string" && rel.startsWith("conditional-on:") ? rel.slice("conditional-on:".length) : null;
+      let contribution = standalone;
+      if (condId) {
+        const pPrereq = byId.get(condId)?.ptrs ?? ptrs;
+        contribution = pPrereq * standalone;
+        indicationFlags.push(`${ind.name}: conditional on ${byId.get(condId)?.name ?? condId} — contribution P-weighted by P(prereq success)=${(pPrereq * 100).toFixed(0)}%`);
+      }
+
+      return { ...ind, revenuePV: indRevPV, rnpv: Math.round(contribution), ptrs: indPtrs, devCostPV: indDevCost };
     });
 
+    if (n > 1) {
+      indicationFlags.push(`eNPV is correct in expectation; the CI assumes independence and OVERSTATES diversification for a same-mechanism asset (a shared safety/PK failure kills correlated indications) — a later risk-profile refinement`);
+    }
+
     const revenuePV = indicationOutputs.reduce((s, i) => s + i.revenuePV, 0);
-    // rnpv per indication already has devCost deducted
+    // Headline = Σ of the per-indication STRUCTURAL contributions (each already at its own P, own launch,
+    // and any conditional P-weight) — never pooled revenue × one P. Shared dev cost is counted once (each
+    // row carries its own share; the sum is the total).
     const rnpv = Math.round(indicationOutputs.reduce((s, i) => s + i.rnpv, 0));
-    // Use sum of per-indication dev costs for the metric card (overrides blank global)
     const totalDevCostPV = indicationOutputs.reduce((s, i) => s + i.devCostPV, 0) || devCostPV;
     const roi = totalDevCostPV > 0 ? rnpv / totalDevCostPV : undefined;
-    return { ptrs, revenuePV, devCostPV: totalDevCostPV, rnpv, roi, mechLabel, indicationOutputs };
+    return { ptrs, revenuePV, devCostPV: totalDevCostPV, rnpv, roi, mechLabel, indicationOutputs, indicationFlags };
   }
 
   // ── Single-indication mode ─────────────────────────────────────────────────
   const revenuePV = computeRevenuePV(v);
   const rnpv = Math.round(ptrs * revenuePV - devCostPV);
   const roi = devCostPV > 0 ? rnpv / devCostPV : undefined;
-  return { ptrs, revenuePV, devCostPV, rnpv, roi, mechLabel, indicationOutputs: [] };
+  return { ptrs, revenuePV, devCostPV, rnpv, roi, mechLabel, indicationOutputs: [], indicationFlags: [] };
 }
 

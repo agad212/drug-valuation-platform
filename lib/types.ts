@@ -11,6 +11,12 @@ export type Indication = {
   phase?: string;
   ptrs?: number;      // per-indication override; falls back to parent drug PTRS
   devCostPV?: Money;  // per-indication dev cost; if unset, global devCostPV is split evenly
+  // Multi-indication structure (Layer-2-populated or user-set; the deterministic aggregation in
+  // computeOutputs consumes it). Lead (first) indication is always independent. Others:
+  //   "independent" (default; a SURFACED assumption) | "sequential-after:<id>" (launches ≥ the
+  //   prerequisite) | "conditional-on:<id>" (contribution P-weighted by P(prerequisite success)).
+  // Unstated → assumed independent + flagged. Mechanism read-through into the prior is a later pass.
+  indicationRelationship?: string;
   // Bottom-up market context (from revenue-assumptions) — persisted so the Strategy
   // Advisor can RE-DERIVE the market per scenario (Build 1/1b), not haircut the peak.
   tamM?: number;            // addressable market $M (eligible patients × annual WAC)
