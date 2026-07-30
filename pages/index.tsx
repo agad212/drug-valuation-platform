@@ -17,6 +17,7 @@ import StrategicAssessment from "../components/StrategicAssessment";
 import { buildBaseContext } from "../lib/decision-analysis";
 import { computeDevPlan, type DevStageInput, type DevPlanResult } from "../lib/dev-plan";
 import { selfCheck, viewFromDevPlan } from "../lib/self-check";
+import { validateValuationInputs, applyValidatedUpdates } from "../lib/valuation-input-validator";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, computeLoeYear } from "../lib/financial-pins";
 import { classGraveyardProbability } from "../lib/class-risk";
@@ -502,6 +503,10 @@ export default function HomePage() {
   // Signature over the generator's REASONING INPUTS only (NOT indicationRelationship) so merging the
   // result back doesn't retrigger the fetch — one reason per real input change.
   const structureSigRef = useRef<string>("");
+  // Conversational rearchitecture: chat is the primary command surface; the editable manual panel is
+  // DEMOTED to this collapsed advanced drawer (default hidden). The same setters stay reachable (the
+  // parity path); a read-only State & Assumptions view keeps every engine-set value visible.
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const { pushToast, ToastHost } = useToast();
 
   // The downstream valuation chain (PTRS → Layer 2 → dev plan) is scheduled via
@@ -711,20 +716,16 @@ export default function HomePage() {
     setV((cur) => ({ ...cur, [key]: val }));
   }
 
+  // THE VALIDATION CHOKE POINT. Every field update — deterministic parse OR LLM-suggested — flows
+  // through here. Out-of-range values are rejected + surfaced, never set. Accepted values go through
+  // applyValidatedUpdates (the pure transform that reproduces the panel setters' side-effects:
+  // peakSales → first indication, loeYear → clears loeBasis), so a chat write === the manual path.
   function onFieldUpdate(updates: Record<string, any>) {
-    setV((cur) => {
-      const next = { ...cur, ...updates };
-      // If peakSales is being set and we have indications, apply it to the first indication
-      // (global peakSales is a legacy field; the indications table drives rNPV)
-      if ("peakSales" in updates && cur.indications?.length) {
-        next.indications = cur.indications.map((ind, i) =>
-          i === 0 ? { ...ind, peakSales: updates.peakSales } : ind
-        );
-      }
-      return next;
-    });
-    const fieldCount = Object.keys(updates).length;
-    pushToast(`Applied ${fieldCount} field update${fieldCount > 1 ? "s" : ""} from assistant.`, "success");
+    const { accepted, rejected } = validateValuationInputs(updates);
+    const okCount = Object.keys(accepted).length;
+    if (okCount) setV((cur) => applyValidatedUpdates(cur, accepted));
+    if (okCount) pushToast(`Applied ${okCount} field update${okCount > 1 ? "s" : ""}.`, "success");
+    if (rejected.length) pushToast(`Rejected: ${rejected.map((r) => `${r.field} (${r.reason})`).join("; ")}`, "error");
   }
 
 
@@ -1784,7 +1785,58 @@ export default function HomePage() {
           </>
           )}
 
-          {/* Inputs */}
+          {/* State & Assumptions — read-only. Every engine-set value stays VISIBLE (chat is the edit
+              path; hiding the inputs that drive the number would be the opposite of the discipline). */}
+          <Card>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <SectionLabel>State &amp; Assumptions</SectionLabel>
+              <button className="btn btn-outline" onClick={() => setShowAdvanced((s) => !s)} style={{ fontSize: 11, padding: "3px 10px" }}>
+                {showAdvanced ? "Hide manual overrides" : "⚙ Manual overrides"}
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-faint)", fontFamily: "var(--font-mono)", marginBottom: 12, lineHeight: 1.5 }}>
+              Adjust anything through chat above — e.g. &ldquo;set discount rate to 12%&rdquo;, &ldquo;launch 2028&rdquo;, &ldquo;peak sales $2B&rdquo;. These inputs drive the valuation; the engine computes every number.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "8px 16px" }}>
+              {([
+                ["Asset", v.asset || "—"],
+                ["Phase", v.phase || "—"],
+                ["Sponsor", v.sponsor || "—"],
+                ["Mechanism", v.mechanism || "—"],
+                ["Discount Rate", v.discountRate != null ? fmtPct(v.discountRate) : "—"],
+                ["COGS %", v.cogsPct != null ? fmtPct(v.cogsPct) : "—"],
+                ["Tax Rate", v.taxRate != null ? fmtPct(v.taxRate) : "—"],
+                ["Working Capital %", v.workingCapitalPct != null ? fmtPct(v.workingCapitalPct) : "—"],
+                ...(v.ownerType === "Licensor" ? [["Avg Royalty %", v.avgRoyalty != null ? fmtPct(v.avgRoyalty) : "—"] as [string, any]] : []),
+                ["Peak Sales", v.peakSales != null ? fmtMoney(v.peakSales) : "—"],
+                ["Dev Cost PV", v.devCostPV != null ? fmtMoney(v.devCostPV) : "—"],
+                ["Launch Year", v.launchYear ?? "—"],
+                ["LOE Year", v.loeYear != null ? `${v.loeYear}${v.loeBasis ? ` (${v.loeBasis})` : ""}` : "—"],
+                ["P(approval) override", v.ptrs != null ? fmtPct(v.ptrs) : "auto"],
+              ] as [string, any][]).map(([label, val]) => (
+                <div key={label}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-faint)" }}>{label}</div>
+                  <div style={{ fontSize: 13, fontFamily: "var(--font-mono)", color: "var(--text)", fontWeight: 600 }}>{val}</div>
+                </div>
+              ))}
+            </div>
+            {v.indications && v.indications.length > 0 && (
+              <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-faint)", marginBottom: 6 }}>Indications</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {v.indications.map((ind, i) => (
+                    <div key={ind.id} style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
+                      {i === 0 ? "★ " : "• "}{ind.name || "(unnamed)"} · peak {ind.peakSales != null ? fmtMoney(ind.peakSales) : "—"} · launch {ind.launchYear ?? "—"} · LOE {ind.loeYear ?? "—"} · P {ind.ptrs != null ? fmtPct(ind.ptrs) : "auto"}{ind.indicationRelationship && ind.indicationRelationship !== "independent" ? ` · ${ind.indicationRelationship}` : ""}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Inputs — DEMOTED to a collapsed advanced drawer (parity path: the SAME setters as before,
+              just behind a toggle). Chat is the primary edit surface; this stays reachable + unchanged. */}
+          {showAdvanced && (
           <Card>
             <SectionLabel>Asset Details</SectionLabel>
             <div className="form-grid-4" style={{ marginBottom: 16 }}>
@@ -1904,6 +1956,7 @@ export default function HomePage() {
               </div>
             )}
           </Card>
+          )}
 
           {/* Clinical Trial Results */}
           {trialResults && (

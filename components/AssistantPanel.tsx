@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { parseValuationCommand } from "../lib/valuation-command-parser";
 
 const FIELD_LABELS: Record<string, string> = {
   peakSales: "Peak Sales", discountRate: "Discount Rate", cogsPct: "COGS %",
@@ -61,6 +62,20 @@ const AssistantPanel: React.FC<Props> = ({ valuation, onFieldUpdate, onAutoValue
   async function send(text?: string) {
     const content = (text ?? input).trim();
     if (!content) return;
+
+    // DETERMINISTIC field-command short-circuit (no LLM, no-leak): a precise "set X to Y" command maps
+    // straight to an engine INPUT. It still goes through onFieldUpdate, which validates + calls the
+    // SAME setter the panel calls — the number comes from the engine, never from here.
+    if (onFieldUpdate) {
+      const cmd = parseValuationCommand(content);
+      if (cmd) {
+        setMessages((m) => [...m, { role: "user", content }, { role: "assistant", content: cmd.echo }]);
+        setInput("");
+        onFieldUpdate(cmd.updates);
+        return;
+      }
+    }
+
     const userMsg: Message = { role: "user", content };
     const next = [...messages, userMsg];
     setMessages(next);
