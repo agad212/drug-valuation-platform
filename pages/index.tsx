@@ -495,6 +495,13 @@ export default function HomePage() {
   const [briefError, setBriefError] = useState<string | null>(null);
   const [briefSummary, setBriefSummary] = useState<string | null>(null);
   const [expectationAudit, setExpectationAudit] = useState<ExpectationAuditResult | null>(null);
+  // Structure generator (>1 indication): the deterministic validator's flags (rejections/chains) from
+  // /api/indication-structure. The resolved relationships are merged onto v.indications (below); these
+  // flags surface WHY (a rejected/demoted or single-level-chain call), never a number.
+  const [structureFlags, setStructureFlags] = useState<{ code: string; severity: string; message: string }[]>([]);
+  // Signature over the generator's REASONING INPUTS only (NOT indicationRelationship) so merging the
+  // result back doesn't retrigger the fetch — one reason per real input change.
+  const structureSigRef = useRef<string>("");
   const { pushToast, ToastHost } = useToast();
 
   // The downstream valuation chain (PTRS → Layer 2 → dev plan) is scheduled via
@@ -595,6 +602,53 @@ export default function HomePage() {
     },
     [devPlan, v.launchYear, v.loeYear, isMultiIndication, governedOut],
   );
+
+  // ── Structure generator: on a >1-indication asset, ask /api/indication-structure to reason the
+  //    relationships (independent / conditional-on / sequential-after) and MERGE them onto the
+  //    indications, where the existing computeOutputs aggregation (8eb33cc) consumes them. The LLM
+  //    specifies structure only; deterministic code computes every number. Fires ONLY at >1 indication;
+  //    single-indication assets never call it (FROZEN path untouched). Graceful: any error leaves the
+  //    relationships unset → every non-lead stays independent + flagged → today's exact behavior.
+  //    Debounced + signature-gated so it reasons once per real input change, not per keystroke or merge.
+  useEffect(() => {
+    const inds = v.indications;
+    if (!inds || inds.length < 2) { setStructureFlags((f) => (f.length ? [] : f)); return; }
+    const sig =
+      JSON.stringify(inds.map((i) => ({ id: i.id, name: i.name, phase: i.phase, launchYear: i.launchYear, nctId: i.nctId }))) +
+      `|${v.asset ?? ""}|${v.mechanism ?? ""}|${(briefSummary ?? trialSummary ?? "").slice(0, 240)}`;
+    if (sig === structureSigRef.current) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      structureSigRef.current = sig;
+      try {
+        const resp = await fetch("/api/indication-structure", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            drug: v.asset, mechanism: v.mechanism, sponsor: v.sponsor, summary: briefSummary ?? trialSummary ?? "",
+            indications: inds.map((i) => ({ id: i.id, name: i.name, phase: i.phase, launchYear: i.launchYear, nctId: i.nctId })),
+          }),
+        });
+        if (!resp.ok || cancelled) return; // graceful → independent + flagged
+        const data = await resp.json();
+        if (cancelled || !Array.isArray(data?.relationships)) return;
+        const relById = new Map<string, string>(data.relationships.map((r: any) => [String(r.id), String(r.indicationRelationship)]));
+        setStructureFlags(Array.isArray(data.flags) ? data.flags : []);
+        setV((cur) => {
+          if (!cur.indications) return cur;
+          let changed = false;
+          const next = cur.indications.map((ind) => {
+            const rel = relById.get(ind.id);
+            if (rel && rel !== ind.indicationRelationship) { changed = true; return { ...ind, indicationRelationship: rel }; }
+            return ind;
+          });
+          return changed ? { ...cur, indications: next } : cur;
+        });
+      } catch { /* graceful degradation → today's all-independent behavior */ }
+    }, 700);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v.indications, v.asset, v.mechanism, v.sponsor, briefSummary, trialSummary]);
 
   // ── Expectation smoke detector: fires when devPlan result changes ─────────
   useEffect(() => {
@@ -1803,6 +1857,15 @@ export default function HomePage() {
                     {governedOut.indicationFlags.map((fl, i) => (
                       <div key={i} style={{ fontSize: 11, color: "var(--warning)", fontFamily: "var(--font-mono)", lineHeight: 1.4, display: "flex", gap: 6 }}>
                         <span aria-hidden>⚠</span><span>{fl}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {isMultiIndication && structureFlags.length > 0 && (
+                  <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                    {structureFlags.map((fl, i) => (
+                      <div key={i} style={{ fontSize: 11, color: fl.severity === "reject" ? "var(--danger)" : "var(--text-faint)", fontFamily: "var(--font-mono)", lineHeight: 1.4, display: "flex", gap: 6 }}>
+                        <span aria-hidden>{fl.severity === "reject" ? "✕" : "ℹ"}</span><span>{fl.message}</span>
                       </div>
                     ))}
                   </div>

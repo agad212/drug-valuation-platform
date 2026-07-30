@@ -98,6 +98,26 @@ describe("cashflow — SEQUENTIAL: a later indication launches no earlier than i
   });
 });
 
+describe("cashflow — turning the structure generator ON is a NO-OP until a non-independent relationship (all-independent == today)", () => {
+  const inds = [
+    { id: "lead", name: "Lead", peakSales: 800_000_000, ptrs: 0.3, launchYear: 2030 },
+    { id: "b", name: "B", peakSales: 400_000_000, ptrs: 0.15, launchYear: 2030 },
+    { id: "c", name: "C", peakSales: 300_000_000, ptrs: 0.2, launchYear: 2031 },
+  ];
+
+  it("indicationRelationship 'independent' on every non-lead → byte-identical NUMBERS to leaving it unset (the default)", () => {
+    const today = computeOutputs({ ...base, indications: inds });
+    const explicitIndep = computeOutputs({
+      ...base,
+      indications: inds.map((i, idx) => (idx === 0 ? i : { ...i, indicationRelationship: "independent" })),
+    });
+    expect(explicitIndep.rnpv).toBe(today.rnpv);
+    expect(explicitIndep.revenuePV).toBe(today.revenuePV);
+    expect(explicitIndep.indicationOutputs.map((o) => o.rnpv)).toEqual(today.indicationOutputs.map((o) => o.rnpv));
+    // (only the FLAGS differ — an explicit-independent isn't tagged "relationship unstated" — never the numbers)
+  });
+});
+
 describe("cashflow — CONDITIONAL: a dependent indication's whole contribution is P-weighted by P(prerequisite success)", () => {
   it("conditional-on P-weights the contribution (= P_prereq × standalone), strictly below the standalone value", () => {
     const out = computeOutputs({
