@@ -12,6 +12,7 @@ import type { CtgovTrial } from "../lib/ctgov";
 import { isEnrollmentComplete } from "../lib/ctgov";
 import DecisionAnalysis from "../components/DecisionAnalysis";
 import DevPlan from "../components/DevPlan";
+import ScenarioPanel from "../components/ScenarioPanel";
 import EffectPriorChain from "../components/EffectPriorChain";
 import StrategicAssessment from "../components/StrategicAssessment";
 import { buildBaseContext } from "../lib/decision-analysis";
@@ -2867,6 +2868,14 @@ export default function HomePage() {
             <Card>
               <SectionLabel>Valuation Analysis</SectionLabel>
               <ValuationCharts valuation={chartValuation} governed={governedOut} />
+            </Card>
+          )}
+
+          {/* Scenarios — bull/base/bear input vectors through the existing engine + weighted rollup */}
+          {briefStatus !== "failed" && v.asset && (
+            <Card>
+              <SectionLabel>Scenarios</SectionLabel>
+              <ScenarioPanel base={chartValuation} devPlan={devPlan} />
             </Card>
           )}
 
