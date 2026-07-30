@@ -94,6 +94,10 @@ describe("cashflow — SEQUENTIAL: a later indication launches no earlier than i
     // independent counterfactual: S launching at its own 2030 (earlier → less discounting → higher PV)
     const independentEarly = computeRevenuePV({ ...base, peakSales: 400_000_000, launchYear: 2030 });
     expect(seqSecond.revenuePV).toBeLessThan(independentEarly);
+    // ADDITIVE surfacing: the RESOLVED effective launch is floored at the prerequisite's (2034), exposed
+    // for the Gantt to read (never re-derive).
+    expect(seqSecond.effLaunch).toBe(2034);
+    expect(seqSecond.conditionalPWeight).toBeUndefined();
     expect(out.indicationFlags.some((f) => /^S:|S:/.test(f) && /sequential-after/i.test(f) && /shifted/i.test(f))).toBe(true);
   });
 });
@@ -132,6 +136,9 @@ describe("cashflow — CONDITIONAL: a dependent indication's whole contribution 
     const expected = Math.round(0.3 * standalone); // P-weighted by the lead's P(success)=0.30
     expect(dep.rnpv).toBe(expected);
     expect(dep.rnpv).toBeLessThan(Math.round(standalone)); // P-weighting reduces it
+    // ADDITIVE surfacing: the conditional P-weight (the prerequisite's P) is exposed for the Gantt gate.
+    expect(dep.conditionalPWeight).toBe(0.3);
+    expect(dep.effLaunch).toBe(2030);
     expect(out.indicationFlags.some((f) => /Dep/.test(f) && /conditional on/i.test(f) && /P-weighted/i.test(f))).toBe(true);
   });
 

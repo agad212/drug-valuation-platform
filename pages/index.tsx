@@ -2866,7 +2866,7 @@ export default function HomePage() {
           {briefStatus !== "failed" && (
             <Card>
               <SectionLabel>Valuation Analysis</SectionLabel>
-              <ValuationCharts valuation={chartValuation} />
+              <ValuationCharts valuation={chartValuation} governed={governedOut} />
             </Card>
           )}
 

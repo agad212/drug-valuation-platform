@@ -16,6 +16,7 @@ import React, { useState } from "react";
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from "recharts";
 import { type DevStageInput, type DevPlanResult, type DevStage } from "../lib/dev-plan";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
+import DevPathSpine from "./DevPathSpine";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -691,6 +692,10 @@ export default function DevPlan({ stageInputs, devPlan, reasoning, loading, onUp
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+      {/* Trial-box spine (render-only terminal view over devPlan.stages) — the detailed editable cards
+          follow below (N / cost-per-patient stay editable there). */}
+      <DevPathSpine devPlan={devPlan} />
 
       {/* AI reasoning */}
       {reasoning && (

@@ -6,6 +6,12 @@ import {
 import type { Valuation } from "../lib/types";
 import { computeOutputs, computeRevenuePV } from "../lib/cashflow";
 
+// The memo output the charts READ (never recompute). The main page passes governedOut as the `governed`
+// prop; where it's absent (e.g. the read-only share page) the chart falls back to a single deterministic
+// computeOutputs — same number, so no drift. Tornado is the ONE exception: it drives the sanctioned
+// computeOutputs SWEEP over perturbed input vectors.
+type ComputeOut = ReturnType<typeof computeOutputs>;
+
 const fmt = (n: number) => {
   if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
   if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(0)}M`;
@@ -110,9 +116,8 @@ function TornadoChart({ valuation }: { valuation: Valuation }) {
 }
 
 // ─── Waterfall Chart ────────────────────────────────────────────────────────
-function WaterfallChart({ valuation }: { valuation: Valuation }) {
-  const out = useMemo(() => computeOutputs(valuation), [valuation]);
-
+// Reads the memo output `out` (governed prop) — no in-chart recompute.
+function WaterfallChart({ out }: { out: ComputeOut }) {
   const data = useMemo(() => {
     const revPV = out.revenuePV;
     // Pre-cost risk-adjusted value the bridge must land on before dev cost. Single-indication:
@@ -120,7 +125,7 @@ function WaterfallChart({ valuation }: { valuation: Valuation }) {
     // per-indication structural contributions grossed back up by cost — so the risk step reflects the
     // per-indication P mix, never a single blanket P on pooled revenue, and the bridge reconciles to
     // the same rNPV total shown in the headline.
-    const isMulti = (valuation.indications?.length ?? 0) > 1;
+    const isMulti = out.indicationOutputs.length > 1;
     const preCost = isMulti ? out.rnpv + out.devCostPV : revPV * out.ptrs;
     const ptrsAdj = preCost - revPV;
     const devCost = -out.devCostPV;
@@ -132,7 +137,7 @@ function WaterfallChart({ valuation }: { valuation: Valuation }) {
       { name: "Dev Cost", value: devCost, base: Math.max(0, preCost + devCost), isTotal: false },
       { name: "rNPV", value: rnpv, base: 0, isTotal: true },
     ];
-  }, [out, valuation.indications]);
+  }, [out]);
 
   return (
     <div>
@@ -179,7 +184,7 @@ function RevenueTimeline({ valuation }: { valuation: Valuation }) {
           const i = yr - ly;
           let pct = 1.0;
           if (i <= 3) pct = ramps[i] ?? 1.0;
-          else if (yr > loeY) pct = 0.3;
+          else if (yr > loeY) pct = 0.5; // mirror cashflow's post-LOE erosion (was 0.3 — disagreed with the engine)
           yearMap.set(yr, (yearMap.get(yr) ?? 0) + ps * pct);
         }
       }
@@ -198,7 +203,7 @@ function RevenueTimeline({ valuation }: { valuation: Valuation }) {
       const i = yr - valuation.launchYear;
       let pct = 1.0;
       if (i <= 3) pct = ramps[i] ?? 1.0;
-      else if (yr > valuation.loeYear) pct = 0.3;
+      else if (yr > valuation.loeYear) pct = 0.5; // mirror cashflow's post-LOE erosion (was 0.3)
       const revenue = valuation.peakSales * pct;
       const df = 1 / Math.pow(1 + disc, Math.max(0, yr - now));
       rows.push({ year: yr, revenue: Math.round(revenue / 1e6), pv: Math.round(revenue * df / 1e6), isLOE: yr > valuation.loeYear });
@@ -240,9 +245,8 @@ function RevenueTimeline({ valuation }: { valuation: Valuation }) {
 }
 
 // ─── Indications Breakdown Chart ─────────────────────────────────────────────
-function IndicationsChart({ valuation }: { valuation: Valuation }) {
-  const out = useMemo(() => computeOutputs(valuation), [valuation]);
-
+// Reads the memo output `out` (governed prop) — no in-chart recompute.
+function IndicationsChart({ out }: { out: ComputeOut }) {
   if (!out.indicationOutputs.length) {
     return <div style={{ color: "var(--text-faint)", fontSize: 13 }}>Add indications to see breakdown.</div>;
   }
@@ -278,25 +282,114 @@ function IndicationsChart({ valuation }: { valuation: Valuation }) {
   );
 }
 
+// ─── Multi-indication Structure (the resolved relationships, RENDERED) ────────
+// Reads the RESOLVED structure from out.indicationOutputs (indicationRelationship + the additive
+// effLaunch / conditionalPWeight the engine now surfaces) — a READ, never a second judgment. Bars on a
+// shared calendar-year axis: independent → parallel; sequential-after → staggered at the prerequisite's
+// launch (from effLaunch) with a connector; conditional-on → gated (◆) + hatched + P-weight, rationale
+// on hover.
+function StructureGantt({ out, valuation }: { out: ComputeOut; valuation: Valuation }) {
+  const inds = out.indicationOutputs;
+  if (inds.length < 2) return <div style={{ color: "var(--text-faint)", fontSize: 13 }}>Two or more indications needed to show structure.</div>;
+
+  const byId = new Map(inds.map((i) => [i.id, i]));
+  const startOf = (i: typeof inds[number]) => i.effLaunch ?? i.launchYear ?? valuation.launchYear ?? new Date().getFullYear();
+  const endOf = (i: typeof inds[number]) => i.loeYear ?? valuation.loeYear ?? (startOf(i) + 10);
+  const yearMin = Math.min(...inds.map(startOf));
+  const yearMax = Math.max(...inds.map(endOf));
+  const span = Math.max(1, yearMax - yearMin);
+  const pctL = (yr: number) => ((yr - yearMin) / span) * 100;
+  const relOf = (rel: string | undefined) => {
+    if (typeof rel === "string" && rel.startsWith("conditional-on:")) return { kind: "conditional" as const, ref: rel.slice("conditional-on:".length) };
+    if (typeof rel === "string" && rel.startsWith("sequential-after:")) return { kind: "sequential" as const, ref: rel.slice("sequential-after:".length) };
+    return { kind: "independent" as const, ref: null };
+  };
+  const gridYears: number[] = [];
+  for (let y = yearMin; y <= yearMax; y += Math.max(1, Math.ceil(span / 8))) gridYears.push(y);
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 10, fontFamily: "var(--font-mono)" }}>
+        Indication structure — parallel (independent), staggered (sequential-after), or gated (conditional-on). Each bar spans launch→LOE at its own P.
+      </div>
+      {/* year axis */}
+      <div style={{ position: "relative", height: 16, marginLeft: 150, marginBottom: 4 }}>
+        {gridYears.map((y) => (
+          <div key={y} style={{ position: "absolute", left: `${pctL(y)}%`, fontSize: 9, color: "var(--text-faint)", fontFamily: "var(--font-mono)", transform: "translateX(-50%)" }}>{y}</div>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {inds.map((ind, idx) => {
+          const rel = idx === 0 ? { kind: "independent" as const, ref: null } : relOf(ind.indicationRelationship);
+          const s = startOf(ind), e = endOf(ind);
+          const prereq = rel.ref ? byId.get(rel.ref) : null;
+          const conditional = rel.kind === "conditional";
+          const barColor = ind.rnpv >= 0 ? "var(--accent)" : "var(--danger)";
+          const title = `${ind.name || "indication"} · P ${(ind.ptrs * 100).toFixed(0)}% · rNPV ${fmt(ind.rnpv)} · ${rel.kind}${prereq ? ` ${prereq.name}` : ""}${conditional && ind.conditionalPWeight != null ? ` (P-weight ×${(ind.conditionalPWeight).toFixed(2)})` : ""}`;
+          return (
+            <div key={ind.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* label */}
+              <div style={{ width: 142, flexShrink: 0, textAlign: "right", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                <div style={{ color: "var(--text)", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{idx === 0 ? "★ " : ""}{ind.name || "(unnamed)"}</div>
+                <div style={{ color: "var(--text-faint)", fontSize: 9 }}>
+                  {rel.kind === "independent" ? "independent" : rel.kind === "sequential" ? `↳ after ${prereq?.name ?? rel.ref}` : `⧖ gated on ${prereq?.name ?? rel.ref}`}
+                </div>
+              </div>
+              {/* track */}
+              <div style={{ position: "relative", flex: 1, height: 26, background: "var(--surface-2, rgba(120,120,120,0.06))", borderRadius: 6 }} title={title}>
+                {conditional && (
+                  <div title="gate: only proceeds if the prerequisite succeeds" style={{ position: "absolute", left: `calc(${pctL(s)}% - 6px)`, top: 5, fontSize: 14, color: "#f59e0b", lineHeight: 1 }}>◆</div>
+                )}
+                <div style={{
+                  position: "absolute", left: `${pctL(s)}%`, width: `${Math.max(1.5, pctL(e) - pctL(s))}%`, top: 5, height: 16, borderRadius: 4,
+                  background: barColor, opacity: conditional ? 0.4 : 0.82,
+                  backgroundImage: conditional ? "repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(255,255,255,0.25) 3px, rgba(255,255,255,0.25) 6px)" : undefined,
+                  border: `1px solid ${barColor}`,
+                }} />
+                <div style={{ position: "absolute", left: `calc(${pctL(s)}% + 4px)`, top: 6, fontSize: 9.5, color: "#fff", fontFamily: "var(--font-mono)", fontWeight: 700, pointerEvents: "none", textShadow: "0 1px 2px rgba(0,0,0,0.4)" }}>
+                  {(ind.ptrs * 100).toFixed(0)}% · {fmt(ind.rnpv)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {out.indicationFlags.length > 0 && (
+        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 3 }}>
+          {out.indicationFlags.map((f, i) => (
+            <div key={i} style={{ fontSize: 10.5, color: "var(--text-faint)", fontFamily: "var(--font-mono)", lineHeight: 1.4 }}>· {f}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Export ────────────────────────────────────────────────────────────
-const ALL_TABS = ["Tornado", "Waterfall", "Timeline", "Indications"] as const;
-type Tab = typeof ALL_TABS[number];
+type Tab = "Tornado" | "Waterfall" | "Timeline" | "Structure" | "Indications";
 
-export default function ValuationCharts({ valuation }: { valuation: Valuation }) {
+export default function ValuationCharts({ valuation, governed }: { valuation: Valuation; governed?: ComputeOut }) {
+  // READ the memo output; fall back to a single deterministic recompute only when no prop is passed
+  // (e.g. the read-only share page). Tornado is the one chart that sweeps computeOutputs itself.
+  const out = useMemo(() => governed ?? computeOutputs(valuation), [governed, valuation]);
+  const nInd = out.indicationOutputs.length;
   const [tab, setTab] = React.useState<Tab>("Tornado");
-  const hasIndications = (valuation.indications?.length ?? 0) > 0;
-  const tabs = hasIndications ? ALL_TABS : (["Tornado", "Waterfall", "Timeline"] as const);
+  const tabs: Tab[] = nInd > 1
+    ? ["Tornado", "Waterfall", "Timeline", "Structure", "Indications"]
+    : nInd === 1
+    ? ["Tornado", "Waterfall", "Timeline", "Indications"]
+    : ["Tornado", "Waterfall", "Timeline"];
 
-  // Reset to Tornado if Indications tab was selected but indications removed
+  // Reset to Tornado if the active tab is no longer available (indications removed / dropped below 2).
   React.useEffect(() => {
-    if (tab === "Indications" && !hasIndications) setTab("Tornado");
-  }, [hasIndications, tab]);
+    if ((tab === "Indications" && nInd === 0) || (tab === "Structure" && nInd <= 1)) setTab("Tornado");
+  }, [nInd, tab]);
 
   return (
     <div>
       <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
         {tabs.map((t) => (
-          <button key={t} onClick={() => setTab(t as Tab)} className="btn" style={{
+          <button key={t} onClick={() => setTab(t)} className="btn" style={{
             fontSize: 12, padding: "4px 12px",
             background: tab === t ? "var(--accent)" : "transparent",
             color: tab === t ? "var(--accent-fg)" : "var(--text-muted)",
@@ -308,9 +401,10 @@ export default function ValuationCharts({ valuation }: { valuation: Valuation })
       </div>
       <div className="animate-fade-in">
         {tab === "Tornado"     && <TornadoChart valuation={valuation} />}
-        {tab === "Waterfall"   && <WaterfallChart valuation={valuation} />}
+        {tab === "Waterfall"   && <WaterfallChart out={out} />}
         {tab === "Timeline"    && <RevenueTimeline valuation={valuation} />}
-        {tab === "Indications" && <IndicationsChart valuation={valuation} />}
+        {tab === "Structure"   && <StructureGantt out={out} valuation={valuation} />}
+        {tab === "Indications" && <IndicationsChart out={out} />}
       </div>
     </div>
   );

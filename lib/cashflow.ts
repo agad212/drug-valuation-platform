@@ -82,6 +82,12 @@ export type IndicationOutput = Indication & {
   rnpv: number;
   ptrs: number;
   devCostPV: number;
+  // ADDITIVE render-support (no math change): the RESOLVED effective launch used for revenue (a
+  // sequential-after indication's launch floored at its prerequisite's) and the conditional P-weight
+  // applied to its contribution (present only for conditional-on). The multi-indication Gantt READS
+  // these to place the stagger / gate from resolved data — it never re-derives the floor.
+  effLaunch?: number;
+  conditionalPWeight?: number;
 };
 
 // ─── Outputs ──────────────────────────────────────────────────────────────────
@@ -142,13 +148,18 @@ export function computeOutputs(v: Valuation): {
       // its own P — is a deferred pass; its P stays standalone here.)
       const condId = typeof rel === "string" && rel.startsWith("conditional-on:") ? rel.slice("conditional-on:".length) : null;
       let contribution = standalone;
+      let conditionalPWeight: number | undefined;
       if (condId) {
         const pPrereq = byId.get(condId)?.ptrs ?? ptrs;
         contribution = pPrereq * standalone;
+        conditionalPWeight = pPrereq;
         indicationFlags.push(`${ind.name}: conditional on ${byId.get(condId)?.name ?? condId} — contribution P-weighted by P(prereq success)=${(pPrereq * 100).toFixed(0)}%`);
       }
 
-      return { ...ind, revenuePV: indRevPV, rnpv: Math.round(contribution), ptrs: indPtrs, devCostPV: indDevCost };
+      // effLaunch + conditionalPWeight are ADDITIVE render-support (no math change): the RESOLVED launch
+      // used for revenue and the conditional weight applied — the Gantt reads these to place the
+      // stagger/gate from resolved data (never re-deriving the floor).
+      return { ...ind, revenuePV: indRevPV, rnpv: Math.round(contribution), ptrs: indPtrs, devCostPV: indDevCost, effLaunch, conditionalPWeight };
     });
 
     if (n > 1) {
