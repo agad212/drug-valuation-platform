@@ -101,6 +101,14 @@ describe("Layer 2 interpreter — two-stage validation gate (non-vacuity)", () =
     expect(spec.tte).toBeUndefined(); // not natively computed; Layer-1 uses the RR-proxy
   });
 
+  it("UNSUPPORTED passthrough: `unsupported` string → BOTH flags (not computable + computed with Y); never a spec field", () => {
+    const { spec, flags } = validateDesignSpec({ designType: "rct", unsupported: "adaptive sample-size re-estimation" });
+    expect(flags.some((f) => f.code === "design-unsupported" && f.severity === "fallback")).toBe(true); // "not computable yet"
+    expect(flags.some((f) => f.code === "design-unsupported-fallback" && f.severity === "info")).toBe(true); // "computed with Y instead"
+    expect(spec.designType).toBe("rct"); // the closest supported spec survives
+    expect("unsupported" in spec).toBe(false); // string signal only — never a spec field (no-leak intact)
+  });
+
   it("malformed top-level (not an object) → rejected, empty spec (base path)", () => {
     const res = validateDesignSpec("give me a group sequential design" as unknown);
     expect(res.rejected).toBe(true);

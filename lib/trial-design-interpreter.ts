@@ -124,6 +124,16 @@ export function validateDesignSpec(raw: unknown): InterpretResult {
   }
   if (typeof r.isTimeToEvent === "boolean") spec.isTimeToEvent = r.isTimeToEvent;
 
+  // UNSUPPORTED-SIGNALING: the LLM names (in `unsupported`, a STRING) any design family this schema
+  // cannot represent (adaptive/SSR, Bayesian predictive-probability, conditional-power futility,
+  // single-arm/basket TTE) so it is CARRIED and FLAGGED — never silently dropped to a plain design.
+  // String only → not a spec field, no number, no design param (no-leak intact); it becomes two flags.
+  if (typeof r.unsupported === "string" && r.unsupported.trim()) {
+    const what = r.unsupported.trim();
+    flags.push({ code: "design-unsupported", severity: "fallback", message: `requested design "${what}" is not computable yet` });
+    flags.push({ code: "design-unsupported-fallback", severity: "info", message: `computed with the nearest supported design instead` });
+  }
+
   // ── ALPHA (free significance level). USER alpha wins; if regulatoryContext also present, record the override. ──
   if (r.alpha !== undefined) {
     const a = r.alpha as Record<string, unknown>;
@@ -232,7 +242,7 @@ export function validateDesignSpec(raw: unknown): InterpretResult {
       }
       spec.bayesian = { refTheta: b.refTheta as number, postThreshold: b.postThreshold as number, analysisPrior };
     } else {
-      flags.push({ code: "bayesian-incomplete", severity: "reject", message: `Bayesian rule needs refTheta ∈ (0,1) AND postThreshold ∈ (0,1) — Bayesian ignored (frequentist rule used)` });
+      flags.push({ code: "bayesian-incomplete", severity: "reject", message: `a Bayesian posterior-threshold design needs a reference rate refTheta (θ₀) ∈ (0,1) AND a posterior threshold ∈ (0,1) — please specify the reference rate; the frequentist rule is used until then` });
     }
   }
 

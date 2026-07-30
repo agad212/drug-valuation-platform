@@ -33,15 +33,36 @@ Emit ONE JSON object inside <spec_json>...</spec_json>. Fields (all optional; om
                   "spending"?: "OBF"|"POCOCK",
                   "futility"?: { "futilityType":"beta-spending"|"conditional-power"|"none","binding"?:boolean,"beta"?:number,"spending"?:"OBF"|"POCOCK" } }
   "bayesian": { "refTheta": number in (0,1), "postThreshold": number in (0,1), "analysisPrior"?: { "a":number,"b":number } }
+  "stageTarget": "Phase 2" | "Phase 3" | "pivotal" | <0-based stage index>   // WHICH trial the design addresses
+  "unsupported": string   // name a requested design family this schema CANNOT represent, so the engine flags it
 
 RESOLVE-OR-FLAG:
 - State a value only if the user gave it or it is directly derivable. Do NOT invent an effect anchor:
-  if an expected HR / SD+Δ / reference rate is not stated, OMIT that family (the engine flags it) — never guess it.
+  if an expected HR / SD+Δ / reference rate (θ₀) is not stated, OMIT that family (the engine flags it) — never guess it.
 - Leave structural knobs (spending shape, number of looks, binding) unstated if the user didn't say —
   the engine fills a LABELED default you'll see; don't guess them either.
-- Anything the schema can't express, or a design the engine can't do (conditional-power futility,
-  adaptive/sample-size re-estimation, Bayesian predictive-probability, single-arm time-to-event),
-  still map it to the closest field + note it in prose AFTER the JSON; the engine will flag+fall back.`;
+
+STAGE-TARGET (WHICH trial the design addresses — populate it from the language; do NOT leave it to a guess):
+- "Phase 2" / "P2" / "the Phase 2" → stageTarget: "Phase 2".   "Phase 3" → "Phase 3".
+- "pivotal" / "registration" / "the pivotal trial" / "confirmatory trial" → stageTarget: "pivotal".
+- If the user names NO stage → OMIT stageTarget (the engine defaults to the pivotal/registration stage and
+  SURFACES that as an assumption). Do NOT emit a guessed stage.
+  e.g. "power the Phase 2 as a survival study …" → stageTarget: "Phase 2" (NOT pivotal).
+
+FUTILITY IS A GROUP-SEQUENTIAL STRUCTURE: a futility rule/interim cannot exist without a sequential design. If
+the user asks for a futility rule/interim, emit a "sequential" block WITH the "futility" block — never an empty
+spec. e.g. "add a futility rule" → "sequential": { "futility": { "futilityType": "beta-spending" } } (the engine
+defaults + surfaces the look schedule).
+
+UNSUPPORTED — CARRY, never silently drop: if the user requests a family this schema cannot represent (adaptive /
+sample-size re-estimation / arm-dropping, Bayesian predictive-probability, conditional-power futility, single-arm
+or basket time-to-event), set "unsupported" to name it (e.g. "unsupported": "adaptive sample-size re-estimation").
+Still emit the closest supported spec. NEVER silently return a plain design — the engine flags "unsupported" so the
+user sees BOTH that it isn't computable yet AND what was computed instead.
+
+LOOK FRACTIONS — emit in the ORDER the user gave; do NOT silently reorder. If the user lists interim looks
+descending or out of order, emit them as given (the engine rejects a non-monotonic schedule and says why). Never
+quietly sort them into a valid order — that hides a possible mistake and silently drives the number.`;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
