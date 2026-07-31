@@ -92,50 +92,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function FieldInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <label style={{ display: "block" }}>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, fontFamily: "var(--font-mono)" }}>{label}</div>
-      <input className="input-base" value={value} onChange={(e) => onChange(e.target.value)} />
-    </label>
-  );
-}
-
-function FieldSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: string[] }) {
-  return (
-    <label style={{ display: "block" }}>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, fontFamily: "var(--font-mono)" }}>{label}</div>
-      <select className="input-base" value={value} onChange={(e) => onChange(e.target.value)} style={{ cursor: "pointer" }}>
-        {options.map((o) => <option key={o} value={o}>{o === "" ? "—" : o}</option>)}
-      </select>
-    </label>
-  );
-}
-
-function FieldNumber({ label, value, onChange, isPct, integer, hint }: {
-  label: string; value?: number; onChange: (v: number) => void;
-  isPct?: boolean; integer?: boolean; hint?: string;
-}) {
-  const [txt, setTxt] = useState(value != null ? String(isPct ? +(value * 100).toFixed(4) : value) : "");
-  useEffect(() => { setTxt(value != null ? String(isPct ? +(value * 100).toFixed(4) : value) : ""); }, [value, isPct]);
-  function commit(s: string) {
-    const n = Number(s);
-    if (Number.isNaN(n)) return;
-    if (isPct) onChange(Math.max(0, Math.min(1, n / 100)));
-    else onChange(integer ? Math.round(n) : n);
-  }
-  return (
-    <label style={{ display: "block" }}>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, fontFamily: "var(--font-mono)", display: "flex", justifyContent: "space-between" }}>
-        <span>{label}</span>
-        {hint && <span style={{ color: "var(--text-faint)" }}>{hint}</span>}
-      </div>
-      <input type="number" step={integer ? 1 : 0.01} className="input-base"
-        value={txt} onChange={(e) => setTxt(e.target.value)}
-        onBlur={() => commit(txt)} onKeyDown={(e) => { if (e.key === "Enter") commit(txt); }} />
-    </label>
-  );
-}
+// (FieldInput / FieldSelect / FieldNumber removed with the manual-overrides drawer — the scalar inputs
+// are chat-editable + shown read-only in State & Assumptions; the indications table uses IndicationRow.)
 
 function MetricCard({ label, value, sub, gradient }: { label: string; value: React.ReactNode; sub?: string; gradient?: string }) {
   return (
@@ -504,10 +462,6 @@ export default function HomePage() {
   // Signature over the generator's REASONING INPUTS only (NOT indicationRelationship) so merging the
   // result back doesn't retrigger the fetch — one reason per real input change.
   const structureSigRef = useRef<string>("");
-  // Conversational rearchitecture: chat is the primary command surface; the editable manual panel is
-  // DEMOTED to this collapsed advanced drawer (default hidden). The same setters stay reachable (the
-  // parity path); a read-only State & Assumptions view keeps every engine-set value visible.
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const { pushToast, ToastHost } = useToast();
 
   // The downstream valuation chain (PTRS → Layer 2 → dev plan) is scheduled via
@@ -713,9 +667,8 @@ export default function HomePage() {
     setDevPlanStages((prev) => prev?.map((s) => s.id === id ? { ...s, cpp } : s) ?? null);
   }
 
-  function update<K extends keyof Valuation>(key: K, val: Valuation[K]) {
-    setV((cur) => ({ ...cur, [key]: val }));
-  }
+  // (the generic `update` field-setter was removed with the manual drawer — scalar edits now flow through
+  // onFieldUpdate's validation choke point below; the indications table uses updateIndication.)
 
   // THE VALIDATION CHOKE POINT. Every field update — deterministic parse OR LLM-suggested — flows
   // through here. Out-of-range values are rejected + surfaced, never set. Accepted values go through
@@ -1789,13 +1742,8 @@ export default function HomePage() {
           {/* State & Assumptions — read-only. Every engine-set value stays VISIBLE (chat is the edit
               path; hiding the inputs that drive the number would be the opposite of the discipline). */}
           <Card>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <SectionLabel>State &amp; Assumptions</SectionLabel>
-              <button className="btn btn-outline" onClick={() => setShowAdvanced((s) => !s)} style={{ fontSize: 11, padding: "3px 10px" }}>
-                {showAdvanced ? "Hide manual overrides" : "⚙ Manual overrides"}
-              </button>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--text-faint)", fontFamily: "var(--font-mono)", marginBottom: 12, lineHeight: 1.5 }}>
+            <SectionLabel>State &amp; Assumptions</SectionLabel>
+            <div style={{ fontSize: 11, color: "var(--text-faint)", fontFamily: "var(--font-mono)", marginBottom: 12, marginTop: 8, lineHeight: 1.5 }}>
               Adjust anything through chat above — e.g. &ldquo;set discount rate to 12%&rdquo;, &ldquo;launch 2028&rdquo;, &ldquo;peak sales $2B&rdquo;. These inputs drive the valuation; the engine computes every number.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "8px 16px" }}>
@@ -1835,49 +1783,11 @@ export default function HomePage() {
             )}
           </Card>
 
-          {/* Inputs — DEMOTED to a collapsed advanced drawer (parity path: the SAME setters as before,
-              just behind a toggle). Chat is the primary edit surface; this stays reachable + unchanged. */}
-          {showAdvanced && (
+          {/* Indications — promoted to its own always-visible EDITABLE card. Add / per-indication edit has
+              no chat path yet, so it must stay reachable (ruling b). The scalar inputs (asset / financial /
+              timeline) are chat-editable + shown read-only in State & Assumptions above; their manual drawer
+              was deleted. Same setters (addIndication / updateIndication / removeIndication) — a relocation. */}
           <Card>
-            <SectionLabel>Asset Details</SectionLabel>
-            <div className="form-grid-4" style={{ marginBottom: 16 }}>
-              <FieldInput label="Asset / Compound Name" value={v.asset || ""} onChange={(x) => update("asset", x)} />
-              <FieldInput label="Sponsor / Company" value={v.sponsor || ""} onChange={(x) => update("sponsor", x)} />
-              <FieldInput label="Indication" value={v.indication || ""} onChange={(x) => update("indication", x)} />
-              <FieldInput label="Mechanism of Action" value={v.mechanism || ""} onChange={(x) => update("mechanism", x)} />
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <FieldSelect label="Development Phase" value={v.phase || ""} onChange={(x) => update("phase", x as any)} options={["", "Preclinical", "Phase 1", "Phase 2", "Phase 3", "Filed", "Approved"]} />
-            </div>
-
-            <div style={{ borderTop: "1px solid var(--border)", margin: "16px 0" }} />
-            <SectionLabel>Financial Assumptions</SectionLabel>
-            <div className="form-grid-3" style={{ marginBottom: 16 }}>
-              <FieldNumber label="Peak Sales" value={v.peakSales} onChange={(x) => update("peakSales", x)} hint={peakProvenance ?? "USD"} />
-              <FieldNumber label="Discount Rate" value={v.discountRate} onChange={(x) => update("discountRate", x)} isPct hint="%" />
-              <FieldNumber label="Dev Cost PV" value={v.devCostPV} onChange={(x) => update("devCostPV", x)} hint={devPlan ? "USD · not used — dev-plan risk-adj cost drives eNPV" : "USD"} />
-              <FieldNumber label="COGS %" value={v.cogsPct} onChange={(x) => update("cogsPct", x)} isPct hint="%" />
-              <FieldNumber label="Tax Rate" value={v.taxRate} onChange={(x) => update("taxRate", x)} isPct hint="%" />
-              <FieldNumber label="Working Capital %" value={v.workingCapitalPct} onChange={(x) => update("workingCapitalPct", x)} isPct hint="%" />
-              {v.ownerType === "Licensor" && (
-                <FieldNumber label="Avg Royalty %" value={v.avgRoyalty} onChange={(x) => update("avgRoyalty", x)} isPct hint="%" />
-              )}
-            </div>
-
-            <div style={{ borderTop: "1px solid var(--border)", margin: "16px 0" }} />
-            <SectionLabel>Timeline</SectionLabel>
-            <div className="form-grid-3" style={{ marginBottom: 16 }}>
-              <FieldNumber label="Launch Year" value={v.launchYear} onChange={(x) => update("launchYear", x)} integer />
-              <FieldNumber label="LOE Year" value={v.loeYear} onChange={(x) => setV((cur) => ({ ...cur, loeYear: x, loeBasis: undefined }))} integer hint={
-                loeProvenance
-                ?? (v.loeBasis === "patent" ? "pinned: patent/exclusivity expiry"
-                  : v.loeBasis === "exclusivity" ? "estimate: launch + regulatory exclusivity term"
-                  : "user-entered")
-              } />
-              <FieldNumber label="Override P(approval)" value={v.ptrs} onChange={(x) => update("ptrs", x)} isPct hint="Leave blank = auto" />
-            </div>
-
-            <div style={{ borderTop: "1px solid var(--border)", margin: "16px 0" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <SectionLabel>Indications</SectionLabel>
               <button className="btn btn-outline" onClick={addIndication} style={{ fontSize: 11, padding: "3px 10px" }}>+ Add</button>
@@ -1957,7 +1867,6 @@ export default function HomePage() {
               </div>
             )}
           </Card>
-          )}
 
           {/* Clinical Trial Results */}
           {trialResults && (
