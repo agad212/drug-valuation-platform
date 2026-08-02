@@ -233,6 +233,57 @@ describe("self-check — Class-B B1 is a PROVISIONAL WARN, never a blocker", () 
   });
 });
 
+describe("self-check — B2 cost-basis divergence (the $3M-IPF gap A8 is blind to)", () => {
+  it("FIRES when Σ per-indication dev cost ≫ the governing risk-adjusted plan cost (pre-fix: 850M vs 27M)", () => {
+    const r = selfCheck({ view: { perIndicationDevCostSumM: 850, riskAdjCostM: 27 } });
+    const b2 = byId(r, "B2-cost-basis-divergence")!;
+    expect(b2.pass).toBe(false);
+    expect(b2.severity).toBe("WARN");
+    expect(b2.provisional).toBe(true);
+    expect(b2.explain).toMatch(/different \(likely nominal\) cost basis|diverges/);
+    expect(r.blockers).toBe(0); // WARN, never a blocker
+    expect(r.warns).toBeGreaterThanOrEqual(1);
+  });
+
+  it("SILENT when reconciled (post-fix: 27M vs 27M — the strip routes rows to the risk-adjusted share)", () => {
+    expect(byId(selfCheck({ view: { perIndicationDevCostSumM: 27, riskAdjCostM: 27 } }), "B2-cost-basis-divergence")!.pass).toBe(true);
+  });
+
+  it("absent when there's no per-indication dev-cost sum (single-indication / no split)", () => {
+    expect(byId(selfCheck({ view: { riskAdjCostM: 27 } }), "B2-cost-basis-divergence")).toBeUndefined();
+  });
+});
+
+describe("self-check — B3 per-indication rNPV sanity (revenue nearly eaten by cost)", () => {
+  it("FIRES on IPF-like row (rNPV 3M ≪ 20% of P·RevPV 552M), not on the healthy row", () => {
+    const r = selfCheck({ view: { multiIndication: {
+      headlineENPVM: 89, componentRnpvsM: [3, 86], componentGrossM: [552, 385], labels: ["IPF", "Onc"],
+    } } });
+    const b3 = byId(r, "B3-per-indication-rnpv-sanity")!;
+    expect(b3.pass).toBe(false);
+    expect(b3.severity).toBe("WARN");
+    expect(b3.provisional).toBe(true);
+    expect(b3.explain).toMatch(/IPF/);
+    expect(b3.explain).not.toMatch(/Onc/); // 86 > 20% of 385 → healthy, not flagged
+    expect(r.blockers).toBe(0);
+  });
+
+  it("SILENT post-fix (rNPV ≈ risk-adjusted revenue: 538/372 vs gross 552/385)", () => {
+    const r = selfCheck({ view: { multiIndication: {
+      headlineENPVM: 910, componentRnpvsM: [538, 372], componentGrossM: [552, 385], labels: ["IPF", "Onc"],
+    } } });
+    expect(byId(r, "B3-per-indication-rnpv-sanity")!.pass).toBe(true);
+  });
+
+  it("no false positive on a CONDITIONAL indication (its P-weight is already in componentGrossM)", () => {
+    // conditional dep: gross already P-weighted (e.g. 0.3 × 100 = 30), rnpv 24 → 24 > 20% of 30 → healthy
+    const r = selfCheck({ view: { multiIndication: {
+      headlineENPVM: 214, componentRnpvsM: [190, 24], componentGrossM: [220, 30], labels: ["Lead", "Dep"],
+    } } });
+    expect(byId(r, "B3-per-indication-rnpv-sanity")!.pass).toBe(true);
+  });
+});
+
 describe("self-check — flag aggregation collects the engine's existing resolve-or-flag flags", () => {
   it("#14 unsourced / out-of-band niche provenance surface as flags", () => {
     const r = selfCheck({

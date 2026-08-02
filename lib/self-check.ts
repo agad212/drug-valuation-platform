@@ -75,7 +75,13 @@ export type ValuationView = {
   // contributions ($M) — each already at its own P, own launch, and any conditional P-weight (i.e.
   // the resolved-structure contributions, NOT standalone rNPVs). The headline must equal their sum.
   // Populated only when there is >1 indication; a single-indication surface leaves it undefined.
-  multiIndication?: { headlineENPVM: number; componentRnpvsM: number[]; labels?: string[] };
+  // componentGrossM[i] = the (conditional-weighted) P·RevPV of indication i ($M) — the risk-adjusted
+  // revenue BEFORE its cost — used by B3 to flag an rNPV nearly entirely eaten by cost.
+  multiIndication?: { headlineENPVM: number; componentRnpvsM: number[]; labels?: string[]; componentGrossM?: number[] };
+  // B2: Σ of the per-indication dev costs ($M). Compared to riskAdjCostM (the governing dev-plan
+  // risk-adjusted cost) to catch a per-indication cost BASIS mismatch (nominal vs risk-adjusted) — the
+  // exact defect A8's sum identity is structurally blind to.
+  perIndicationDevCostSumM?: number;
 };
 
 // A7 reads the whole option set, comparing each declared-change option's governed tuple to baseline.
@@ -105,6 +111,16 @@ const eroiTol = (x: number) => Math.max(0.05, 0.02 * Math.abs(x));
 // HAND-SET (~50×, human-anchored to taladegib's ~65×); PRE-CALIBRATION placeholder — to be
 // replaced by an observed eROI distribution once the Tier-2 calibration record exists. WARN only.
 export const EROI_CEILING_PROVISIONAL = 50;
+
+// ── B2 / B3 provisional thresholds (hand-set, PRE-CALIBRATION — same discipline as B1). ──
+// B2: Σ per-indication dev cost vs the governing risk-adjusted plan cost. A large ratio means the
+// per-indication rows are on a different (usually NOMINAL) cost basis than the dev plan — the $3M-IPF
+// class of bug (nominal $850M vs risk-adj $27M = 31×). WARN, never blocks (a small mismatch is benign).
+export const COST_BASIS_DIVERGENCE_FACTOR = 2;
+// B3: an indication whose rNPV is below this fraction of its (conditional-weighted) P·RevPV has had its
+// revenue nearly entirely eaten by cost — sometimes legitimate (narrow LOE window), often a cost-basis
+// error. WARN.
+export const PER_ROW_RNPV_FRACTION_FLOOR = 0.2;
 
 function finite(x: unknown): x is number {
   return typeof x === "number" && Number.isFinite(x);
@@ -378,6 +394,60 @@ function checkEROICeiling(v: ValuationView): Check | null {
   };
 }
 
+// B2 — cost-basis divergence. When a dev plan governs, the per-indication dev costs (Σ) must be on the
+// SAME risk-adjusted basis as the plan. If Σ per-indication dev cost ≫ the governing risk-adjusted cost,
+// the per-indication rows are subtracting a nominal (or otherwise mis-based) cost and every per-indication
+// rNPV is distorted — the exact bug A8's sum identity cannot see (the rows still sum to the headline).
+// WARN only, provisional threshold; never blocks, never adjusts.
+function checkCostBasisDivergence(v: ValuationView): Check | null {
+  const sum = v.perIndicationDevCostSumM;
+  const gov = v.riskAdjCostM;
+  if (!finite(sum) || !finite(gov) || gov <= 0.1) return null;
+  const ratio = sum / gov;
+  const over = ratio > COST_BASIS_DIVERGENCE_FACTOR;
+  return {
+    id: "B2-cost-basis-divergence",
+    class: "B",
+    severity: "WARN",
+    provisional: true,
+    pass: !over,
+    read: { perIndicationDevCostSumM: Number(sum.toFixed(1)), governingRiskAdjCostM: Number(gov.toFixed(1)), ratio: Number(ratio.toFixed(2)) },
+    explain: over
+      ? `Σ per-indication dev cost ${sum.toFixed(0)}M diverges ${ratio.toFixed(1)}× from the governing risk-adjusted plan cost ${gov.toFixed(0)}M — the per-indication rows are on a different (likely nominal) cost basis than the dev plan; every per-indication rNPV is distorted. Threshold ${COST_BASIS_DIVERGENCE_FACTOR}× hand-set (provisional).`
+      : `per-indication dev-cost basis (${sum.toFixed(0)}M) reconciles with the risk-adjusted plan (${gov.toFixed(0)}M)`,
+  };
+}
+
+// B3 — per-indication rNPV sanity. An indication whose rNPV is a tiny fraction of its (conditional-
+// weighted) risk-adjusted revenue has had that revenue nearly entirely eaten by cost. Sometimes
+// legitimate (a narrow LOE window + heavy late-stage cost), so WARN not BLOCKER; often the cost-basis
+// bug above surfacing per-row. Reads the resolved-structure components, so a conditional indication's
+// intentional P-weight is already in componentGrossM (no false positive from conditioning).
+function checkPerIndicationRnpvSanity(v: ValuationView): Check | null {
+  const mi = v.multiIndication;
+  const gross = mi?.componentGrossM;
+  if (!mi || !gross || gross.length === 0 || gross.length !== mi.componentRnpvsM.length) return null;
+  const flagged: string[] = [];
+  for (let i = 0; i < gross.length; i++) {
+    const g = gross[i], r = mi.componentRnpvsM[i];
+    if (finite(g) && g > 0 && finite(r) && r < PER_ROW_RNPV_FRACTION_FLOOR * g) {
+      flagged.push(`${mi.labels?.[i] ?? `#${i}`} (rNPV ${r.toFixed(0)}M ≪ ${Math.round(PER_ROW_RNPV_FRACTION_FLOOR * 100)}% of P·RevPV ${g.toFixed(0)}M)`);
+    }
+  }
+  const pass = flagged.length === 0;
+  return {
+    id: "B3-per-indication-rnpv-sanity",
+    class: "B",
+    severity: "WARN",
+    provisional: true,
+    pass,
+    read: { flaggedRows: flagged.length, checked: gross.length },
+    explain: pass
+      ? "every indication's rNPV is a plausible fraction of its risk-adjusted revenue"
+      : `indication(s) with rNPV nearly eaten by cost: ${flagged.join("; ")} — sometimes legitimate (narrow LOE window), often a cost-basis error. Threshold ${Math.round(PER_ROW_RNPV_FRACTION_FLOOR * 100)}% hand-set (provisional).`,
+  };
+}
+
 // ── flag aggregation — collect the engine's existing resolve-or-flag flags into one place.
 //    READ-ONLY: every value here is already computed by the engine; nothing is recomputed.
 function aggregateFlags(f: FlagInput): Flag[] {
@@ -411,7 +481,7 @@ function aggregateFlags(f: FlagInput): Flag[] {
 export function selfCheck(input: { view?: ValuationView; options?: OptionView[]; flags?: FlagInput }): CheckReport {
   const checks: Check[] = [];
   if (input.view) {
-    for (const c of [checkProbRange, checkProbMonotonic, checkENPVIdentity, checkTimeline, checkRevenueWindow, checkNoBadValues, checkMultiIndicationAggregation, checkEROICeiling]) {
+    for (const c of [checkProbRange, checkProbMonotonic, checkENPVIdentity, checkTimeline, checkRevenueWindow, checkNoBadValues, checkMultiIndicationAggregation, checkEROICeiling, checkCostBasisDivergence, checkPerIndicationRnpvSanity]) {
       const r = c(input.view);
       if (r) checks.push(r);
     }

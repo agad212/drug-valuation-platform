@@ -102,6 +102,36 @@ describe("cashflow — SEQUENTIAL: a later indication launches no earlier than i
   });
 });
 
+describe("cashflow — per-indication dev-cost BASIS: stripping ind.devCostPV routes to the risk-adjusted share (the $3M-IPF fix)", () => {
+  // When a dev plan governs, index.tsx passes chartValuation.devCostPV = the risk-adjusted total AND
+  // strips per-indication devCostPV, so cashflow's `ind.devCostPV ?? globalDevCostShare` falls to the
+  // SHARE. computeOutputs' math is unchanged — this proves the two INPUT paths diverge and the stripped
+  // one reconciles to the plan.
+  const riskAdj = 27_000_000; // governing risk-adjusted plan cost
+  const inds = [
+    { id: "ipf", name: "IPF", peakSales: 1_500_000_000, ptrs: 0.34, launchYear: 2032, loeYear: 2037, devCostPV: 550_000_000 },
+    { id: "onc", name: "Onc", peakSales: 450_000_000, ptrs: 0.34, launchYear: 2028, loeYear: 2037, devCostPV: 300_000_000 },
+  ];
+
+  it("WITH nominal per-indication devCostPV (the bug): rows subtract the nominal cost; Σ = 850M ≠ 27M plan", () => {
+    const out = computeOutputs({ ...base, devCostPV: riskAdj, indications: inds });
+    expect(out.indicationOutputs.find((o) => o.id === "ipf")!.devCostPV).toBe(550_000_000); // nominal wins via ??
+    expect(out.devCostPV).toBe(850_000_000); // 31× the 27M plan → the cost-basis divergence B2 catches
+  });
+
+  it("STRIPPED per-indication devCostPV (the fix): rows use the risk-adjusted share; Σ reconciles to 27M", () => {
+    const stripped = inds.map((i) => ({ ...i, devCostPV: undefined }));
+    const out = computeOutputs({ ...base, devCostPV: riskAdj, indications: stripped });
+    const share = riskAdj / 2; // globalDevCostShare
+    const ipf = out.indicationOutputs.find((o) => o.id === "ipf")!;
+    expect(ipf.devCostPV).toBe(share);          // 13.5M, not 550M
+    expect(out.devCostPV).toBe(riskAdj);        // Σ shares = 27M, reconciles with the plan
+    // IPF rNPV jumps from ~$0 (nominal-crushed) to its risk-adjusted value (own P × RevPV − share)
+    expect(ipf.rnpv).toBe(Math.round(0.34 * ipf.revenuePV - share));
+    expect(ipf.rnpv).toBeGreaterThan(100_000_000); // no longer eaten by the nominal cost
+  });
+});
+
 describe("cashflow — turning the structure generator ON is a NO-OP until a non-independent relationship (all-independent == today)", () => {
   const inds = [
     { id: "lead", name: "Lead", peakSales: 800_000_000, ptrs: 0.3, launchYear: 2030 },

@@ -527,7 +527,20 @@ export default function HomePage() {
   const chartValuation: Valuation = useMemo(() => ({
     ...display,
     ptrs: governedPtrs,
-    ...(devPlan ? { devCostPV: Math.round(devPlan.totalRiskAdjCostM * 1e6) } : {}),
+    ...(devPlan ? {
+      devCostPV: Math.round(devPlan.totalRiskAdjCostM * 1e6),
+      // When a dev plan governs, per-indication dev cost must be a SHARE of the RISK-ADJUSTED plan
+      // (globalDevCostShare = risk-adj / n, via cashflow's `ind.devCostPV ?? globalDevCostShare`), NOT
+      // the auto-value NOMINAL ind.devCostPV. Stripping devCostPV here routes each indication to the
+      // risk-adjusted share, so rows-Σ = Combined = headline eNPV all reconcile on the risk-adjusted
+      // basis (fixes the $3M-IPF cost-basis bug: nominal $550M vs risk-adj share). Manual per-indication
+      // devCostPV is still honored when NO dev plan governs (the `??` fires in that path — unchanged).
+      // DEFERRED refinement: TRUE per-indication dev plans (each indication its own staged plan); the
+      // even split is the first fix — it corrects the cost BASIS (the 31× bug), never tuned to a target.
+      ...(display.indications && display.indications.length
+        ? { indications: display.indications.map((i) => ({ ...i, devCostPV: undefined })) }
+        : {}),
+    } : {}),
   }), [display, governedPtrs, devPlan]);
 
   // Governed outputs for every rNPV/eNPV DISPLAY (table total, CSV, headline sign).
@@ -556,7 +569,11 @@ export default function HomePage() {
           headlineENPVM: governedOut.rnpv / 1e6,
           componentRnpvsM: governedOut.indicationOutputs.map((o) => o.rnpv / 1e6),
           labels: governedOut.indicationOutputs.map((o) => o.name),
+          // (conditional-weighted) P·RevPV per indication — the risk-adjusted revenue before its cost (B3).
+          componentGrossM: governedOut.indicationOutputs.map((o) => ((o.conditionalPWeight ?? 1) * o.ptrs * o.revenuePV) / 1e6),
         };
+        // Σ per-indication dev cost vs the governing risk-adjusted plan cost (B2 cost-basis divergence).
+        view.perIndicationDevCostSumM = governedOut.devCostPV / 1e6;
       }
       return selfCheck({ view });
     },
@@ -1711,7 +1728,14 @@ export default function HomePage() {
             />
             <MetricCard
               label="eROI"
-              value={devPlan ? (devPlan.eROI != null ? devPlan.eROI.toFixed(2) + "x" : "—") : (out.roi != null ? out.roi.toFixed(1) + "x" : "—")}
+              value={
+                // Multi-indication: source the STRUCTURAL Σ (governedOut.rnpv) over the risk-adjusted
+                // cost, mirroring the eNPV card — so eNPV and eROI can't diverge if a non-lead indication
+                // carries a different P. Single-indication: devPlan.eROI (same basis as its eNPV).
+                isMultiIndication && devPlan
+                  ? (devPlan.totalRiskAdjCostM > 0 ? (governedOut.rnpv / (devPlan.totalRiskAdjCostM * 1e6)).toFixed(2) + "x" : "—")
+                  : devPlan ? (devPlan.eROI != null ? devPlan.eROI.toFixed(2) + "x" : "—") : (out.roi != null ? out.roi.toFixed(1) + "x" : "—")
+              }
               gradient="linear-gradient(135deg, #b45309, #eab308)"
               sub={devPlan ? "eNPV / Expected R&D" : "rNPV / Dev Cost"}
             />
