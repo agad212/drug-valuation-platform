@@ -24,6 +24,7 @@ import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, co
 import { classGraveyardProbability } from "../lib/class-risk";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
+import { PERSIST_SCHEMA_VERSION, classifyRestore, assertFaithful, type GovernedTarget } from "../lib/persistence";
 
 const ValuationCharts = dynamic(() => import("../components/ValuationCharts"), { ssr: false });
 
@@ -71,6 +72,26 @@ function loadAll(): Record<string, Valuation> {
 function saveAll(map: Record<string, Valuation>) {
   if (typeof window === "undefined") return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+}
+
+// ─── Auto-restore on reload (Phase B) ────────────────────────────────────────
+// A single "last active" snapshot so a reload restores the valuation you were looking at. It carries the
+// LLM-produced pipeline STATE (`_compute`) plus the governed headline (`_governed`) so restore recomputes
+// the SAME numbers through the pure engine — no /api/dev-plan, no /api/effect-prior, no pipeline re-run,
+// no 504. See lib/persistence.ts for the version-guard + faithfulness invariant this feeds.
+const ACTIVE_KEY = "drugvalue/lastActive";
+function loadActive(): Valuation | null {
+  if (typeof window === "undefined") return null;
+  try { const raw = localStorage.getItem(ACTIVE_KEY); return raw ? JSON.parse(raw) : null; }
+  catch { return null; }
+}
+function saveActive(rec: Valuation) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(ACTIVE_KEY, JSON.stringify(rec)); } catch { /* quota / serialization — non-fatal */ }
+}
+function clearActive() {
+  if (typeof window === "undefined") return;
+  try { localStorage.removeItem(ACTIVE_KEY); } catch { /* non-fatal */ }
 }
 function cryptoId() {
   if (typeof crypto !== "undefined" && "getRandomValues" in crypto) {
@@ -487,6 +508,20 @@ export default function HomePage() {
   // Signature over the generator's REASONING INPUTS only (NOT indicationRelationship) so merging the
   // result back doesn't retrigger the fetch — one reason per real input change.
   const structureSigRef = useRef<string>("");
+
+  // ── Auto-restore plumbing (Phase B) ──────────────────────────────────────
+  // restoreVerify: while non-null we've just rehydrated a FULL (computed) restore and the pure memos are
+  // recomputing; the verify effect asserts the recomputed headline equals this stored target, then clears
+  // it (fallback + flag on mismatch). restoreFaithError: surfaced when a restore couldn't be reproduced
+  // faithfully (we drop to inputs-only rather than show a stale/mismatched number as current).
+  const [restoreVerify, setRestoreVerify] = useState<GovernedTarget | null>(null);
+  const [restoreFaithError, setRestoreFaithError] = useState<string | null>(null);
+  // One-shot suppressors so a restore is SILENT (no network): the structure-generator fetch and the
+  // timeline→launch resync each fire once when the restored state lands; these skip that single fire
+  // (relationships are already on v.indications; launchYear is already the saved timeline year).
+  const skipStructureFetchRef = useRef(false);
+  const skipLaunchSyncRef = useRef(false);
+
   const { pushToast, ToastHost } = useToast();
 
   // The downstream valuation chain (PTRS → Layer 2 → dev plan) is scheduled via
@@ -605,6 +640,154 @@ export default function HomePage() {
     [devPlan, v.launchYear, v.loeYear, isMultiIndication, governedOut],
   );
 
+  // ─── Persistence: auto-restore on reload (Phase B) ────────────────────────
+  // These are STORAGE/RESTORE plumbing only. Nothing here touches the engine, the effect-prior math, the
+  // reg scale, aggregation, A8, the interpreters, or the memo graph. A restore rehydrates the LLM-produced
+  // STATE (`_compute`) and lets the pure memos above (out → display → base → devPlan → chartValuation →
+  // governedOut) recompute the headline — same state, same frozen engine, byte-identical numbers, and NO
+  // pipeline call (no /api/dev-plan, no /api/effect-prior, no 504).
+
+  function resetComputeState() {
+    setDevPlanStages(null);
+    setDevPlanRegContext("standard");
+    setDevPlanReasoning(null);
+    setEffectPrior(null);
+    setValuationBrief(null);
+    setBriefSummary(null);
+    setBriefStatus("idle");
+    setPtrsResult(null);
+    setLayer2Result(null);
+    setExpectationAudit(null);
+    setStructureFlags([]);
+  }
+
+  // The LLM-produced pipeline state the devPlan/base memos consume — the ONLY thing we need to persist to
+  // reproduce the computed headline through the pure engine.
+  function buildComputeSnapshot() {
+    return {
+      devPlanStages, devPlanRegContext, devPlanReasoning,
+      effectPrior, valuationBrief, briefSummary, briefStatus,
+      ptrsResult, layer2Result, expectationAudit, structureFlags,
+    };
+  }
+
+  // The governed headline exactly as the app displays it (multi-indication: structural Σ; single:
+  // devPlan.eNPVM; pre-dev-plan: out.rnpv). Stored so restore can ASSERT the recompute reproduced it.
+  function buildGovernedTarget(): GovernedTarget {
+    const headlineRnpvM = (isMultiIndication ? governedOut.rnpv : (devPlan ? devPlan.eNPVM * 1e6 : out.rnpv)) / 1e6;
+    return { headlineRnpvM, pApproval: devPlan?.pApproval ?? null };
+  }
+
+  // Rehydrate a stored record. Shared by the mount auto-restore and onLoad. The version-guard decides
+  // FULL (rehydrate compute state + arm the faithfulness assert) vs inputs-only vs version-mismatch.
+  function applyRestore(rec: Valuation) {
+    const kind = classifyRestore(rec as any);
+    const c = (rec as any)._compute;
+    // Suppress the structure-generator fetch when rehydrating a >1-indication asset — its relationships
+    // are already on v.indications, so no /api/indication-structure call is needed to reproduce them.
+    if ((rec.indications?.length ?? 0) > 1) skipStructureFetchRef.current = true;
+
+    if (kind === "full") {
+      setDevPlanStages(c.devPlanStages ?? null);
+      setDevPlanRegContext(c.devPlanRegContext ?? "standard");
+      setDevPlanReasoning(c.devPlanReasoning ?? null);
+      setEffectPrior(c.effectPrior ?? null);
+      setValuationBrief(c.valuationBrief ?? null);
+      setBriefSummary(c.briefSummary ?? null);
+      setBriefStatus(c.briefStatus ?? "complete");
+      setPtrsResult(c.ptrsResult ?? null);
+      setLayer2Result(c.layer2Result ?? null);
+      setExpectationAudit(c.expectationAudit ?? null);
+      setStructureFlags(Array.isArray(c.structureFlags) ? c.structureFlags : []);
+      // devPlan will recompute → the timeline→launch resync fires once; skip it (launchYear is already the
+      // saved timeline year) so the restore is silent.
+      skipLaunchSyncRef.current = true;
+      // Arm the faithfulness assert against the stored governed headline.
+      setRestoreFaithError(null);
+      setRestoreVerify((rec as any)._governed as GovernedTarget);
+    } else {
+      // inputs-only / version-mismatch → restore inputs only; never render another schema's compute state.
+      resetComputeState();
+      setRestoreVerify(null);
+      setRestoreFaithError(null);
+    }
+
+    // Panels are version-independent display artifacts; restore for a current/legacy record but NOT for a
+    // version-mismatch (its panel shapes may differ).
+    if (kind !== "version-mismatch") {
+      if ((rec as any)._patentResult) setPatentResult((rec as any)._patentResult);
+      if ((rec as any)._trialResults) {
+        setTrialResults((rec as any)._trialResults);
+        setTrialSummary((rec as any)._trialSummary || "");
+        setTrialTotal((rec as any)._trialTotal || 0);
+      }
+      if ((rec as any)._revenueAnalysis) setRevenueAnalysis((rec as any)._revenueAnalysis);
+    }
+
+    // Inputs last. Strip the heavy compute blob so it never rides along on `v` (→ display → share payload).
+    const { _compute, _governed, schemaVersion, ...vInputs } = rec as any;
+    setV(vInputs as Valuation);
+  }
+
+  // On mount: rehydrate the last active valuation (once). All setState here batch into one render; the
+  // memos recompute from the restored state and the verify effect (below) asserts faithfulness.
+  const didRestoreRef = useRef(false);
+  useEffect(() => {
+    if (didRestoreRef.current) return;
+    didRestoreRef.current = true;
+    const active = loadActive();
+    if (active) applyRestore(active);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Faithfulness assert: after a FULL restore the pure memos have recomputed the headline; it MUST equal
+  // the headline stored at save time. Faithful → the restore is proven byte-identical. Not faithful → the
+  // persisted state is corrupt/stale for this build: drop to inputs-only (never show a mismatched number
+  // as current) + surface a flag. This makes "restore is byte-identical" a CHECKED invariant.
+  useEffect(() => {
+    if (!restoreVerify) return;
+    const recomputed: GovernedTarget = {
+      headlineRnpvM: (isMultiIndication ? governedOut.rnpv : (devPlan ? devPlan.eNPVM * 1e6 : out.rnpv)) / 1e6,
+      pApproval: devPlan?.pApproval ?? null,
+    };
+    const faithful = assertFaithful(recomputed, restoreVerify);
+    setRestoreVerify(null);
+    if (!faithful) {
+      resetComputeState();
+      const p = (x: number | null) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+      setRestoreFaithError(
+        `Saved result couldn't be restored faithfully (recomputed ≈$${Math.round(recomputed.headlineRnpvM)}M / P ${p(recomputed.pApproval)} vs saved ≈$${Math.round(restoreVerify.headlineRnpvM)}M / P ${p(restoreVerify.pApproval)}). Showing inputs only — re-run to recompute.`,
+      );
+      pushToast("Saved result couldn't be restored faithfully — showing inputs only.", "error", 9000);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreVerify, devPlan, governedOut, isMultiIndication, out]);
+
+  // Auto-save the "last active" snapshot (debounced) so a reload restores where you were. Carries the
+  // pipeline STATE + the governed headline → restore recomputes the SAME numbers via the pure engine.
+  // Skipped mid-verify (don't persist a to-be-rejected state) and before anything is entered.
+  useEffect(() => {
+    if (restoreVerify) return;
+    if (!v.asset) return;
+    const t = setTimeout(() => {
+      const rec: Valuation = {
+        ...v,
+        updatedAt: new Date().toISOString(),
+        schemaVersion: PERSIST_SCHEMA_VERSION,
+        _patentResult: patentResult ?? undefined,
+        _trialResults: trialResults ?? undefined,
+        _trialSummary: trialSummary || undefined,
+        _trialTotal: trialTotal || undefined,
+        _revenueAnalysis: revenueAnalysis ?? undefined,
+        _compute: buildComputeSnapshot(),
+        _governed: devPlan ? buildGovernedTarget() : null,
+      } as any;
+      saveActive(rec);
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v, devPlan, effectPrior, valuationBrief, briefSummary, briefStatus, ptrsResult, layer2Result, expectationAudit, structureFlags, patentResult, trialResults, trialSummary, trialTotal, revenueAnalysis, restoreVerify]);
+
   // ── Structure generator: on a >1-indication asset, ask /api/indication-structure to reason the
   //    relationships (independent / conditional-on / sequential-after) and MERGE them onto the
   //    indications, where the existing computeOutputs aggregation (8eb33cc) consumes them. The LLM
@@ -619,6 +802,9 @@ export default function HomePage() {
       JSON.stringify(inds.map((i) => ({ id: i.id, name: i.name, phase: i.phase, launchYear: i.launchYear, nctId: i.nctId }))) +
       `|${v.asset ?? ""}|${v.mechanism ?? ""}|${(briefSummary ?? trialSummary ?? "").slice(0, 240)}`;
     if (sig === structureSigRef.current) return;
+    // Silent restore: a rehydrated >1-indication asset already carries its relationships on v.indications,
+    // so record the signature and skip this one fetch (no /api/indication-structure network on restore).
+    if (skipStructureFetchRef.current) { skipStructureFetchRef.current = false; structureSigRef.current = sig; return; }
     let cancelled = false;
     const t = setTimeout(async () => {
       structureSigRef.current = sig;
@@ -667,6 +853,9 @@ export default function HomePage() {
   // from approval becomes the binding constraint).
   useEffect(() => {
     if (!devPlan) return;
+    // Silent restore: devPlan recomputes from rehydrated state and this resync fires once; skip it — the
+    // restored launchYear is already the saved timeline year (no resync, no toast).
+    if (skipLaunchSyncRef.current) { skipLaunchSyncRef.current = false; return; }
     const implied = devPlan.impliedLaunchYear;
     const current = v.indications?.[0]?.launchYear ?? v.launchYear;
     if (current === implied) return;
@@ -1421,7 +1610,7 @@ export default function HomePage() {
   async function onSave(): Promise<Valuation> {
     const id = v.id || cryptoId();
     const slug = v.slug || `${(v.asset || "valuation").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${randomSlug()}`;
-    // Persist computed panels alongside the valuation so they restore on load
+    // Displayed/returned record: inputs + panels (existing behavior; the heavy compute blob stays OFF `v`).
     const next = {
       ...v, id, slug, updatedAt: new Date().toISOString(),
       _patentResult: patentResult ?? undefined,
@@ -1430,31 +1619,50 @@ export default function HomePage() {
       _trialTotal: trialTotal || undefined,
       _revenueAnalysis: revenueAnalysis ?? undefined,
     };
-    const all = { ...saved, [id]: next };
+    // STORED record additionally carries the pipeline STATE + governed headline so Load restores the
+    // COMPUTED result (recomputed via the pure engine — no pipeline re-run), version-guarded + assertable.
+    const record = {
+      ...next,
+      schemaVersion: PERSIST_SCHEMA_VERSION,
+      _compute: buildComputeSnapshot(),
+      _governed: devPlan ? buildGovernedTarget() : null,
+    };
+    const all = { ...saved, [id]: record };
     setSaved(all); saveAll(all); setV(next);
     pushToast("Saved locally.", "success");
-    await fetch("/api/valuations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) }).catch(() => {});
+    await fetch("/api/valuations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(record) }).catch(() => {});
     return next;
   }
 
   function onLoad(id: string) {
     const rec = saved[id];
     if (!rec) return;
-    setV(rec);
-    // Restore panels if they were saved
-    if (rec._patentResult) setPatentResult(rec._patentResult);
-    if (rec._trialResults) { setTrialResults(rec._trialResults); setTrialSummary(rec._trialSummary || ""); setTrialTotal(rec._trialTotal || 0); }
-    if (rec._revenueAnalysis) setRevenueAnalysis(rec._revenueAnalysis);
+    // applyRestore rehydrates inputs + (version-guarded) the compute state, then the pure memos recompute
+    // the headline and the faithfulness assert verifies it — same path as auto-restore on reload.
+    applyRestore(rec);
     setShowSaved(false);
     pushToast(`Loaded: ${rec.asset || rec.name || id}`, "success");
   }
 
   async function onShare() {
-    const saved = v.slug ? { ...v } : await onSave();
-    const slug = saved.slug!;
+    const savedRec = v.slug ? { ...v } : await onSave();
+    const slug = savedRec.slug!;
+    // Phase C: the share surface must carry the GOVERNED headline the app shows — NOT out.* (the legacy
+    // uncorrected scalar that still carried the pre-84d8b5c cost-basis asymmetry, live on shares until now).
+    const govRnpv = isMultiIndication ? governedOut.rnpv : (devPlan ? devPlan.eNPVM * 1e6 : out.rnpv);
+    const govCostM = devPlan?.totalRiskAdjCostM ?? governedOut.devCostPV / 1e6;
+    const sharePayload = {
+      ...display,
+      slug,
+      rnpv: govRnpv,
+      ptrs: governedPtrs,
+      revenuePV: governedOut.revenuePV,
+      devCostPV: governedOut.devCostPV,
+      roi: govCostM > 0 ? govRnpv / (govCostM * 1e6) : display.roi,
+    };
     await fetch(`/api/valuation/share/${encodeURIComponent(slug)}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...display, slug }),
+      body: JSON.stringify(sharePayload),
     }).catch(() => {});
     const url = `${window.location.origin}/share/${slug}`;
     await navigator.clipboard.writeText(url).catch(() => {});
@@ -1463,6 +1671,13 @@ export default function HomePage() {
 
   function onNew() {
     setV({ ...DEFAULT_VALUATION });
+    resetComputeState();
+    setPatentResult(null);
+    setTrialResults(null); setTrialSummary(""); setTrialTotal(0);
+    setRevenueAnalysis(null);
+    setRestoreVerify(null);
+    setRestoreFaithError(null);
+    clearActive();
     pushToast("New valuation started.", "success");
   }
 
@@ -1682,6 +1897,17 @@ export default function HomePage() {
 
       <main style={{ maxWidth: 1300, margin: "0 auto", padding: "0 24px 24px" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+          {/* Restore-faithfulness flag — a saved result was rehydrated but the pure-engine recompute did
+              NOT reproduce the stored headline (corrupt/stale snapshot). We dropped to inputs-only rather
+              than show a mismatched number as current; the user can re-run to recompute. */}
+          {restoreFaithError && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 10, background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.5)", fontSize: 12.5, fontWeight: 600, color: "var(--text)" }}>
+              <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#ef4444", flexShrink: 0, boxShadow: "0 0 8px #ef4444" }} />
+              <span>{restoreFaithError}</span>
+              <button className="btn" onClick={() => setRestoreFaithError(null)} style={{ marginLeft: "auto", background: "transparent", color: "var(--text-faint)", fontSize: 14, fontWeight: 700, padding: "2px 8px", borderRadius: 6 }} aria-label="Dismiss">×</button>
+            </div>
+          )}
 
           {/* Strategic-assessment governance badge — makes a bypassed governing
               layer catchable at a glance (never invisible again). */}
