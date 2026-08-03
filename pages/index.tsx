@@ -129,6 +129,31 @@ function Card({ children, style }: { children: React.ReactNode; style?: React.CS
   );
 }
 
+// Collapsible deep-section card (progressive disclosure). Collapsed by default; expand-on-click. Session
+// state only (React useState — NO localStorage/sessionStorage). Purely presentational: it renders the
+// SAME children, just gated behind a header toggle — no data/compute/memo change. The header carries the
+// title (+ optional subtitle) and an optional `right` slot for the section's own action buttons
+// (Refresh / ×). Children unmount while collapsed; their data lives in parent state, so re-expand is free.
+function CollapsibleSection({ title, subtitle, defaultOpen = false, right, children }: {
+  title: React.ReactNode; subtitle?: React.ReactNode; defaultOpen?: boolean; right?: React.ReactNode; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
+          style={{ flex: 1, minWidth: 0, background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+          <span aria-hidden style={{ fontSize: 11, color: "var(--text-faint)", display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }}>▶</span>
+          <span style={{ fontFamily: "var(--font-display)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-faint)" }}>{title}</span>
+          {subtitle && <span style={{ fontSize: 11, color: "var(--text-faint)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{subtitle}</span>}
+        </button>
+        {right && <div style={{ flexShrink: 0 }}>{right}</div>}
+      </div>
+      {open && <div style={{ marginTop: 16 }}>{children}</div>}
+    </Card>
+  );
+}
+
 // ─── P&L Table ───────────────────────────────────────────────────────────────
 function PnLTable({ v, out, pApproval, devPlan, onClose }: { v: Valuation; out: ReturnType<typeof computeOutputs>; pApproval?: number; devPlan?: DevPlanResult | null; onClose: () => void }) {
   const [distPct, setDistPct] = useState(v.distributionPct ?? 0.05);
@@ -1894,11 +1919,10 @@ export default function HomePage() {
 
           {/* Clinical Trial Results */}
           {trialResults && (
-            <Card>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-                <SectionLabel>Clinical Trials — {v.asset || (v as any).name}</SectionLabel>
-                <button onClick={() => setTrialResults(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
-              </div>
+            <CollapsibleSection
+              title={`Clinical Trials — ${v.asset || (v as any).name}`}
+              right={<button onClick={() => setTrialResults(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>×</button>}
+            >
               <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: trialSummary ? 10 : 14 }}>
                 Showing {trialResults.length} AI-selected trials from {trialTotal} experimental-arm matches · Applying adds an indication row with launch year pre-filled.
               </div>
@@ -1982,14 +2006,14 @@ export default function HomePage() {
                   );
                 })}
               </div>
-            </Card>
+            </CollapsibleSection>
           )}
 
           {/* LOE + Patent results */}
           {patentResult && (
-            <Card>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-                <SectionLabel>LOE Analysis</SectionLabel>
+            <CollapsibleSection
+              title="LOE Analysis"
+              right={
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <button className="btn btn-ghost" onClick={onLookupLOE} disabled={patentLoading || autoLoading}
                     style={{ fontSize: 11, padding: "3px 10px" }}>
@@ -1997,8 +2021,8 @@ export default function HomePage() {
                   </button>
                   <button onClick={() => setPatentResult(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
                 </div>
-              </div>
-
+              }
+            >
               {/* Main LOE banner — green if OB confirmed, blue if patent estimate */}
               {patentResult.loeYear ? (
                 <div style={{
@@ -2159,7 +2183,7 @@ export default function HomePage() {
                   </ul>
                 </div>
               )}
-            </Card>
+            </CollapsibleSection>
           )}
 
           {/* PTRS Mechanism Breakdown — hidden once Effect Prior chain loads (chain subsumes it) */}
@@ -2456,21 +2480,24 @@ export default function HomePage() {
             </Card>
           )}
 
-          {/* Strategic Assessment — Lead Reasoner output, shown FIRST */}
+          {/* Strategic Assessment — collapsed by default (progressive disclosure); the governance badge
+              above always shows its running/complete/failed status, so nothing is hidden. */}
           {v.asset && (briefLoading || valuationBrief) && (
-            <StrategicAssessment
-              brief={valuationBrief}
-              summary={briefSummary}
-              loading={briefLoading}
-              expectationAudit={expectationAudit}
-            />
+            <CollapsibleSection title="Strategic Assessment">
+              <StrategicAssessment
+                brief={valuationBrief}
+                summary={briefSummary}
+                loading={briefLoading}
+                expectationAudit={expectationAudit}
+              />
+            </CollapsibleSection>
           )}
 
-          {/* True Effect Prior — step-by-step evidence story, before/after curves */}
+          {/* True Effect Prior — collapsed by default (the step-by-step evidence chain is 5+ screens). */}
           {v.asset && (effectPriorLoading || effectPrior) && (
-            <Card>
+            <CollapsibleSection title="True Effect Prior — evidence story (mechanism · animal · analog · clinical)">
               <EffectPriorChain effectPrior={effectPrior} loading={effectPriorLoading} ptrsResult={ptrsResult} />
-            </Card>
+            </CollapsibleSection>
           )}
 
           {/* Development-path HALT — the engine reached this stage but couldn't
@@ -2500,27 +2527,23 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Development Path — auto-generated after Layer 2, drives headline metrics */}
+          {/* Development Path — collapsed by default (per-stage detail); the headline P(approval)/eNPV
+              are in the always-visible metrics above, so the summary isn't buried. */}
           {(devPlanLoading || devPlanStages) && v.asset && (
-            <Card>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div>
-                  <SectionLabel>Development Path</SectionLabel>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
-                    Stage-by-stage trial probabilities &amp; risk-adjusted costs · {v.asset} · {v.phase}
-                  </div>
-                </div>
-                {devPlanStages && (
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => onGenerateDevPlan(v.asset || "", v.indications?.[0]?.name || v.indication || "", v.phase || "Phase 2", v.sponsor, layer2Result)}
-                    disabled={devPlanLoading}
-                    style={{ fontSize: 11 }}
-                  >
-                    {devPlanLoading ? "⏳" : "↻ Refresh"}
-                  </button>
-                )}
-              </div>
+            <CollapsibleSection
+              title="Development Path"
+              subtitle={`Stage-by-stage probabilities & risk-adjusted costs · ${v.asset} · ${v.phase}`}
+              right={devPlanStages ? (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => onGenerateDevPlan(v.asset || "", v.indications?.[0]?.name || v.indication || "", v.phase || "Phase 2", v.sponsor, layer2Result)}
+                  disabled={devPlanLoading}
+                  style={{ fontSize: 11 }}
+                >
+                  {devPlanLoading ? "⏳" : "↻ Refresh"}
+                </button>
+              ) : undefined}
+            >
               <DevPlan
                 stageInputs={devPlanStages}
                 regContext={devPlanRegContext}
@@ -2530,26 +2553,22 @@ export default function HomePage() {
                 onUpdateN={updateDevPlanN}
                 onUpdateCpp={updateDevPlanCpp}
               />
-            </Card>
+            </CollapsibleSection>
           )}
 
           {/* Revenue Assumptions */}
           {(revenueLoading || revenueAnalysis) && (
-            <Card>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-                <div>
-                  <SectionLabel>Revenue Assumptions</SectionLabel>
-                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: -8, marginBottom: 8 }}>
-                    AI sell-side analysis · {v.asset} · {v.phase}
-                  </div>
-                </div>
+            <CollapsibleSection
+              title="Revenue Assumptions"
+              subtitle={`AI sell-side analysis · ${v.asset} · ${v.phase}`}
+              right={
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <button className="btn btn-ghost" onClick={() => onResearchRevenue()} disabled={revenueLoading}
                     style={{ fontSize: 11 }}>{revenueLoading ? "⏳" : "↻ Refresh"}</button>
                   <button onClick={() => setRevenueAnalysis(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-faint)", lineHeight: 1 }}>×</button>
                 </div>
-              </div>
-
+              }
+            >
               {revenueLoading && !revenueAnalysis && (
                 <div style={{ textAlign: "center", padding: "32px 0" }}>
                   <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
@@ -2791,7 +2810,7 @@ export default function HomePage() {
                   </div>
                 );
               })()}
-            </Card>
+            </CollapsibleSection>
           )}
 
 

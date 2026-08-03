@@ -27,10 +27,12 @@
   --border: rgba(255, 255, 255, 0.30);
   --border-strong: rgba(255, 255, 255, 0.50);
 
-  /* Text — dark inside opaque cards, white for headers/metric cards */
+  /* Text — dark inside opaque cards, white for headers/metric cards.
+     Contrast raised to WCAG AA (muted ≈8:1, faint ≈4.7:1 on the light card bg — reasoning is the
+     product, it must be legible); hierarchy preserved (text > muted > faint). */
   --text: #1a2e3b;
-  --text-muted: #3d5a6b;
-  --text-faint: #7a99a8;
+  --text-muted: #2e4a57;
+  --text-faint: #536b78;
   --text-dark: #1a2e3b;
 
   /* Accent */
@@ -65,8 +67,9 @@
   --border: rgba(255, 255, 255, 0.15);
   --border-strong: rgba(255, 255, 255, 0.25);
   --text: #f0efe9;
-  --text-muted: rgba(240, 239, 233, 0.65);
-  --text-faint: rgba(240, 239, 233, 0.35);
+  /* Contrast raised for legibility on the dark bg (muted 0.65→0.82, faint 0.35→0.56); hierarchy kept. */
+  --text-muted: rgba(240, 239, 233, 0.82);
+  --text-faint: rgba(240, 239, 233, 0.56);
 }
 
 /* ─── Base ─────────────────────────────────────────────────────────────────── */

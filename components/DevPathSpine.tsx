@@ -32,7 +32,10 @@ export default function DevPathSpine({ devPlan }: { devPlan: DevPlanResult }) {
   if (!stages.length) return null;
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    // minWidth:0 + maxWidth:100% cap the spine to its container (e.g. a narrow Strategy-Advisor option
+    // column) so the row below SCROLLS instead of clipping ("Phas…"); a no-op in the wide single-column
+    // dev-path where there's ample width.
+    <div style={{ marginBottom: 16, minWidth: 0, maxWidth: "100%" }}>
       <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-faint)", marginBottom: 8, fontFamily: "var(--font-mono)" }}>
         Development path · time · cost · probability
       </div>
