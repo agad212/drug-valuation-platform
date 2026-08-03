@@ -9,6 +9,7 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { validateDesignSpec } from "../../lib/trial-design-interpreter";
+import { logStart, logEnd } from "../../lib/endpoint-timing";
 
 const SYSTEM_PROMPT = `You translate a free-form clinical-trial DESIGN description into a STRUCTURED JSON spec.
 You SPECIFY the design; deterministic code downstream COMPUTES the statistics.
@@ -72,6 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) return res.status(500).json({ error: "ANTHROPIC_API_KEY not set" });
 
+  const __t0 = logStart("design-interpreter");
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -85,6 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!r.ok) {
       const errJson = (await r.json().catch(() => ({}))) as any;
+      logEnd("design-interpreter", __t0, "error", { upstreamStatus: r.status });
       return res.status(r.status).json({ error: `API error (${r.status}): ${errJson?.error?.message || "unknown"}` });
     }
     const data = (await r.json()) as any;
@@ -106,6 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = validateDesignSpec(parsed);
 
     // Return ONLY the validated spec + flags + assumptions. No number. Layer 1 computes downstream.
+    logEnd("design-interpreter", __t0, "ok");
     return res.status(200).json({
       spec: result.spec,
       flags: result.flags,
@@ -114,6 +118,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       explanation: rawText.replace(/<spec_json>[\s\S]*?<\/spec_json>/g, "").trim(),
     });
   } catch (e: any) {
+    logEnd("design-interpreter", __t0, "error", { msg: e?.message });
     return res.status(500).json({ error: e?.message || "design interpretation failed" });
   }
 }

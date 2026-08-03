@@ -10,6 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { NextApiRequest, NextApiResponse } from "next";
+import { logStart, logEnd } from "../../lib/endpoint-timing";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).end();
@@ -29,6 +30,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
   }
 
+  const __t0 = logStart("decision-options");
   const systemPrompt = buildSystemPrompt(context);
 
   // Build message history (keep last 6 turns to avoid bloating context)
@@ -97,11 +99,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const retryText: string = d2.content?.[0]?.text ?? "";
       const retryResult = parseAdvisorResponse(retryText);
       if (retryResult.options.length > 0) {
+        logEnd("decision-options", __t0, "ok", { options: retryResult.options.length, retried: true });
         return res.status(200).json(retryResult);
       }
     }
 
     // Both attempts failed — return clean error, no raw text
+    logEnd("decision-options", __t0, "error", { reason: "parse-failed-both-attempts" });
     return res.status(200).json({
       options: [],
       summary: "",
@@ -109,6 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
+  logEnd("decision-options", __t0, "ok", { options: result.options.length });
   return res.status(200).json(result);
 }
 

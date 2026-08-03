@@ -17,6 +17,7 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
+import { logStart, logEnd } from "../../lib/endpoint-timing";
 import { parseJsonLoose } from "../../lib/extractJson";
 import { pinComparator, pinPhase3Endpoint } from "../../lib/indication-benchmarks";
 import { resolveRegulatoryContext } from "../../lib/regulatory-pins";
@@ -366,6 +367,7 @@ ${currentDesignSummary}
 
 Reason about the full development path. Return the current trial as stage 1 (use the design parameters above exactly), then add the future stages needed for approval.`;
 
+  const __t0 = logStart("dev-plan");
   try {
     const raw = await callClaudeWithSearch({
       anthropicKey: apiKey,
@@ -508,6 +510,7 @@ Reason about the full development path. Return the current trial as stage 1 (use
       if (st.trialDesign) st.trialDesign.regulatoryContext = regulatoryContext;
     }
 
+    logEnd("dev-plan", __t0, "ok", { stages: cappedStages.length });
     return res.status(200).json({
       stages: cappedStages,
       regulatoryContext,
@@ -518,6 +521,7 @@ Reason about the full development path. Return the current trial as stage 1 (use
 
   } catch (e: any) {
     const msg = e?.message ?? "Dev plan generation failed";
+    logEnd("dev-plan", __t0, "error", { msg });
     console.error("[dev-plan] Failed:", msg);
     if (msg.toLowerCase().includes("credit balance")) {
       return res.status(402).json({ error: "API credits are out — top up at console.anthropic.com." });

@@ -13,6 +13,7 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { validateIndicationStructure } from "../../lib/indication-structure-interpreter";
+import { logStart, logEnd } from "../../lib/endpoint-timing";
 
 const SYSTEM_PROMPT = `You classify how the NON-LEAD indications of a single drug asset relate to the lead
 indication (or to each other), for a risk-adjusted valuation. You SPECIFY the STRUCTURE; deterministic
@@ -107,6 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "Emit one relationship entry for each NON-LEAD indication (never the lead).",
   ].filter(Boolean).join("\n");
 
+  const __t0 = logStart("indication-structure", { indicationCount: indications.length });
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -120,6 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!r.ok) {
       const errJson = (await r.json().catch(() => ({}))) as any;
+      logEnd("indication-structure", __t0, "error", { upstreamStatus: r.status });
       return res.status(r.status).json({ error: `API error (${r.status}): ${errJson?.error?.message || "unknown"}` });
     }
     const data = (await r.json()) as any;
@@ -140,6 +143,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = validateIndicationStructure(parsed, indicationIds);
 
     // Return ONLY the validated relationships + flags + assumptions. No number. Cashflow computes downstream.
+    logEnd("indication-structure", __t0, "ok", { relationships: result.relationships.length });
     return res.status(200).json({
       relationships: result.relationships,
       flags: result.flags,
@@ -148,6 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       explanation: rawText.replace(/<structure_json>[\s\S]*?<\/structure_json>/g, "").trim(),
     });
   } catch (e: any) {
+    logEnd("indication-structure", __t0, "error", { msg: e?.message });
     return res.status(500).json({ error: e?.message || "indication-structure interpretation failed" });
   }
 }
