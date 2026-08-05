@@ -14,6 +14,20 @@ function cryptoId(): string {
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
 
+// ─── Diagnostics ──────────────────────────────────────────────────────────────
+// Is DATABASE_URL present + non-empty in THIS runtime? (boolean only — never logs the URL/secret.) The
+// Neon env var only reaches a function that was deployed AFTER it was added and is scoped to that env, so
+// this makes "is Neon actually live here?" observable in the deployed function logs instead of a guess.
+function hasDbUrl(): boolean {
+  return !!process.env.DATABASE_URL && process.env.DATABASE_URL.length > 0;
+}
+// One structured, grep-able line per store call: DATABASE_URL-is-live + which path (neon vs in-memory Map)
+// the call actually took. `databaseUrlLive:true` with `path:"memory"` means the env var is set but the
+// Neon client failed to init (getDb caught + returned null) — a distinct, useful signal.
+function logStore(op: string, extra?: Record<string, unknown>) {
+  try { console.log(JSON.stringify({ tag: "store-diagnostic", op, databaseUrlLive: hasDbUrl(), ...extra })); } catch { /* logging must never throw */ }
+}
+
 // ─── Exported async functions ─────────────────────────────────────────────────
 
 export async function upsertValuation(v: Valuation): Promise<Valuation> {
@@ -23,6 +37,7 @@ export async function upsertValuation(v: Valuation): Promise<Valuation> {
   const next: Valuation = { ...v, id, slug, createdAt: v.createdAt || now, updatedAt: now };
 
   const sql = getDb();
+  logStore("upsert", { id, slug, path: sql ? "neon" : "memory" });
   if (sql) {
     try {
       await ensureTable();
@@ -36,11 +51,14 @@ export async function upsertValuation(v: Valuation): Promise<Valuation> {
       `;
       return next;
     } catch (e) {
-      console.error("DB upsert error:", e);
+      // A failed Neon write is a DURABILITY failure — the record would only survive in the ephemeral Map
+      // below and 404 on read from another instance / after a cold start. Make it LOUD (it was previously
+      // swallowed into the silent fallback, so a broken persist looked like success).
+      console.error(JSON.stringify({ tag: "store-write-FAILED", id, slug, databaseUrlLive: hasDbUrl(), error: String((e as any)?.message ?? e) }));
     }
   }
 
-  // In-memory fallback
+  // In-memory fallback (demo mode with no DATABASE_URL — or, with the error logged above, a failed Neon write)
   byId.set(id, next);
   bySlug.set(slug, next);
   return next;
@@ -78,6 +96,7 @@ export async function listValuations(): Promise<Valuation[]> {
 
 export async function getShare(slug: string): Promise<Valuation | null> {
   const sql = getDb();
+  logStore("getShare", { slug, path: sql ? "neon" : "memory" });
   if (sql) {
     try {
       await ensureTable();
@@ -86,7 +105,7 @@ export async function getShare(slug: string): Promise<Valuation | null> {
       const r = rows[0];
       return { ...r.data, id: r.id, slug: r.slug, name: r.name } as Valuation;
     } catch (e) {
-      console.error("DB share get error:", e);
+      console.error(JSON.stringify({ tag: "store-share-read-FAILED", slug, databaseUrlLive: hasDbUrl(), error: String((e as any)?.message ?? e) }));
     }
   }
   return bySlug.get(slug) ?? null;

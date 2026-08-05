@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import AssistantPanel from "../../components/AssistantPanel";
 import { ThemeToggle } from "../../components/ThemeToggle";
 import type { Valuation } from "../../lib/types";
+import { getShare } from "../../lib/store";
 
 const ValuationCharts = dynamic(() => import("../../components/ValuationCharts"), { ssr: false });
 
@@ -148,15 +149,21 @@ const SharePage: NextPage<{ valuation: Valuation | null; origin: string }> = ({ 
 
 export const getServerSideProps: GetServerSideProps = async (ctx) => {
   const { slug } = ctx.query as { slug: string };
+  const slugStr = Array.isArray(slug) ? slug[0] : String(slug ?? "");
   const proto = (ctx.req.headers["x-forwarded-proto"] as string) || "http";
   const host = (ctx.req.headers["x-forwarded-host"] as string) || ctx.req.headers.host;
   const origin = `${proto}://${host}`;
   try {
-    const res = await fetch(`${origin}/api/valuation/share/${encodeURIComponent(slug)}`);
-    if (!res.ok) return { props: { valuation: null, origin } };
-    const valuation = await res.json();
-    return { props: { valuation, origin } };
-  } catch {
+    // Read the store IN-PROCESS — the SAME getShare() the /api/valuation/share route calls — instead of a
+    // server-side self-fetch of that endpoint. getServerSideProps runs on the server and does NOT forward
+    // the browser's gate cookie, so the old self-fetch hit the access-gate middleware and got a 401 → every
+    // share 404'd, regardless of Neon. A direct read has no gate in its path, no extra hop, uses the SAME
+    // slug key onShare wrote under, and works on a cold Neon instance (getShare calls ensureTable). Only the
+    // shared snapshot is returned — no gated app internals — so un-gating just this read is safe by design.
+    const valuation = await getShare(slugStr);
+    return { props: { valuation: valuation ?? null, origin } };
+  } catch (e) {
+    console.error("share getServerSideProps error:", e);
     return { props: { valuation: null, origin } };
   }
 };
