@@ -14,6 +14,7 @@ import StrategicAssessment from "./StrategicAssessment";
 import EffectPriorChain from "./EffectPriorChain";
 import DevPlan from "./DevPlan";
 import ScenarioPanel from "./ScenarioPanel";
+import DecisionAnalysis from "./DecisionAnalysis";
 
 // ValuationCharts pulls in recharts — keep it client-only like the main app does.
 const ValuationCharts = dynamic(() => import("./ValuationCharts"), { ssr: false });
@@ -31,6 +32,7 @@ type ShareSnapshot = Valuation & {
     ptrsResult?: any;
     layer2Result?: any;
     structureFlags?: any;
+    decisionState?: { open?: boolean; options?: any[]; aiSummary?: string | null; aiInsight?: string | null; chatHistory?: any[] } | null;
   } | null;
   _derived?: { devPlan?: any } | null;
 };
@@ -202,6 +204,23 @@ export default function SharedValuationView({ valuation }: { valuation: ShareSna
         <Card>
           <SectionLabel>Scenarios</SectionLabel>
           <ScenarioPanel base={valuation} devPlan={devPlan} />
+        </Card>
+      )}
+
+      {/* Strategy Advisor — read-only results (option comparison + insight), only if one was generated */}
+      {(c.decisionState?.options?.length ?? 0) > 0 && (
+        <Card>
+          <SectionLabel>Strategy Advisor</SectionLabel>
+          <DecisionAnalysis
+            valuation={valuation}
+            out={out}
+            ptrsResult={c.ptrsResult ?? null}
+            layer2Result={c.layer2Result ?? null}
+            effectPrior={c.effectPrior ?? null}
+            devPlan={devPlan}
+            persisted={c.decisionState as any}
+            readOnly
+          />
         </Card>
       )}
     </div>
