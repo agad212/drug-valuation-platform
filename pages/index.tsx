@@ -10,7 +10,7 @@ import type { Valuation, Indication, RevenueAnalysisResult, IndicationRevenueAna
 import { computeOutputs, computeRevenuePV, type IndicationOutput } from "../lib/cashflow";
 import type { CtgovTrial } from "../lib/ctgov";
 import { isEnrollmentComplete } from "../lib/ctgov";
-import DecisionAnalysis, { type DecisionPersistState } from "../components/DecisionAnalysis";
+import DecisionAnalysis, { type DecisionPersistState, buildProgramOptionResult } from "../components/DecisionAnalysis";
 import DevPlan from "../components/DevPlan";
 import ScenarioPanel from "../components/ScenarioPanel";
 import EffectPriorChain from "../components/EffectPriorChain";
@@ -618,6 +618,13 @@ export default function HomePage() {
   // P, own launch, and any conditional P-weight), NOT devPlan.eNPVM (which is pooled revenue × the
   // lead's single P). ≤1 indication keeps the exact single-indication path (devPlan.eNPVM).
   const isMultiIndication = (v.indications?.length ?? 0) > 1;
+
+  // The base valuation as "Option 1" for the unified Strategy-Advisor list — a PURE display mapping of the
+  // already-computed governedOut/devPlan (no recompute). Its eNPV mirrors the headline exactly.
+  const programOption = useMemo(
+    () => (v.asset ? buildProgramOptionResult({ valuation: display, governedOut, devPlan, isMulti: isMultiIndication }) : null),
+    [display, governedOut, devPlan, isMultiIndication, v.asset],
+  );
 
   // Read-only self-check over the finished base valuation (observes & flags; never adjusts). For >1
   // indication the A8 aggregation blocker also fires: it asserts the DISPLAYED headline equals the Σ of
@@ -3087,6 +3094,7 @@ export default function HomePage() {
                 devPlan={devPlan}
                 persisted={decisionState}
                 onPersistedChange={setDecisionState}
+                programOption={programOption}
               />
             </Card>
           )}

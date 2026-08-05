@@ -18,6 +18,17 @@ function probColor(p: number): string {
   return "#f97316";
 }
 
+// Directional flow between stages: a line ending in a right-pointing arrowhead (Phase → Phase → REG),
+// so progression reads as flow, not a plain rule. Render-only.
+function FlowArrow() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", width: "100%" }}>
+      <div style={{ flex: 1, height: 2, background: "var(--border)" }} />
+      <div style={{ width: 0, height: 0, borderTop: "5px solid transparent", borderBottom: "5px solid transparent", borderLeft: "7px solid var(--border)", marginLeft: -1 }} />
+    </div>
+  );
+}
+
 function StatCell({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {
   return (
     <div title={title} style={{ minWidth: 0 }}>
@@ -47,8 +58,8 @@ export default function DevPathSpine({ devPlan }: { devPlan: DevPlanResult }) {
           const hasFutility = !!(seq?.futilityZBoundaries?.length || seq?.futilityBinding);
           return (
             <React.Fragment key={s.id ?? i}>
-              {/* Trial box */}
-              <div style={{ flex: "0 0 auto", width: 172, border: `1px solid ${pc}55`, borderRadius: 10, background: "var(--surface)", overflow: "hidden" }}>
+              {/* Trial box — widened (was 172) for breathing room in both the base dev-path and the comparison */}
+              <div style={{ flex: "0 0 auto", width: 208, border: `1px solid ${pc}55`, borderRadius: 10, background: "var(--surface)", overflow: "hidden" }}>
                 <div style={{ background: `${pc}14`, borderBottom: `1px solid ${pc}30`, padding: "7px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: pc, color: "#fff" }}>{s.phase}</span>
                   {s.isCurrentTrial && <span style={{ fontSize: 8.5, fontWeight: 700, color: "#10b981", letterSpacing: "0.05em" }}>● LIVE</span>}
@@ -80,11 +91,11 @@ export default function DevPathSpine({ devPlan }: { devPlan: DevPlanResult }) {
                   <div title="modality-class base-rate risk (blended over the class-graveyard probability)" style={{ fontSize: 8.5, color: "#f59e0b", padding: "0 10px 7px" }}>×{s.modalityHaircut.toFixed(2)} class risk</div>
                 )}
               </div>
-              {/* Connector carrying cumulative P */}
+              {/* Directional connector carrying cumulative P (arrow shows Phase → Phase flow) */}
               {i < stages.length - 1 && (
-                <div style={{ flex: "0 0 auto", width: 40, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-                  <div style={{ width: "100%", height: 2, background: "var(--border)" }} />
-                  <div style={{ fontSize: 9, color: "var(--text-faint)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{fmtPct(s.cumSuccessProb)}</div>
+                <div style={{ flex: "0 0 auto", width: 52, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+                  <FlowArrow />
+                  <div style={{ fontSize: 9, color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{fmtPct(s.cumSuccessProb)}</div>
                 </div>
               )}
             </React.Fragment>
@@ -93,10 +104,10 @@ export default function DevPathSpine({ devPlan }: { devPlan: DevPlanResult }) {
         {/* Regulatory node */}
         {devPlan.regStage && (
           <>
-            <div style={{ flex: "0 0 auto", width: 40, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ width: "100%", height: 2, background: "var(--border)" }} />
+            <div style={{ flex: "0 0 auto", width: 52, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <FlowArrow />
             </div>
-            <div style={{ flex: "0 0 auto", width: 132, border: "1px solid #3b82f655", borderRadius: 10, background: "var(--surface)", overflow: "hidden" }}>
+            <div style={{ flex: "0 0 auto", width: 150, border: "1px solid #3b82f655", borderRadius: 10, background: "var(--surface)", overflow: "hidden" }}>
               <div style={{ background: "#3b82f614", borderBottom: "1px solid #3b82f630", padding: "7px 10px" }}>
                 <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: "#3b82f6", color: "#fff" }}>REG</span>
               </div>

@@ -14,7 +14,7 @@ import StrategicAssessment from "./StrategicAssessment";
 import EffectPriorChain from "./EffectPriorChain";
 import DevPlan from "./DevPlan";
 import ScenarioPanel from "./ScenarioPanel";
-import DecisionAnalysis from "./DecisionAnalysis";
+import DecisionAnalysis, { buildProgramOptionResult } from "./DecisionAnalysis";
 
 // ValuationCharts pulls in recharts — keep it client-only like the main app does.
 const ValuationCharts = dynamic(() => import("./ValuationCharts"), { ssr: false });
@@ -83,6 +83,8 @@ export default function SharedValuationView({ valuation }: { valuation: ShareSna
   const devPlan = valuation._derived?.devPlan ?? null;
   const isMulti = (valuation.indications?.length ?? 0) > 1;
   const roi = valuation.roi;
+  // Base valuation as "Option 1" for the read-only unified advisor list (pure mapping of `out`/devPlan).
+  const programOption = useMemo(() => buildProgramOptionResult({ valuation, governedOut: out, devPlan, isMulti }), [valuation, out, devPlan, isMulti]);
 
   const assumptions: [string, React.ReactNode][] = [
     ["Phase", valuation.phase || "—"],
@@ -219,6 +221,7 @@ export default function SharedValuationView({ valuation }: { valuation: ShareSna
             effectPrior={c.effectPrior ?? null}
             devPlan={devPlan}
             persisted={c.decisionState as any}
+            programOption={programOption}
             readOnly
           />
         </Card>
