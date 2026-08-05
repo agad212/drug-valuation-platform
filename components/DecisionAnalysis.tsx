@@ -14,7 +14,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell, ScatterChart, Scatter, ZAxis,
+  ResponsiveContainer, Cell, ScatterChart, Scatter, ZAxis, ReferenceLine,
 } from "recharts";
 import type { Valuation } from "../lib/types";
 import DevPathSpine from "./DevPathSpine";
@@ -65,7 +65,8 @@ type Props = {
 // Early-Signal Resolver option — never user-assignable.
 
 const OPTION_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#ec4899", "#a855f7"];
-const OPTION_LABELS = ["A", "B", "C", "D", "★"];
+// (Option labels come from the shared numbering scheme — "1" / "Base" / "2" / "3"… — passed as
+// displayLabel; there is no A/B/C labeling anywhere anymore.)
 
 // ─── Format helpers (self-contained — not imported from index.tsx) ─────────────
 
@@ -153,7 +154,7 @@ function ResultCard({
   isBaselineRef?: boolean;      // the demoted lead-only baseline shown as the Δ-anchor reference
 }) {
   const color = isProgram ? "#10b981" : OPTION_COLORS[index] ?? "#6b7280";
-  const label = displayLabel ?? OPTION_LABELS[index] ?? String(index + 1);
+  const label = displayLabel ?? String(index + 1);
   // A "reference" card (program headline or the demoted lead baseline) shows no marginal Δ and no
   // reshape-design blocks — it's an anchor, not a strategy variant.
   const isRef = isBaseline || isBaselineRef || isProgram;
@@ -509,30 +510,31 @@ function ResultCard({
 
 // ─── Charts ───────────────────────────────────────────────────────────────────
 
-function ComparisonCharts({ results }: { results: OptionResult[] }) {
-  const labels = results.map((r, i) => r.option.name || `Option ${OPTION_LABELS[i]}`);
+function ComparisonCharts({ results, labels, colors }: { results: OptionResult[]; labels: string[]; colors: string[] }) {
+  // labels/colors are the SHARED scheme (Base / 2 / 3 …) so the charts read identically to the list.
+  const names = results.map((r, i) => r.option.name || `Option ${labels[i]}`);
 
   const eROIData = results.map((r, i) => ({
-    name: OPTION_LABELS[i] ?? String(i + 1),
-    label: labels[i],
+    name: labels[i],
+    label: names[i],
     eROI: r.eROI ?? 0,
-    color: OPTION_COLORS[i] ?? "#6b7280",
+    color: colors[i] ?? "#6b7280",
   }));
 
   const eNPVData = results.map((r, i) => ({
-    name: OPTION_LABELS[i] ?? String(i + 1),
-    label: labels[i],
+    name: labels[i],
+    label: names[i],
     eNPV: r.eNPVM,
-    color: OPTION_COLORS[i] ?? "#6b7280",
+    color: colors[i] ?? "#6b7280",
   }));
 
   // Scatter: eNPV (y) vs Dev Cost (x) — efficiency frontier
   const scatterData = results.map((r, i) => ({
     devCost: r.devCostM,
     eNPV: r.eNPVM,
-    name: OPTION_LABELS[i] ?? String(i + 1),
-    label: labels[i],
-    color: OPTION_COLORS[i] ?? "#6b7280",
+    name: labels[i],
+    label: names[i],
+    color: colors[i] ?? "#6b7280",
   }));
 
   const tooltipStyle = {
@@ -628,7 +630,7 @@ function ComparisonCharts({ results }: { results: OptionResult[] }) {
 // ─── Sensitivity Table ────────────────────────────────────────────────────────
 // Shows how the ranking changes if PTRS assumptions shift ±10%.
 
-function SensitivityTable({ results, base }: { results: OptionResult[]; base: BaseContext }) {
+function SensitivityTable({ results, base, labels, colors }: { results: OptionResult[]; base: BaseContext; labels: string[]; colors: string[] }) {
   const scenarios = [
     { label: "Bear (P(approval) −10%)", ptrsShift: -0.10 },
     { label: "Base",                    ptrsShift:  0    },
@@ -655,8 +657,8 @@ function SensitivityTable({ results, base }: { results: OptionResult[]; base: Ba
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
               <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "var(--text-faint)", fontWeight: 600, textTransform: "uppercase" }}>Scenario</th>
               {results.map((r, i) => (
-                <th key={i} style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: OPTION_COLORS[i], fontWeight: 700, textTransform: "uppercase" }}>
-                  {OPTION_LABELS[i]} — {r.option.name || `Option ${OPTION_LABELS[i]}`}
+                <th key={i} style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: colors[i], fontWeight: 700, textTransform: "uppercase" }}>
+                  {labels[i]} — {r.option.name || `Option ${labels[i]}`}
                 </th>
               ))}
             </tr>
@@ -669,7 +671,7 @@ function SensitivityTable({ results, base }: { results: OptionResult[]; base: Ba
                 </td>
                 {tableResults[si].map((cell, ci) => (
                   <td key={ci} style={{ padding: "7px 10px", textAlign: "right" }}>
-                    <span style={{ fontWeight: 600, color: cell.adjENPV >= 0 ? OPTION_COLORS[ci] : "#ef4444" }}>
+                    <span style={{ fontWeight: 600, color: cell.adjENPV >= 0 ? colors[ci] : "#ef4444" }}>
                       {fmtM(cell.adjENPV)}
                     </span>
                     <span style={{ color: "var(--text-faint)", marginLeft: 8 }}>
@@ -688,6 +690,142 @@ function SensitivityTable({ results, base }: { results: OptionResult[]; base: Ba
 
 function round1(x: number) { return Math.round(x * 10) / 10; }
 function round2(x: number) { return Math.round(x * 100) / 100; }
+
+// ─── Strategic Insight — VISUAL (#C1) ───────────────────────────────────────────
+// Replaces the dense paragraph as the default: a winner callout + an eNPV-vs-P(approval) positioning plot
+// + a marginal-eROI bar, with the prose demoted to an expandable detail. Reads ONLY already-computed
+// per-option results (eNPVM / ptrs / devCostM / marginalEROI / deltaENPVM / bestId) — no recompute, no new
+// numbers, and no LLM trigger (pure render of persisted results + aiInsight). Option 1 (the program) is a
+// DIFFERENT scope, so it's NAMED in the callout for context but NOT plotted (it would dominate the axis).
+function StrategyInsightVisual({ results, labelOf, colorOf, bestId, programOption, aiInsight, insightLoading }: {
+  results: OptionResult[];
+  labelOf: (r: OptionResult) => string;
+  colorOf: (r: OptionResult) => string;
+  bestId: string | null;
+  programOption: OptionResult | null;
+  aiInsight: string | null;
+  insightLoading: boolean;
+}) {
+  const winner = results.find((r) => r.option.id === bestId) ?? null;
+
+  // Lead-scope options only (Option 1 = program is not in `results`).
+  const scatter = results.map((r) => ({
+    ptrs: Math.round(r.ptrs * 1000) / 10,
+    eNPV: r.eNPVM,
+    devCost: r.devCostM,
+    name: labelOf(r),
+    label: r.option.name || `Option ${labelOf(r)}`,
+    color: colorOf(r),
+  }));
+
+  // Marginal-eROI bar — reshapes only; the baseline is the zero-reference (marginalEROI null).
+  const marg = results
+    .filter((r) => r.marginalEROI != null)
+    .map((r) => ({ name: labelOf(r), label: r.option.name || `Option ${labelOf(r)}`, marg: r.marginalEROI as number, color: colorOf(r) }));
+
+  const tooltipStyle = { background: "var(--bg-card-solid)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--text)" };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        Strategic Insight
+      </div>
+
+      {/* Winner callout — the recommendation in one line, from bestId */}
+      {winner && (
+        <div style={{ background: "rgba(16,185,129,0.10)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 10, padding: "14px 16px" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+            ★ Recommended strategy
+          </div>
+          <div style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.5 }}>
+            <strong>Option {labelOf(winner)} · {winner.option.name || "option"}</strong> — highest eNPV at {fmtM(winner.eNPVM)}
+            {winner.marginalEROI != null && winner.deltaENPVM != null
+              ? <> ({winner.deltaENPVM >= 0 ? "+" : ""}{fmtM(winner.deltaENPVM)} · {fmtX(winner.marginalEROI)} per $ vs the lead baseline).</>
+              : <> (the current lead baseline — no reshape beats it).</>}
+            {programOption && (
+              <span style={{ color: "var(--text-faint)" }}> Full program (Option 1): {fmtM(programOption.eNPVM)}.</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20 }}>
+        {/* eNPV vs P(approval) — value vs probability */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+            eNPV vs P(approval)
+          </div>
+          <div style={{ fontSize: 10, color: "var(--text-faint)", marginBottom: 8 }}>
+            Up-right = more value at higher probability. Bubble = dev cost.
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <ScatterChart margin={{ top: 6, right: 20, bottom: 6, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis type="number" dataKey="ptrs" name="P(approval)" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `${v.toFixed(0)}%`} label={{ value: "P(approval)", position: "insideBottom", offset: -2, fontSize: 10, fill: "var(--text-faint)" }} />
+              <YAxis type="number" dataKey="eNPV" name="eNPV" tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `$${v.toFixed(0)}M`} />
+              <ZAxis type="number" dataKey="devCost" range={[50, 320]} name="Dev Cost" />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                content={({ payload }: any) => {
+                  if (!payload?.length) return null;
+                  const d = payload[0]?.payload;
+                  return (
+                    <div style={{ ...tooltipStyle, padding: "8px 12px" }}>
+                      <div style={{ fontWeight: 700 }}>{d.label}</div>
+                      <div>eNPV: {fmtM(d.eNPV)}</div>
+                      <div>P(approval): {d.ptrs.toFixed(0)}%</div>
+                      <div>Dev cost: {fmtM(d.devCost)}</div>
+                    </div>
+                  );
+                }}
+              />
+              <Scatter data={scatter}>
+                {scatter.map((e, i) => <Cell key={i} fill={e.color} />)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Marginal return per $ vs the lead baseline */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+            Marginal return per $ (vs lead baseline)
+          </div>
+          <div style={{ fontSize: 10, color: "var(--text-faint)", marginBottom: 8 }}>
+            {marg.length ? "Above 0 = the extra spend earns its keep." : "No reshape options to compare yet."}
+          </div>
+          {marg.length > 0 && (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={marg} margin={{ top: 6, right: 10, bottom: 6, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: "var(--text-muted)" }} />
+                <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)" }} tickFormatter={(v) => `${v.toFixed(1)}x`} />
+                <ReferenceLine y={0} stroke="var(--border-strong)" />
+                <Tooltip contentStyle={tooltipStyle} formatter={(v: number, _: any, p: any) => [`${v.toFixed(2)}x`, p.payload.label]} />
+                <Bar dataKey="marg" radius={[4, 4, 0, 0]}>
+                  {marg.map((e, i) => <Cell key={i} fill={e.marg >= 0 ? e.color : "#ef4444"} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      {/* Prose — demoted to an expandable detail (kept, not deleted). Reads the persisted aiInsight; if
+          absent it simply shows nothing (never fetches — the read-only share stays inert). */}
+      {insightLoading ? (
+        <div style={{ fontSize: 13, color: "var(--text-faint)" }}>Generating strategic insight…</div>
+      ) : aiInsight ? (
+        <details>
+          <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>Full rationale ▸</summary>
+          <div style={{ marginTop: 8, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)", borderRadius: 8, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+            {aiInsight}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
 
 // ─── Quick-prompt chip suggestions ───────────────────────────────────────────
 
@@ -758,6 +896,28 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
     }
     return computed;
   }, [base, options]);
+
+  // ── Shared labeling pass (#C2): ONE source of truth for how every advisor option is labeled/colored, so
+  // the list, the comparison charts, the sensitivity table, and the insight visual all read identically.
+  // The advisor's lead baseline = "Base"; reshapes = "2", "3", … (Option 1 = the program is not in
+  // `results`, so it never appears in the charts). Colors match the list cards (baseline blue = index 1,
+  // reshape k = index k+2). Pure mapping over already-computed results.
+  const optionLabeling = useMemo(() => {
+    const baselineResult = results.find((r) => r.option.isBaseline) ?? results[0] ?? null;
+    const reshapes = results.filter((r) => r !== baselineResult);
+    const labelOf = (r: OptionResult) => (r === baselineResult ? "Base" : String(reshapes.indexOf(r) + 2));
+    const colorOf = (r: OptionResult) =>
+      r === baselineResult ? OPTION_COLORS[1] : OPTION_COLORS[(reshapes.indexOf(r) + 2) % OPTION_COLORS.length];
+    return {
+      baselineResult,
+      reshapes,
+      labelOf,
+      colorOf,
+      labels: results.map(labelOf),
+      colors: results.map(colorOf),
+      bestId: results.length ? results.reduce((b, r) => (r.eNPVM > b.eNPVM ? r : b), results[0]).option.id : null,
+    };
+  }, [results]);
 
   // Layer 2 — POST free-form design text to the interpreter and set ONLY the validated spec it returns
   // on the option; the EXISTING recompute (computeOption) then threads designSpec → full valuation. The
@@ -1119,10 +1279,8 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   {(() => {
                     const isMulti = (valuation.indications?.length ?? 0) > 1;
-                    // Engine-computed recommendation = highest eNPV among the (lead-scope) advisor options.
-                    const bestId = results.length ? results.reduce((best, r) => (r.eNPVM > best.eNPVM ? r : best), results[0])?.option.id : null;
-                    const baselineResult = results.find((r) => r.option.isBaseline) ?? results[0] ?? null;
-                    const reshapes = results.filter((r) => r !== baselineResult);
+                    // Shared labeling (same source the charts use → list and charts read identically).
+                    const { bestId, baselineResult, reshapes } = optionLabeling;
                     const anchor = isMulti ? LEAD_BASELINE_LABEL : "baseline";
                     const cards: React.ReactNode[] = [];
                     // Option 1 = program headline (fallback to the advisor baseline if the base wasn't passed).
@@ -1142,7 +1300,7 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
                     if (programOption && isMulti && baselineResult) {
                       cards.push(
                         <ResultCard key={baselineResult.option.id} result={baselineResult} index={1} isBaseline={false}
-                          isBaselineRef displayLabel="ref" scopeBadge="lead only" />,
+                          isBaselineRef displayLabel="Base" scopeBadge="lead only" />,
                       );
                     }
                     // Reshapes = Options 2…N, Δ against the lead baseline (existing deltaENPVM — no recompute).
@@ -1160,35 +1318,26 @@ export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Res
               </div>
 
               <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
-                <ComparisonCharts results={results} />
+                <ComparisonCharts results={results} labels={optionLabeling.labels} colors={optionLabeling.colors} />
               </div>
 
               <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
-                <SensitivityTable results={results} base={base!} />
+                <SensitivityTable results={results} base={base!} labels={optionLabeling.labels} colors={optionLabeling.colors} />
               </div>
 
-              {/* AI strategic insight — auto-generated */}
-              <div style={{
-                background: "var(--surface)", border: "1px solid var(--border)",
-                borderRadius: 12, padding: 20,
-              }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
-                  Strategic Insight
-                </div>
-                {insightLoading ? (
-                  <div style={{ fontSize: 13, color: "var(--text-faint)" }}>Generating strategic insight…</div>
-                ) : aiInsight ? (
-                  <div style={{
-                    background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.15)",
-                    borderRadius: 8, padding: "12px 16px", fontSize: 13, color: "var(--text)", lineHeight: 1.7,
-                  }}>
-                    {aiInsight}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
-                    Insight unavailable — check API credits.
-                  </div>
-                )}
+              {/* Strategic Insight — VISUAL by default (winner + eNPV-vs-P + marginal-eROI, all from the
+                  already-computed results); the prose is demoted to an expandable detail. Pure render — no
+                  LLM trigger here (the auto-insight fetch stays readOnly-guarded elsewhere). */}
+              <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
+                <StrategyInsightVisual
+                  results={results}
+                  labelOf={optionLabeling.labelOf}
+                  colorOf={optionLabeling.colorOf}
+                  bestId={optionLabeling.bestId}
+                  programOption={programOption ?? null}
+                  aiInsight={aiInsight}
+                  insightLoading={insightLoading}
+                />
               </div>
 
               <div style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, fontFamily: "var(--font-mono)" }}>
