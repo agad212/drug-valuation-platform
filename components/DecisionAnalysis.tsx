@@ -33,6 +33,17 @@ import { selfCheck, viewFromOption, flagsFromOption } from "../lib/self-check";
 
 // ─── Prop types ────────────────────────────────────────────────────────────────
 
+// The generated advisor state worth surviving a reload (the transient input/loading/error flags are NOT
+// persisted). Lifted so the parent can put it in the last-active snapshot — otherwise the whole Strategy
+// Advisor (options, summary, insight, chat) re-blanks on every reload while everything else restores.
+export type DecisionPersistState = {
+  open: boolean;
+  options: OptionInputs[];
+  aiSummary: string | null;
+  aiInsight: string | null;
+  chatHistory: { role: "user" | "assistant"; content: string }[];
+};
+
 type Props = {
   valuation: Valuation;
   out: { ptrs: number; revenuePV: number; devCostPV: number; rnpv: number };
@@ -40,6 +51,8 @@ type Props = {
   layer2Result: any; // from /api/ptrs-layer2
   effectPrior?: EffectPrior | null; // from /api/effect-prior, if loaded
   devPlan?: DevPlanResult | null;   // from computeDevPlan, if available
+  persisted?: DecisionPersistState | null;               // restored generated state (auto-restore on reload)
+  onPersistedChange?: (s: DecisionPersistState) => void;  // report generated state up so it can be persisted
 };
 
 // ─── Colour palette ────────────────────────────────────────────────────────────
@@ -605,18 +618,44 @@ const QUICK_PROMPTS = [
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Result, effectPrior, devPlan }: Props) {
-  const [open, setOpen] = useState(false);
-  const [options, setOptions] = useState<OptionInputs[]>([]);
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
+export default function DecisionAnalysis({ valuation, out, ptrsResult, layer2Result, effectPrior, devPlan, persisted, onPersistedChange }: Props) {
+  const [open, setOpen] = useState(persisted?.open ?? false);
+  const [options, setOptions] = useState<OptionInputs[]>(persisted?.options ?? []);
+  const [aiSummary, setAiSummary] = useState<string | null>(persisted?.aiSummary ?? null);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [chatHistory, setChatHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const [aiInsight, setAiInsight] = useState<string | null>(null);
+  const [chatHistory, setChatHistory] = useState<{ role: "user" | "assistant"; content: string }[]>(persisted?.chatHistory ?? []);
+  const [aiInsight, setAiInsight] = useState<string | null>(persisted?.aiInsight ?? null);
   const [insightLoading, setInsightLoading] = useState(false);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const insightFiredForRef = useRef<string>("");
+
+  // Auto-restore on reload: the parent's `persisted` prop is null on first app mount and only arrives once
+  // the last-active snapshot rehydrates (a render AFTER this component already mounted with empty state), so
+  // the initial useState values above miss it. Seed ONCE, and ONLY for a genuine external restore —
+  // reportedRef means that once WE'VE pushed state up, any later `persisted` is just our own echo (never a
+  // restore), so we don't re-seed and can't clobber a live edit with a stale echo.
+  const seededRef = useRef(false);
+  const reportedRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current || reportedRef.current || !persisted) return;
+    seededRef.current = true;
+    setOpen(persisted.open ?? false);
+    setOptions(persisted.options ?? []);
+    setAiSummary(persisted.aiSummary ?? null);
+    setAiInsight(persisted.aiInsight ?? null);
+    setChatHistory(persisted.chatHistory ?? []);
+  }, [persisted]);
+
+  // Report generated state up so the parent can persist it. Skip the initial EMPTY state so we never
+  // overwrite an incoming restore with blanks before the seed lands (and don't persist nothing).
+  useEffect(() => {
+    if (!options.length && !aiSummary && !aiInsight && !chatHistory.length) return;
+    reportedRef.current = true;
+    onPersistedChange?.({ open, options, aiSummary, aiInsight, chatHistory });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, options, aiSummary, aiInsight, chatHistory]);
 
   // Build base context from current valuation + PTRS results
   const base = useMemo(

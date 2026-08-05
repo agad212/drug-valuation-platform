@@ -10,7 +10,7 @@ import type { Valuation, Indication, RevenueAnalysisResult, IndicationRevenueAna
 import { computeOutputs, computeRevenuePV, type IndicationOutput } from "../lib/cashflow";
 import type { CtgovTrial } from "../lib/ctgov";
 import { isEnrollmentComplete } from "../lib/ctgov";
-import DecisionAnalysis from "../components/DecisionAnalysis";
+import DecisionAnalysis, { type DecisionPersistState } from "../components/DecisionAnalysis";
 import DevPlan from "../components/DevPlan";
 import ScenarioPanel from "../components/ScenarioPanel";
 import EffectPriorChain from "../components/EffectPriorChain";
@@ -505,6 +505,9 @@ export default function HomePage() {
   // /api/indication-structure. The resolved relationships are merged onto v.indications (below); these
   // flags surface WHY (a rejected/demoted or single-level-chain call), never a number.
   const [structureFlags, setStructureFlags] = useState<{ code: string; severity: string; message: string }[]>([]);
+  // Strategy Advisor (DecisionAnalysis) generated state — lifted here so it lands in the last-active
+  // snapshot and survives a reload (was re-blanking on every reload while everything else restored).
+  const [decisionState, setDecisionState] = useState<DecisionPersistState | null>(null);
   // Signature over the generator's REASONING INPUTS only (NOT indicationRelationship) so merging the
   // result back doesn't retrigger the fetch — one reason per real input change.
   const structureSigRef = useRef<string>("");
@@ -659,15 +662,18 @@ export default function HomePage() {
     setLayer2Result(null);
     setExpectationAudit(null);
     setStructureFlags([]);
+    setDecisionState(null);
   }
 
   // The LLM-produced pipeline state the devPlan/base memos consume — the ONLY thing we need to persist to
-  // reproduce the computed headline through the pure engine.
+  // reproduce the computed headline through the pure engine. (decisionState is the Strategy Advisor's
+  // generated output — persisted so it survives reload; it doesn't feed the headline memos.)
   function buildComputeSnapshot() {
     return {
       devPlanStages, devPlanRegContext, devPlanReasoning,
       effectPrior, valuationBrief, briefSummary, briefStatus,
       ptrsResult, layer2Result, expectationAudit, structureFlags,
+      decisionState,
     };
   }
 
@@ -699,6 +705,7 @@ export default function HomePage() {
       setLayer2Result(c.layer2Result ?? null);
       setExpectationAudit(c.expectationAudit ?? null);
       setStructureFlags(Array.isArray(c.structureFlags) ? c.structureFlags : []);
+      setDecisionState(c.decisionState ?? null);
       // devPlan will recompute → the timeline→launch resync fires once; skip it (launchYear is already the
       // saved timeline year) so the restore is silent.
       skipLaunchSyncRef.current = true;
@@ -786,7 +793,7 @@ export default function HomePage() {
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v, devPlan, effectPrior, valuationBrief, briefSummary, briefStatus, ptrsResult, layer2Result, expectationAudit, structureFlags, patentResult, trialResults, trialSummary, trialTotal, revenueAnalysis, restoreVerify]);
+  }, [v, devPlan, effectPrior, valuationBrief, briefSummary, briefStatus, ptrsResult, layer2Result, expectationAudit, structureFlags, decisionState, patentResult, trialResults, trialSummary, trialTotal, revenueAnalysis, restoreVerify]);
 
   // ── Structure generator: on a >1-indication asset, ask /api/indication-structure to reason the
   //    relationships (independent / conditional-on / sequential-after) and MERGE them onto the
@@ -3078,6 +3085,8 @@ export default function HomePage() {
                 layer2Result={layer2Result}
                 effectPrior={effectPrior}
                 devPlan={devPlan}
+                persisted={decisionState}
+                onPersistedChange={setDecisionState}
               />
             </Card>
           )}
