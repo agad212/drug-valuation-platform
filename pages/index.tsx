@@ -1651,14 +1651,25 @@ export default function HomePage() {
     // uncorrected scalar that still carried the pre-84d8b5c cost-basis asymmetry, live on shares until now).
     const govRnpv = isMultiIndication ? governedOut.rnpv : (devPlan ? devPlan.eNPVM * 1e6 : out.rnpv);
     const govCostM = devPlan?.totalRiskAdjCostM ?? governedOut.devCostPV / 1e6;
+    // Base the snapshot on chartValuation (the GOVERNED inputs — risk-adjusted cost, per-indication nominal
+    // dev cost stripped) so any recompute on the share page (the tornado sweep, the waterfall, the
+    // indications table) reconciles to the SAME governed headline the app shows — not the raw `display`
+    // inputs, which recomputed the pre-fix cost-basis number (the $98M-vs-$812M contradiction on shares).
+    // Also carry the full pipeline STATE (_compute) + the computed devPlan RESULT (_derived) so the share
+    // page can render the rich read-only sections (strategic assessment, effect-prior chain, dev path,
+    // scenarios) directly — no LLM, no engine recompute of the dev plan.
     const sharePayload = {
-      ...display,
+      ...chartValuation,
       slug,
       rnpv: govRnpv,
       ptrs: governedPtrs,
       revenuePV: governedOut.revenuePV,
       devCostPV: governedOut.devCostPV,
-      roi: govCostM > 0 ? govRnpv / (govCostM * 1e6) : display.roi,
+      roi: govCostM > 0 ? govRnpv / (govCostM * 1e6) : chartValuation.roi,
+      schemaVersion: PERSIST_SCHEMA_VERSION,
+      _compute: buildComputeSnapshot(),
+      _derived: devPlan ? { devPlan } : null,
+      _governed: buildGovernedTarget(),
     };
     await fetch(`/api/valuation/share/${encodeURIComponent(slug)}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
