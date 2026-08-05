@@ -94,11 +94,12 @@ const pick = (id: string, label: string, short: string, choices: string[], part:
 
 const AGREE = { min: "Strongly disagree", max: "Strongly agree" };
 const LEVELS = [
-  "Analyst / Associate",
-  "Manager / Senior manager",
+  "Manager or equivalent",
   "Director or equivalent",
+  "Senior Director or equivalent",
+  "Executive Director or equivalent",
   "VP or equivalent",
-  "C-suite / Partner / Head of function",
+  "C-suite",
 ];
 const PRICE_CHOICES = ["<$10k / year", "$10–50k / year", "$50–100k / year", "$100–250k / year", "$250k+ / year", "Can't say"];
 const TURNAROUND = ["Days", "1–2 weeks", "~1 month", "1–3 months", "3+ months"];
@@ -122,7 +123,6 @@ function aboutYou(roleLabel: string, roleChoices: string[], orgChoices: string[]
       short: "Name / contact",
       kind: "text",
       optional: true,
-      placeholder: "Only if you're open to a short follow-up conversation",
       hint: "Optional — leave blank to stay anonymous.",
       part: 0,
     },
@@ -184,7 +184,16 @@ const BIOPHARMA_QUESTIONS: SurveyQuestion[] = [
     "q_plugin",
     "Where would it plug in?",
     "Where it plugs in",
-    ["Early option framing", "Building the base-case valuation", "Committee / leadership prep", "Live what-ifs during discussion", "Monitoring after the decision", "It wouldn't"],
+    [
+      "Early option framing",
+      "Building the base-case valuation",
+      "Trial design / protocol decisions",
+      "TA portfolio management",
+      "Committee / leadership prep",
+      "Live what-ifs during discussion",
+      "Monitoring after the decision",
+      "It wouldn't",
+    ],
     2
   ),
   multi("q_trust", "What would it need before you'd trust its number in a leadership-facing decision?", "Trust requirements", TRUST_CORE, 2),
@@ -481,24 +490,24 @@ export const QUESTIONS_BY_SEGMENT: Record<SegmentId, SurveyQuestion[]> = {
 // ─── Part 2 concept text per segment ──────────────────────────────────────────
 export const CONCEPT_BY_SEGMENT: Record<SegmentId, string[]> = {
   biopharma: [
-    "It's an AI platform that builds a defensible, sourced valuation for an asset — from preclinical to LCM — with industry-leading AI-driven probability calculations, and lets you compare the value of strategic options: indication sequencing, trial design, partnering, go/no-go — with the reasoning shown and traceable, not a black box.",
-    "You could add and compare new options, or changes to options, instantly and as often as you like, simply by asking in plain language.",
+    "It's an AI platform that uses financial value and ROI metrics to help compare different R&D development strategies at an asset and at a portfolio level. It builds a defensible, sourced valuation for an asset — from preclinical to LCM — with industry-leading AI-driven probability calculations, and lets you compare the value of strategic options for questions as broad as indication sequencing, asset prioritization, or go/no-go, down to detailed comparisons of trial design components: endpoint choice, comparator choice, adaptive designs, sample size, inclusion/exclusion criteria, and even alpha and futility choices and other statistical choices — with the reasoning shown and traceable, not a black box.",
+    "You could add and compare new options, or changes to options, instantly and as often as you like, simply by asking in plain language. The platform would even be able to create new optimal strategies for you.",
   ],
   biopharma_ma_bd: [
-    "It's an AI platform that builds a defensible, sourced valuation for any drug asset or company — probability-adjusted NPV from preclinical to LCM — with industry-leading AI-driven probability calculations and every number traceable to its sources, not a black box.",
-    "You could re-run the valuation instantly as deal terms or new data change — during diligence or live negotiations — simply by asking in plain language.",
+    "It's an AI platform that uses financial value and ROI metrics to value drug assets and companies — a defensible, sourced, probability-adjusted valuation from preclinical to LCM, with industry-leading AI-driven probability calculations and every number traceable to its sources, not a black box.",
+    "You could re-run the valuation instantly as deal terms, assumptions, or new data change — during diligence or live negotiations — simply by asking in plain language.",
   ],
   vc_pe: [
-    "It's an AI platform that builds a defensible, sourced valuation for any drug asset — from preclinical to LCM — with industry-leading AI-driven probability calculations, and lets you stress-test the strategic options behind a deal: indication sequencing, trial design, partnering structures, follow-on scenarios — with the reasoning shown and traceable, not a black box.",
-    "You could add and compare new scenarios instantly, as often as you like, simply by asking in plain language — during diligence or after the investment.",
+    "It's an AI platform that uses financial value and ROI metrics to help compare different R&D development strategies at an asset and at a portfolio level. It builds a defensible, sourced valuation for an asset — from preclinical to LCM — with industry-leading AI-driven probability calculations, and lets you compare the value of strategic options for questions as broad as indication sequencing, asset prioritization, or go/no-go, down to detailed comparisons of trial design components: endpoint choice, comparator choice, adaptive designs, sample size, inclusion/exclusion criteria, and even alpha and futility choices and other statistical choices — with the reasoning shown and traceable, not a black box.",
+    "You could add and compare new options, or changes to options, instantly and as often as you like, simply by asking in plain language — during diligence or after the investment. The platform would even be able to create new optimal strategies for you.",
   ],
   hedge_fund: [
-    "It's an AI platform that builds a defensible, sourced valuation for drug pipeline assets and whole biopharma companies — probability-adjusted NPV per asset, from preclinical to LCM, with industry-leading AI-driven probability calculations and every number traceable to its sources, not a black box.",
+    "It's an AI platform that uses financial value and ROI metrics to value drug pipeline assets and whole biopharma companies — probability-adjusted NPV per asset, from preclinical to LCM, with industry-leading AI-driven probability calculations and every number traceable to its sources, not a black box.",
     "You could re-run the valuation instantly when something changes — a readout, a competitor event, an FDA decision — simply by asking in plain language.",
   ],
   tech_transfer: [
-    "It's an AI platform that builds a defensible, sourced valuation for early-stage assets — from discovery and preclinical onward — with AI-driven probability calculations, and lets you compare the strategic options behind each asset: which indication to position, license vs. spin out, which development path reaches a value inflection — with the reasoning shown and traceable, not a black box.",
-    "You could add and compare scenarios instantly — before a negotiation or a committee meeting — simply by asking in plain language.",
+    "It's an AI platform that uses financial value and ROI metrics to help compare different development strategies at an asset and at a portfolio level. It builds a defensible, sourced valuation for an asset — from preclinical onward — with industry-leading AI-driven probability calculations, and lets you compare the value of strategic options for questions as broad as indication positioning, asset prioritization, or license vs. spin out, down to detailed comparisons of trial design components: endpoint choice, comparator choice, sample size, inclusion/exclusion criteria, and other statistical choices — with the reasoning shown and traceable, not a black box.",
+    "You could add and compare new options, or changes to options, instantly and as often as you like, simply by asking in plain language. The platform would even be able to create new optimal strategies for you.",
   ],
 };
 
