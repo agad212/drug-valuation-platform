@@ -9,6 +9,7 @@
 // provenance — NEVER tune to a desired eNPV. Touches NO probability value.
 
 import type { RegulatoryContext, PopulationType } from "./ptrs-trial";
+import { resolveLoe, type PatentInput, type PublicLoeStatement, type LoeCase } from "./loe-resolver";
 
 // ── Part A: cost-per-patient benchmarks (phase × therapeutic area) ──────────────
 // Central + credible band, in USD. Sourced from published per-patient clinical-
@@ -185,6 +186,11 @@ export type Modality = "biologic" | "small_molecule" | "oligonucleotide" | "cell
 export type LoePin = {
   loeYear: number; basis: "patent" | "exclusivity"; exclusivityYears: number;
   provenance: string; isEstimate: boolean;
+  // Present ONLY when structured resolution ran (see the `structured` option below): the weighted LOE case
+  // distribution revenue should be run over, and the resolver's resolve-or-flag notes. Additive — legacy
+  // callers and the deterministic harness path never see these.
+  cases?: LoeCase[];
+  loeFlags?: string[];
 };
 
 export function inferModality(mechanism?: string): Modality {
@@ -207,8 +213,66 @@ export function computeLoeYear(opts: {
   launchYear: number; modality: Modality;
   regulatoryContext?: RegulatoryContext; patentLoeYear?: number | null;
   orphanConfirmed?: boolean;
+  /**
+   * CAPABILITY GATE (roadmap 4.2). When structured, cited observables are available, LOE resolution routes
+   * through lib/loe-resolver (patents × statutory exclusivity × public statements → a weighted case
+   * distribution). When they are ABSENT this function behaves EXACTLY as before, so the deterministic
+   * harness path — whose fixtures carry no structured patent/designation inputs — stays byte-identical.
+   * One code path, two capability levels: the harness and the product never diverge in LOGIC, only in the
+   * data each has available.
+   *
+   * The important behavioural difference on the structured path: orphan exclusivity is driven by the
+   * CONFIRMED designation, not by the LLM-emitted `regulatoryContext`. The legacy path required
+   * `regulatoryContext === "orphan"`, so an asset with a confirmed FDA/EC orphan designation whose stage
+   * was emitted as "standard" silently lost its 7-year term (live: taladegib resolved to launch+5 = 2036
+   * instead of approval+7 = 2038).
+   */
+  structured?: {
+    patents?: PatentInput[];
+    publicStatements?: PublicLoeStatement[];
+    isNCE?: boolean;
+    newClinicalInvestigation?: boolean;
+    pediatricExclusivity?: boolean;
+    qidp?: boolean;
+  };
 }): LoePin {
   const { launchYear, modality, regulatoryContext, patentLoeYear, orphanConfirmed } = opts;
+
+  if (opts.structured) {
+    const s = opts.structured;
+    const biologicMod = modality === "biologic" || modality === "cell_gene";
+    const res = resolveLoe({
+      // Every statutory clock runs from APPROVAL. launchYear is the dev plan's implied approval-to-market
+      // year, which is the best available approximation of the approval year at this point in the chain.
+      approvalYear: launchYear,
+      exclusivity: {
+        isBiologic: biologicMod,
+        // Default a novel small molecule to NCE unless told otherwise — a first approval of a new moiety.
+        isNCE: s.isNCE ?? !biologicMod,
+        orphanConfirmedForIndication: orphanConfirmed === true,
+        newClinicalInvestigation: s.newClinicalInvestigation,
+        pediatricExclusivity: s.pediatricExclusivity,
+        qidp: s.qidp,
+      },
+      patents: s.patents,
+      publicStatements: s.publicStatements,
+    });
+    const primary = res.cases.reduce((a, b) => (b.weight > a.weight ? b : a));
+    // Map the resolver's 3-value basis onto the legacy 2-value union: a cited external date (patent or a
+    // sourced public statement) is "patent"; a statutory term is "exclusivity". The true basis is carried
+    // in `cases` and in the provenance string.
+    const basis: "patent" | "exclusivity" = primary.basis === "exclusivity" ? "exclusivity" : "patent";
+    return {
+      loeYear: res.expectedLoeYear,
+      basis,
+      exclusivityYears: Math.max(0, res.exclusivityFloorYear - launchYear),
+      isEstimate: basis === "exclusivity",
+      // Keep the pinned:/estimate: prefix contract every dollar/date input is asserted to carry.
+      provenance: `${basis === "patent" ? "pinned" : "estimate"}: ${res.provenance}`,
+      cases: res.cases,
+      loeFlags: res.flags,
+    };
+  }
   const isOrphan = regulatoryContext === "orphan" || regulatoryContext === "btd_orphan";
   const biologic = modality === "biologic" || modality === "cell_gene";
 

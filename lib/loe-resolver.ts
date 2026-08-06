@@ -122,6 +122,51 @@ export const P_PROTECTIVE_DEFAULT: Record<PatentType, number> = {
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
+/**
+ * Adapt `/api/patents` → `keyPatents[]` into PatentInput[].
+ *
+ * Takes **baseExpiry** (filing + 20) as the raw expiry, NOT `estimatedExpiry`. The patents prompt asks the
+ * LLM for estimatedExpiry "with PTE if applicable" — i.e. the LLM computes a term extension, which is a
+ * no-leak violation (§1.4: the LLM supplies observables; deterministic code computes dates) and would
+ * double-count against §156 here. So PTE is recomputed in this module from the base expiry, gated on the
+ * patent actually being in force at approval. Falls back to estimatedExpiry only when baseExpiry is absent,
+ * and says so. `process` patents map to "other" (manufacturing rarely gates LOE).
+ */
+export function patentsFromKeyPatents(keyPatents: unknown): { patents: PatentInput[]; flags: string[] } {
+  const flags: string[] = [];
+  const patents: PatentInput[] = [];
+  if (!Array.isArray(keyPatents)) return { patents, flags };
+  for (const raw of keyPatents) {
+    const k = raw as Record<string, unknown>;
+    const id = typeof k.number === "string" && k.number.trim() ? k.number.trim() : null;
+    const rawType = typeof k.type === "string" ? k.type.toLowerCase() : "";
+    const type: PatentType =
+      rawType === "compound" ? "compound"
+      : rawType === "formulation" ? "formulation"
+      : rawType === "method-of-use" ? "method-of-use"
+      : "other";
+    const base = typeof k.baseExpiry === "number" && Number.isFinite(k.baseExpiry) ? k.baseExpiry : null;
+    const est = typeof k.estimatedExpiry === "number" && Number.isFinite(k.estimatedExpiry) ? k.estimatedExpiry : null;
+    const expiryYear = base ?? est;
+    if (!id || expiryYear == null) {
+      flags.push(`patent entry skipped — ${!id ? "no patent number" : "no usable expiry year"}`);
+      continue;
+    }
+    if (base == null && est != null) {
+      flags.push(`${id}: no baseExpiry emitted → used estimatedExpiry ${est}, which may already include an LLM-applied PTE (double-count risk)`);
+    }
+    if (rawType === "process") flags.push(`${id}: process patent treated as "other" (manufacturing rarely gates LOE)`);
+    patents.push({
+      id, type, expiryYear,
+      // Scope is NOT asserted here. The patents endpoint does not emit which indication a patent covers, so
+      // it is left undefined (treated as covering) and the MOU skinny-label probability carries the risk.
+      // A future emission pass should supply coversValuedIndication explicitly.
+      pteEligible: base != null, // §156 is applied deterministically below, only from a base expiry
+    });
+  }
+  return { patents, flags };
+}
+
 /** Statutory exclusivity floor: approval + the LONGEST applicable term, indication-scoped. */
 function resolveExclusivityFloor(approvalYear: number, ex: ExclusivityInput): { year: number; term: string; flags: string[] } {
   const flags: string[] = [];

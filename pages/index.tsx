@@ -21,6 +21,7 @@ import { selfCheck, viewFromDevPlan } from "../lib/self-check";
 import { validateValuationInputs, applyValidatedUpdates } from "../lib/valuation-input-validator";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, computeLoeYear } from "../lib/financial-pins";
+import { patentsFromKeyPatents } from "../lib/loe-resolver";
 import { classGraveyardProbability } from "../lib/class-risk";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
@@ -876,13 +877,24 @@ export default function HomePage() {
     // Fix #2: LOE from the pinned rule (real patent when cited, else labeled
     // exclusivity term by modality/designation) anchored to the timeline launch.
     const patentLoe = v.loeBasis === "patent" ? v.loeYear : null;
+    // Roadmap 4.2: resolve LOE from STRUCTURED CITED OBSERVABLES (patents × statutory exclusivity) now that
+// the implied approval year is known, instead of the old near-circular path that only honoured a patent
+    // expiry when `loeBasis === "patent"` was ALREADY on state — which in practice required a human to click
+    // the LOE panel's "Use <year>" button, so the panel never reached revenue by default.
+    const { patents: structuredPatents, flags: patentAdapterFlags } = patentsFromKeyPatents(patentResult?.keyPatents);
     const loePin = computeLoeYear({
       launchYear: implied,
       modality: inferModality(v.mechanism),
       regulatoryContext: devPlanRegContext as any,
       patentLoeYear: patentLoe,
+      // Drives orphan ODE on the structured path REGARDLESS of the LLM-emitted regulatoryContext.
       orphanConfirmed: layer2Result?.orphanConfirmedForIndication === true,
+      structured: { patents: structuredPatents },
     });
+    if (patentAdapterFlags.length || loePin.loeFlags?.length) {
+      // Resolve-or-flag: every skipped patent, clamp and divergence is visible, never silent.
+      console.log(JSON.stringify({ tag: "loe-resolution", loeYear: loePin.loeYear, basis: loePin.basis, cases: loePin.cases, flags: [...patentAdapterFlags, ...(loePin.loeFlags ?? [])] }));
+    }
     const newLoe = loePin.loeYear;
     setLoeProvenance(loePin.provenance);
     const loeChanged = newLoe !== v.loeYear;

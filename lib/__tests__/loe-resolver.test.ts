@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  resolveLoe, P_PROTECTIVE_DEFAULT, TERM_ODE, TERM_NCE, TERM_BPCIA,
+  resolveLoe, patentsFromKeyPatents, P_PROTECTIVE_DEFAULT, TERM_ODE, TERM_NCE, TERM_BPCIA,
   PTE_EFFECTIVE_LIFE_CAP_YEARS,
 } from "../loe-resolver";
+import { computeLoeYear } from "../financial-pins";
 
 describe("LOE resolver — statutory exclusivity floor", () => {
   it("orphan (7yr) governs over NCE (5yr) for the valued indication", () => {
@@ -188,6 +189,91 @@ describe("LOE resolver — public statements", () => {
       ],
     });
     expect(r.cases[0].loeYear).toBe(2039);
+  });
+});
+
+describe("patentsFromKeyPatents adapter (/api/patents shape)", () => {
+  it("prefers baseExpiry over estimatedExpiry so PTE is computed here, not by the LLM", () => {
+    const { patents } = patentsFromKeyPatents([
+      { number: "US1", type: "compound", baseExpiry: 2040, estimatedExpiry: 2045 },
+    ]);
+    expect(patents[0]).toMatchObject({ id: "US1", type: "compound", expiryYear: 2040, pteEligible: true });
+  });
+
+  it("falls back to estimatedExpiry with a DOUBLE-COUNT flag when baseExpiry is absent", () => {
+    const { patents, flags } = patentsFromKeyPatents([
+      { number: "US2", type: "method-of-use", baseExpiry: null, estimatedExpiry: 2044 },
+    ]);
+    expect(patents[0]).toMatchObject({ expiryYear: 2044, pteEligible: false }); // no further PTE applied
+    expect(flags.join(" ")).toMatch(/double-count risk/);
+  });
+
+  it("maps process → other, and skips entries with no number or no usable expiry (flagged)", () => {
+    const { patents, flags } = patentsFromKeyPatents([
+      { number: "US3", type: "process", baseExpiry: 2035 },
+      { number: "", type: "compound", baseExpiry: 2050 },
+      { number: "US4", type: "compound", baseExpiry: null, estimatedExpiry: null },
+    ]);
+    expect(patents).toHaveLength(1);
+    expect(patents[0].type).toBe("other");
+    expect(flags.join(" ")).toMatch(/no patent number/);
+    expect(flags.join(" ")).toMatch(/no usable expiry/);
+    expect(flags.join(" ")).toMatch(/process patent treated as/);
+  });
+
+  it("tolerates a non-array (no patents retrieved) without throwing", () => {
+    expect(patentsFromKeyPatents(undefined).patents).toEqual([]);
+    expect(patentsFromKeyPatents(null).patents).toEqual([]);
+  });
+});
+
+describe("computeLoeYear capability gate (harness/product parity)", () => {
+  // THE TALADEGIB REGRESSION, both sides. Identical inputs; the ONLY difference is whether structured
+  // observables are supplied. Absent → the legacy path must be bit-for-bit unchanged (this is what keeps the
+  // FROZEN fixtures byte-identical). Present → orphan ODE is driven by the CONFIRMED designation rather than
+  // by the LLM-emitted regulatoryContext, which is the actual bug.
+  const common = {
+    launchYear: 2031,
+    modality: "small_molecule" as const,
+    regulatoryContext: "standard" as any, // the LLM emitted "Standard" despite a confirmed FDA/EC orphan
+    orphanConfirmed: true,
+  };
+
+  it("WITHOUT structured inputs: legacy behaviour preserved (regulatoryContext gates orphan → launch+5)", () => {
+    const legacy = computeLoeYear(common);
+    expect(legacy.loeYear).toBe(2036);          // NCE 5y only — the orphan term is lost
+    expect(legacy.basis).toBe("exclusivity");
+    expect(legacy.cases).toBeUndefined();        // structured-only field stays absent
+    expect(legacy.provenance).toMatch(/^(pinned|estimate):/);
+  });
+
+  it("WITH structured inputs: the CONFIRMED orphan designation drives ODE → approval+7", () => {
+    const resolved = computeLoeYear({ ...common, structured: {} });
+    expect(resolved.loeYear).toBe(2038);         // 2031 + 7, the correct window
+    expect(resolved.exclusivityYears).toBe(7);
+    expect(resolved.cases).toHaveLength(1);
+    expect(resolved.provenance).toMatch(/^(pinned|estimate):/); // the prefix contract the harness asserts
+  });
+
+  it("WITH structured inputs: a pre-approval compound patent is moot; ODE still governs", () => {
+    // US9000023 expires ~2029 but approval is 2031 → cannot protect, PTE-ineligible (§156 in-force rule).
+    const r = computeLoeYear({
+      ...common,
+      structured: { patents: patentsFromKeyPatents([{ number: "US9000023", type: "compound", baseExpiry: 2029 }]).patents },
+    });
+    expect(r.loeYear).toBe(2038);
+    expect(r.loeFlags!.join(" ")).toMatch(/BEFORE approval/);
+  });
+
+  it("WITH structured inputs: a live method-of-use patent yields a WEIGHTED distribution", () => {
+    const r = computeLoeYear({
+      ...common,
+      structured: { patents: patentsFromKeyPatents([{ number: "AU2021360767A1", type: "method-of-use", baseExpiry: 2041 }]).patents },
+    });
+    expect(r.cases).toHaveLength(2);
+    expect(r.cases!.map((c) => c.basis).sort()).toEqual(["exclusivity", "patent"]);
+    expect(r.loeYear).toBeGreaterThan(2038); // weight-average sits above the pure ODE floor
+    expect(r.loeYear).toBeLessThan(2041);    // …but well below asserting the MOU patent holds
   });
 });
 
