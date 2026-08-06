@@ -277,6 +277,30 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     expect(under.keyDrivers.find((d) => /Market:/.test(d)) ?? "").not.toMatch(/CLAMPED/);
   });
 
+  it("WAC FLOOR (2.4): the niche floor is the BROAD WAC, not a heuristic $150k that exceeds it", () => {
+    // Broad WAC $100k (mkMarketBase) sits BELOW the $150k heuristic floor. A cited $120k is a legitimate
+    // premium over broad and must NOT be clamped up to $150k (which would force niche > broad by fiat).
+    const { base } = mkMarketBase();
+    const o = computeOption(base, {
+      id: "b", name: "Modest-premium niche",
+      nicheEligiblePatients: 10000,
+      nicheAnnualPriceUsd: 120000, nicheWacComp: "adjacent targeted agent ~$120k/yr",
+      nichePeakSharePct: 35,       nicheShareComp: "defined-responder analog ~35%",
+    }, undefined);
+    expect(o.nicheProvenance!.wac).toMatchObject({ value: 120000, sourced: true, inBand: true });
+    expect(o.peakSalesM).toBeCloseTo(420, 0); // 10,000 × $120k × 35% — not 10,000 × $150k × 35% = $525M
+    // A citation BELOW the broad price still clamps — to the broad WAC, and it is flagged.
+    const under = computeOption(base, {
+      id: "c", name: "Sub-broad niche",
+      nicheEligiblePatients: 10000,
+      nicheAnnualPriceUsd: 60000, nicheWacComp: "generic-adjacent pricing ~$60k/yr",
+      nichePeakSharePct: 35,      nicheShareComp: "defined-responder analog ~35%",
+    }, undefined);
+    expect(under.nicheProvenance!.wac).toMatchObject({ value: 100000, inBand: false });
+    const mkt = under.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
+    expect(mkt).toMatch(/floor set to the broad WAC/);
+  });
+
   it("CONTAINMENT BOUND: no base population → the cited count is allowed but flagged UNBOUNDED", () => {
     const { base } = mkMarketBase(1000, 4000, 0); // price 0 → no derivable base eligible population
     const un = computeOption(base, {

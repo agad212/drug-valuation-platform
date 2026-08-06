@@ -738,15 +738,28 @@ export function computeOption(
         // Same discipline as the reg observables and biomarker prevalence. NEVER base price × premium
         // or base penetration × mult. (The market MATH below is unchanged; only where WAC and share
         // COME FROM is gated — deriveEnrichedNiche receives the resolved values.)
-        const wac   = resolveNicheParam(option.nicheAnnualPriceUsd, option.nicheWacComp,   NICHE_WAC_BAND_USD,   NICHE_PRICE_DEFAULT_USD);
+        // Roadmap 2.4 — the niche WAC FLOOR must not exceed the broad case's own price. A hard
+        // NICHE_WAC_BAND_USD.min of $150k sits ABOVE many broad WACs (flagship: broad $140k), so ANY
+        // niche was structurally forced to price above the broad case — a cited $120k was clamped UP to
+        // $150k, inflating niche revenue on top of the (now-bounded) count. The floor becomes "at least
+        // the broad price" (premium ≥ 0) instead of an absolute that can exceed it. The band still
+        // bounds the claim; the empirical band belongs to calibration ("heuristic, pre-calibration —
+        // do NOT enshrine"). Relaxation is FLAGGED in the provenance below, never silent.
+        const broadWac = baseMarket.annualPriceUsd;
+        const wacFloorRelaxed = broadWac != null && broadWac > 0 && broadWac < NICHE_WAC_BAND_USD.min;
+        const wacBand = wacFloorRelaxed
+          ? { min: broadWac as number, max: NICHE_WAC_BAND_USD.max }
+          : NICHE_WAC_BAND_USD;
+        const wac   = resolveNicheParam(option.nicheAnnualPriceUsd, option.nicheWacComp,   wacBand,              NICHE_PRICE_DEFAULT_USD);
         const share = resolveNicheParam(option.nichePeakSharePct,   option.nicheShareComp, NICHE_SHARE_BAND_PCT, NICHE_SHARE_DEFAULT_PCT);
         nicheProvenance = { wac, share, eligible };
         const niche = deriveEnrichedNiche({ nicheEligiblePatients, nicheAnnualPriceUsd: wac.value, nichePeakSharePct: share.value });
         peakSalesM = niche.peakSalesM;
+        const wacFloorNote = wacFloorRelaxed ? ` (floor set to the broad WAC $${Math.round((broadWac as number) / 1000)}k, not the $${NICHE_WAC_BAND_USD.min / 1000}k heuristic — a niche floor must not exceed the broad price)` : "";
         const wacStr = wac.sourced
           ? (wac.inBand
               ? `WAC $${(wac.value / 1000).toFixed(0)}k/yr pinned to ${wac.comp}`
-              : `WAC $${(wac.value / 1000).toFixed(0)}k/yr [cited ${wac.comp} but OUT-OF-BAND → clamped to heuristic band $${NICHE_WAC_BAND_USD.min / 1000}k–$${NICHE_WAC_BAND_USD.max / 1000}k]`)
+              : `WAC $${(wac.value / 1000).toFixed(0)}k/yr [cited ${wac.comp} but OUT-OF-BAND → clamped to heuristic band $${wacBand.min / 1000}k–$${wacBand.max / 1000}k${wacFloorNote}]`)
           : `WAC $${(wac.value / 1000).toFixed(0)}k/yr [UNSOURCED estimate — precision-therapy midpoint (heuristic), no comp cited]`;
         const shareStr = share.sourced
           ? (share.inBand
