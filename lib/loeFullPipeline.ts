@@ -7,7 +7,11 @@ async function analyzePatentsWithClaude(
   drugName: string,
   sponsor: string | undefined,
   orangeBookLoe: string | null,
-  bpciaFloor: string | null = null
+  bpciaFloor: string | null = null,
+  // The indication being valued, so per-patent SCOPE can be judged against it (a method-of-use patent for a
+  // different indication cannot protect this one). Absent → the analyst is told to emit scope as null rather
+  // than guess, and the resolver's type probability carries the risk.
+  indication?: string,
 ) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY not set");
@@ -26,12 +30,33 @@ Use web_search to find:
 3. Biosimilar/generic launch timelines if applicable
 
 Patent types (most to least important for LOE):
-1. Compound/composition — covers the active molecule
-2. Formulation — specific delivery systems
-3. Method-of-use — therapeutic indications
+1. Compound/composition — covers the active molecule, for ALL indications
+2. Formulation — only the specific delivery form
+3. Method-of-use — ONLY its claimed therapeutic indication(s)
 4. Process — manufacturing
 
-Rules: US/EU patents = 20 years from filing. PTE = up to 5 extra years for FDA delay.
+YOU EMIT OBSERVABLES; THE ENGINE COMPUTES DATES. Report what the patent record SAYS. Do NOT add term
+extensions, do NOT apply orphan/NCE exclusivity, and do NOT pick a final LOE year — deterministic code applies
+Patent Term Extension (35 USC 156: +5yr cap, 14yr effective-life cap, and ONLY if the patent is still in force
+at approval) and every statutory exclusivity clock.
+- baseExpiry = earliest filing year + 20. Emit RAW, with NO PTE added.
+- estimatedExpiry: ONLY if a granted term adjustment is actually documented; otherwise null.
+
+SCOPE MATTERS MORE THAN LENGTH. For each patent state whether it covers THE INDICATION BEING VALUED
+(coversValuedIndication). A method-of-use patent claiming a DIFFERENT indication is false — it cannot protect
+this indication's revenue. Composition-of-matter is true. Formulation is true only if the commercial product
+uses that form. Use null ONLY when the claims genuinely cannot be determined.
+
+HOW LIKELY IS EACH PATENT TO ACTUALLY BLOCK GENERIC ENTRY (pProtective, 0-1)? Reason about design-around risk:
+- Compound patents are hard to design around → high.
+- Method-of-use patents are frequently circumvented: a generic omits the patented indication from its label
+  (a "skinny label", FDCA section viii carve-out) and launches for the remaining uses. BUT the Federal
+  Circuit's GSK v. Teva holding stands (Supreme Court denied cert, May 2023), so a generic whose own marketing
+  encourages the carved-out use CAN be liable for induced infringement. So judge the specifics — above all:
+  is there ANY other approved indication to skinny-label into? If not, the carve-out is useless to a generic
+  and the patent is much stronger.
+- ALWAYS pair pProtective with pProtectiveRationale. Without a rationale the engine discards the number and
+  uses its own default, so an unexplained figure is wasted effort.
 
 Respond ONLY with valid JSON:
 {
@@ -40,7 +65,7 @@ Respond ONLY with valid JSON:
   "bestEstimate": <integer year or null>,
   "confidence": "high" | "medium" | "low",
   "keyPatents": [
-    { "number": "<e.g. US9073994B2>", "title": "<title>", "url": "<url>", "type": "compound" | "formulation" | "method-of-use" | "process" | "other", "filingYear": <integer or null>, "estimatedExpiry": <integer or null>, "relevance": "high" | "medium" | "low", "reason": "<one sentence>" }
+    { "number": "<e.g. US9073994B2>", "title": "<title>", "url": "<url>", "type": "compound" | "formulation" | "method-of-use" | "process" | "other", "filingYear": <integer or null>, "baseExpiry": <filing+20, RAW, no PTE, or null>, "estimatedExpiry": <documented granted adjustment only, else null>, "coversValuedIndication": <true | false | null>, "scopeRationale": "<what the claims actually cover>", "pProtective": <0-1 or null>, "pProtectiveRationale": "<design-around reasoning; REQUIRED for pProtective to be used>", "relevance": "high" | "medium" | "low", "reason": "<one sentence>" }
   ],
   "marketIntelligence": [
     { "source": "<publisher>", "url": "<url>", "loeYearMentioned": <integer or null>, "snippet": "<key quote, max 120 chars>" }
@@ -49,9 +74,13 @@ Respond ONLY with valid JSON:
   "caveats": ["<caveat>"]
 }`;
 
-  const userContent = `Drug: ${drugName}${sponsor ? `\nSponsor: ${sponsor}` : ""}
+  const userContent = `Drug: ${drugName}${sponsor ? `\nSponsor: ${sponsor}` : ""}${
+    indication
+      ? `\nINDICATION BEING VALUED: ${indication}\n\nJudge coversValuedIndication for every patent against THIS indication specifically.`
+      : `\n(No specific indication supplied — set coversValuedIndication to null rather than guessing.)`
+  }
 
-Search for patents and LOE estimates, then analyze and provide your LOE assessment.`;
+Search for patents and LOE estimates, then report the patent record.`;
 
   const text = await callClaudeWithSearch({
     anthropicKey,
@@ -105,7 +134,7 @@ export type LoePipelineResult = {
 export async function runLoePipeline(
   drugName: string,
   sponsor?: string,
-  hints?: { launchYear?: number; isBiologic?: boolean }
+  hints?: { launchYear?: number; isBiologic?: boolean; indication?: string }
 ): Promise<LoePipelineResult> {
   // FDA Orange Book lookup runs in parallel with Claude patent analysis
   const obResult = await inferLOE(drugName).catch(() => null);
@@ -126,7 +155,8 @@ export async function runLoePipeline(
     patentAnalysis = await analyzePatentsWithClaude(
       drugName, sponsor,
       isBpcia ? null : claudeObContext,
-      isBpcia ? obResult!.loeDate! : null
+      isBpcia ? obResult!.loeDate! : null,
+      hints?.indication
     );
   } catch { /* proceed without */ }
 

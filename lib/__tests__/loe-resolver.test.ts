@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  resolveLoe, patentsFromKeyPatents, P_PROTECTIVE_DEFAULT, P_PROTECTIVE_BAND,
+  resolveLoe, patentsFromKeyPatents, publicStatementsFromMarketIntel,
+  P_PROTECTIVE_DEFAULT, P_PROTECTIVE_BAND,
   TERM_ODE, TERM_NCE, TERM_BPCIA, PTE_EFFECTIVE_LIFE_CAP_YEARS,
 } from "../loe-resolver";
 import { computeLoeYear } from "../financial-pins";
@@ -269,6 +270,31 @@ describe("patentsFromKeyPatents adapter (/api/patents shape)", () => {
   it("tolerates a non-array (no patents retrieved) without throwing", () => {
     expect(patentsFromKeyPatents(undefined).patents).toEqual([]);
     expect(patentsFromKeyPatents(null).patents).toEqual([]);
+  });
+});
+
+describe("publicStatementsFromMarketIntel adapter", () => {
+  it("keeps only entries that BOTH name a source and mention a year", () => {
+    const out = publicStatementsFromMarketIntel([
+      { source: "EvaluatePharma", loeYearMentioned: 2038, snippet: "LOE 2038" },
+      { source: "no year given", loeYearMentioned: null },
+      { source: "  ", loeYearMentioned: 2040 },
+      { loeYearMentioned: 2041 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ statedYear: 2038, source: "EvaluatePharma" });
+  });
+
+  it("tolerates a missing/non-array marketIntelligence", () => {
+    expect(publicStatementsFromMarketIntel(undefined)).toEqual([]);
+    expect(publicStatementsFromMarketIntel({})).toEqual([]);
+  });
+
+  it("an impossible sourced statement is floored at statute end-to-end (the live 'LOE ~2026')", () => {
+    const statements = publicStatementsFromMarketIntel([{ source: "HCPLive", loeYearMentioned: 2026, snippet: "LOE ~2026" }]);
+    const r = resolveLoe({ approvalYear: 2031, exclusivity: { orphanConfirmedForIndication: true }, publicStatements: statements });
+    expect(r.expectedLoeYear).toBe(2038);
+    expect(r.flags.join(" ")).toMatch(/BELOW the statutory exclusivity floor/);
   });
 });
 

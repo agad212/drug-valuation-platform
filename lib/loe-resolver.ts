@@ -280,6 +280,25 @@ function resolvePatentCeiling(approvalYear: number, patents: PatentInput[], pedi
 }
 
 /**
+ * Adapt the LOE pipeline's `marketIntelligence[]` into PublicLoeStatement[]. Only entries that BOTH name a
+ * source AND mention a year are usable — an unsourced or year-less snippet is not a statement of LOE. The
+ * resolver then floors any statement at the statutory minimum and flags large divergences, so a stale
+ * analyst number cannot pull LOE below what the law already guarantees.
+ */
+export function publicStatementsFromMarketIntel(marketIntelligence: unknown): PublicLoeStatement[] {
+  if (!Array.isArray(marketIntelligence)) return [];
+  const out: PublicLoeStatement[] = [];
+  for (const raw of marketIntelligence) {
+    const m = raw as Record<string, unknown>;
+    const statedYear = typeof m.loeYearMentioned === "number" && Number.isFinite(m.loeYearMentioned) ? m.loeYearMentioned : null;
+    const source = typeof m.source === "string" && m.source.trim() ? m.source.trim() : null;
+    if (statedYear == null || !source) continue;
+    out.push({ statedYear, source, quote: typeof m.snippet === "string" ? m.snippet : undefined });
+  }
+  return out;
+}
+
+/**
  * Resolve LOE for ONE indication as a weighted case distribution.
  *
  * Order of authority:

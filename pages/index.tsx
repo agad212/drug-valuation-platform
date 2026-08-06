@@ -21,7 +21,7 @@ import { selfCheck, viewFromDevPlan } from "../lib/self-check";
 import { validateValuationInputs, applyValidatedUpdates } from "../lib/valuation-input-validator";
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, computeLoeYear } from "../lib/financial-pins";
-import { patentsFromKeyPatents } from "../lib/loe-resolver";
+import { patentsFromKeyPatents, publicStatementsFromMarketIntel } from "../lib/loe-resolver";
 import { classGraveyardProbability } from "../lib/class-risk";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
@@ -881,7 +881,13 @@ export default function HomePage() {
 // the implied approval year is known, instead of the old near-circular path that only honoured a patent
     // expiry when `loeBasis === "patent"` was ALREADY on state — which in practice required a human to click
     // the LOE panel's "Use <year>" button, so the panel never reached revenue by default.
-    const { patents: structuredPatents, flags: patentAdapterFlags } = patentsFromKeyPatents(patentResult?.keyPatents);
+    // SHAPE: runLoePipeline nests the patent analysis under `.patents` (loeFullPipeline returns
+    // `patents: { keyPatents, marketIntelligence, ... }`). Reading `patentResult.keyPatents` found nothing, so
+    // the structured path silently ran exclusivity-only with the whole patent side dead. Prefer the nested
+    // shape, fall back to a top-level one (the standalone /api/patents response, and older saved snapshots).
+    const patentBlock = patentResult?.patents ?? patentResult;
+    const { patents: structuredPatents, flags: patentAdapterFlags } = patentsFromKeyPatents(patentBlock?.keyPatents);
+    const publicStatements = publicStatementsFromMarketIntel(patentBlock?.marketIntelligence);
     const loePin = computeLoeYear({
       launchYear: implied,
       modality: inferModality(v.mechanism),
@@ -889,7 +895,7 @@ export default function HomePage() {
       patentLoeYear: patentLoe,
       // Drives orphan ODE on the structured path REGARDLESS of the LLM-emitted regulatoryContext.
       orphanConfirmed: layer2Result?.orphanConfirmedForIndication === true,
-      structured: { patents: structuredPatents },
+      structured: { patents: structuredPatents, publicStatements },
     });
     if (patentAdapterFlags.length || loePin.loeFlags?.length) {
       // Resolve-or-flag: every skipped patent, clamp and divergence is visible, never silent.
@@ -973,6 +979,10 @@ export default function HomePage() {
     try {
       const params = new URLSearchParams();
       if (v.sponsor) params.set("sponsor", v.sponsor);
+      // The valued (lead) indication, so the patent analyst can judge per-patent SCOPE against it — without
+      // it every patent comes back scope-null and is treated as covering.
+      const leadIndication = v.indications?.[0]?.name || v.indication;
+      if (leadIndication) params.set("indication", leadIndication);
       const res = await fetch(`/api/loe-full/${encodeURIComponent(drug)}?${params}`);
       if (!res.ok) throw new Error("LOE lookup failed");
       const data = await res.json();
