@@ -1114,7 +1114,18 @@ export function buildBaseContext(
       const ind0 = v.indications?.[0];
       const cal = calibrateBaseMarket(peakSalesRaw / 1e6, { tamM: ind0?.tamM, penetrationPct: ind0?.penetrationPct });
       const annualPriceUsd = ind0?.annualPriceUsd && ind0.annualPriceUsd > 0 ? ind0.annualPriceUsd : undefined;
-      const eligiblePatients = annualPriceUsd ? (cal.tamM * 1e6) / annualPriceUsd : undefined;
+      // The eligible-patient COUNT prefers the SOURCED TAM over the peak-anchored one. calibrateBaseMarket
+      // deliberately BACK-SOLVES tamM = peak / penetration so deriveMarket(base) === base peak (the
+      // decoupling identity) — but that makes the count an artifact of whatever peak is in the row. When
+      // the row's peak disagrees with the revenue analysis that justified it (live: row peak $1,100M vs a
+      // sourced TAM $6,300M at 12% ⇒ $756M), the back-solved count inflates: $9,167M/$90k = 101,852 instead
+      // of the sourced $6,300M/$90k = 70,000 — the LLM's OWN stated "~70,000 eligible treated population".
+      // That 45% inflation propagated straight into the niche containment bound, loosening it. A sourced
+      // market size is a stated quantity; a back-solved one is derived — prefer the stated one for counting
+      // patients. cal.tamM is UNCHANGED for the penetration identity, so the decoupling invariant holds.
+      const sourcedTamM = ind0?.tamM != null && ind0.tamM > 0 ? ind0.tamM : null;
+      const countTamM = sourcedTamM ?? cal.tamM;
+      const eligiblePatients = annualPriceUsd ? (countTamM * 1e6) / annualPriceUsd : undefined;
       return { ...cal, annualPriceUsd, eligiblePatients } as BaseMarket;
     })(),
     ptrs:         out.ptrs,

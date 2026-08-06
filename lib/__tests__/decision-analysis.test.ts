@@ -277,6 +277,25 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     expect(under.keyDrivers.find((d) => /Market:/.test(d)) ?? "").not.toMatch(/CLAMPED/);
   });
 
+  it("ELIGIBLE COUNT: prefers the SOURCED TAM over the peak-back-solved one (bound not loosened by a stale peak)", () => {
+    // Live failure this reproduces: the row's peak disagreed with the revenue analysis that justified it,
+    // so the back-solved TAM (peak/penetration) inflated the eligible count 45% above the SOURCED count,
+    // loosening the niche containment bound. Here: sourced TAM $4000M ÷ $100k = 40,000 eligible, while the
+    // peak-back-solved TAM would be 2000/0.25 = $8000M ÷ $100k = 80,000 (a stale-peak artifact).
+    const { base } = mkMarketBase(2000, 4000); // peak 2000 but sourced tamM 4000 at 25% ⇒ they disagree
+    expect(base.market!.eligiblePatients).toBeCloseTo(40000, 0);   // sourced, NOT 80,000
+    // …and the containment bound therefore uses the sourced pool: 40,000 × 0.35 = 14,000.
+    const over = computeOption(base, {
+      id: "b", name: "Over-counted niche",
+      nicheEligiblePatients: 55000,
+      nicheAnnualPriceUsd: 180000, nicheWacComp: "precision analog ~$180k/yr",
+      nichePeakSharePct: 40,       nicheShareComp: "defined-responder analog ~40%",
+    }, undefined);
+    expect(over.nicheProvenance!.eligible).toMatchObject({ supersetEligible: 40000, bound: 14000, clamped: true });
+    // The peak identity is UNTOUCHED (decoupling): Option A still reproduces the base peak exactly.
+    expect(computeOption(base, A).peakSalesM).toBeCloseTo(base.peakSalesM, 6);
+  });
+
   it("WAC FLOOR (2.4): the niche floor is the BROAD WAC, not a heuristic $150k that exceeds it", () => {
     // Broad WAC $100k (mkMarketBase) sits BELOW the $150k heuristic floor. A cited $120k is a legitimate
     // premium over broad and must NOT be clamped up to $150k (which would force niche > broad by fiat).
