@@ -58,14 +58,27 @@ export function inferTherapeuticArea(indication?: string): TherapeuticArea {
   return "general";
 }
 
-export type CppPin = { cpp: number; raw?: number; clamped: boolean; provenance: string; source: string };
+export type CppPin = { cpp: number; raw?: number; clamped: boolean; sourced: boolean; provenance: string; source: string };
 
 /**
- * Pin cost-per-patient to the phase × therapeutic-area benchmark central value
- * (deterministic — the pinned value GOVERNS so identical assets stop swinging).
- * A rare/orphan designation or a rare/small population uses the rare-disease band
- * (already premium-loaded). The LLM's suggestion is recorded and flagged when it
- * falls outside the credible band, but does not drive the math.
+ * Resolve cost-per-patient against the phase × therapeutic-area benchmark band under the SAME
+ * resolve-or-flag contract as resolveNicheParam (band + clamp-to-nearest-EDGE + flag):
+ *   • a sourced estimate INSIDE the band  → USE it (a credible asset-specific number)
+ *   • a sourced estimate OUTSIDE the band → clamp to the NEAREST EDGE + flag
+ *   • no sourced estimate                 → the band central, labeled as a default
+ *
+ * Previously this returned `band.central` UNCONDITIONALLY, which was wrong in two ways: an
+ * out-of-band estimate fell back to the central instead of the nearest bound (flagship: Phase 3
+ * "$145k outside $80k–$140k" → $110k, not $140k), AND an in-band estimate was discarded too — the
+ * sourced number never drove the math at all. Both systematically MIS-cost trials (the flagship
+ * under-costs; a low citation like tau's Phase-2 $95k against the cns $110k–$190k band was
+ * previously over-costed to $150k). The band still BOUNDS the claim; it no longer REPLACES it.
+ *
+ * A rare/orphan designation or a rare/small population uses the rare-disease band (already
+ * premium-loaded). NOTE: that promotion depends on the stage carrying its designation — a
+ * designated asset emitted as regulatoryContext "standard" is still priced on the general band
+ * (the designation-propagation gap). The empirical replacement for these hand-set bands is
+ * calibration; resolve-or-flag is preferred here over inventing a wider band.
  */
 export function pinCostPerPatient(
   phase: string,
@@ -78,15 +91,29 @@ export function pinCostPerPatient(
   const effectiveTA: TherapeuticArea = (rareByDesignation || rareByPopulation) ? "rare_orphan" : therapeuticArea;
   const band = (CPP_BENCHMARKS[effectiveTA] ?? CPP_BENCHMARKS.general)[bucket];
   const llm = opts?.llmCpp;
-  const outOfBand = llm != null && llm > 0 && (llm < band.min || llm > band.max);
+  const cited = llm != null && llm > 0 ? llm : null;
+  const outOfBand = cited != null && (cited < band.min || cited > band.max);
+  const cpp = cited == null
+    ? band.central
+    : outOfBand
+    ? Math.min(band.max, Math.max(band.min, cited)) // nearest edge, not the central default
+    : cited;                                        // in-band citation is credible → it governs
   const taNote = effectiveTA !== therapeuticArea ? `${effectiveTA} (rare/specialized premium)` : effectiveTA;
   const k = (n: number) => `$${Math.round(n / 1000)}k`;
+  // Provenance keeps the `pinned:` prefix every dollar input is asserted to carry, then states
+  // which of the three resolutions produced the value (both sides always shown).
+  const provenance =
+    cited == null
+      ? `pinned: ${taNote} ${bucket} ${k(band.central)} (band central — no sourced per-patient estimate)`
+      : outOfBand
+      ? `pinned: ${taNote} ${bucket} ${k(cpp)} (LLM ${k(cited)} outside ${k(band.min)}–${k(band.max)} band → CLAMPED to nearest edge)`
+      : `pinned: ${taNote} ${bucket} ${k(cpp)} (LLM ${k(cited)} sourced, within ${k(band.min)}–${k(band.max)} band)`;
   return {
-    cpp: band.central,
+    cpp,
     raw: llm,
     clamped: !!outOfBand,
-    provenance: `pinned: ${taNote} ${bucket} ${k(band.central)}` +
-      (outOfBand ? ` (LLM ${k(llm!)} outside ${k(band.min)}–${k(band.max)} band)` : ""),
+    sourced: cited != null && !outOfBand,
+    provenance,
     source: CPP_SOURCE,
   };
 }

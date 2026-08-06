@@ -167,13 +167,13 @@
     "s1_modalityHaircut": 0.8,
     "totalDurationMonths": 101.66667,
     "impliedLaunchYear": 2034,
-    "s0_cpp": 140000,
-    "s1_cpp": 215000,
-    "totalRiskAdjCostM": 19.51153,
+    "s0_cpp": 180000,
+    "s1_cpp": 245000,
+    "totalRiskAdjCostM": 23.44722,
     "peakSalesM": 625,
     "loeYear": 2039,
     "revenuePVM": 538.86035,
-    "eNPVM": 28.9,
-    "eROI": 1.48
+    "eNPVM": 25.0,
+    "eROI": 1.07
   }
 }

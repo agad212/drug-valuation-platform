@@ -230,14 +230,33 @@ describe("Guard 6 — counterfactual directions are correct", () => {
 
 // 7 ── FINANCIAL PINS (Fix #2): out-of-band LLM $ values are anchored/clamped ─────
 describe("Guard 7 — financial inputs are pinned/anchored, not passed through raw", () => {
-  it("CPP: an absurd LLM cost-per-patient is replaced by the phase×TA benchmark central", () => {
-    const wild = pinCostPerPatient("Phase 2", "oncology", { llmCpp: 900_000 });   // absurd
+  // RECONCILED (roadmap 2.3): this guard previously asserted `wild.cpp === sane.cpp` — i.e. that the
+  // band CENTRAL replaced the LLM value regardless of what it said. That contract was wrong in two
+  // ways (an out-of-band value fell to the central instead of the nearest EDGE, and an IN-band value
+  // was discarded so the sourced number never drove the math). The guard's INTENT — an absurd LLM
+  // cost never passes through raw, and is flagged — is preserved and still asserted below; only the
+  // resolution mechanism changed, to match resolveNicheParam (band + clamp-to-edge + flag).
+  it("CPP: an absurd LLM cost-per-patient is CLAMPED to the nearest band edge (never passed through raw)", () => {
+    const wild = pinCostPerPatient("Phase 2", "oncology", { llmCpp: 900_000 });   // absurd (band 100k–180k)
     const sane = pinCostPerPatient("Phase 2", "oncology", { llmCpp: 130_000 });   // in band
-    expect(wild.cpp).toBe(sane.cpp);         // same pinned central regardless of the LLM number
+    expect(wild.cpp).toBe(180_000);          // clamped to the band MAX, not the 140k central
+    expect(wild.cpp).toBeLessThan(900_000);  // the intent: the absurd value never governs
     expect(wild.clamped).toBe(true);         // flagged out-of-band
+    expect(wild.sourced).toBe(false);
     expect(wild.raw).toBe(900_000);          // raw preserved for provenance
     expect(wild.provenance).toMatch(/pinned:/);
-    // rare/orphan designation uses the premium band
+    expect(wild.provenance).toMatch(/CLAMPED to nearest edge/);
+    // A LOW absurd value clamps UP to the band min (previously it was over-costed to the central).
+    const low = pinCostPerPatient("Phase 2", "oncology", { llmCpp: 5_000 });
+    expect(low.cpp).toBe(100_000);
+    expect(low.clamped).toBe(true);
+    // An in-band citation now GOVERNS (it is a credible asset-specific number), and is not clamped.
+    expect(sane.cpp).toBe(130_000);
+    expect(sane.clamped).toBe(false);
+    expect(sane.sourced).toBe(true);
+    // No citation at all → the labeled band central.
+    expect(pinCostPerPatient("Phase 2", "oncology").cpp).toBe(140_000);
+    // rare/orphan designation uses the premium band (130k is BELOW the rare band 150k–280k → clamps up)
     const rare = pinCostPerPatient("Phase 2", "oncology", { regulatoryContext: "orphan", llmCpp: 130_000 });
     expect(rare.cpp).toBeGreaterThan(sane.cpp);
   });
