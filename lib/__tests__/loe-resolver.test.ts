@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  resolveLoe, patentsFromKeyPatents, P_PROTECTIVE_DEFAULT, TERM_ODE, TERM_NCE, TERM_BPCIA,
-  PTE_EFFECTIVE_LIFE_CAP_YEARS,
+  resolveLoe, patentsFromKeyPatents, P_PROTECTIVE_DEFAULT, P_PROTECTIVE_BAND,
+  TERM_ODE, TERM_NCE, TERM_BPCIA, PTE_EFFECTIVE_LIFE_CAP_YEARS,
 } from "../loe-resolver";
 import { computeLoeYear } from "../financial-pins";
 
@@ -113,13 +113,17 @@ describe("LOE resolver — patents", () => {
     });
     expect(r.cases[0].weight).toBeCloseTo(P_PROTECTIVE_DEFAULT["method-of-use"], 6); // 0.30, not 0.95
     expect(r.flags.join(" ")).toMatch(/UNSOURCED/);
-    // …and WITH a rationale it is trusted.
+    // …and WITH a rationale it is trusted. (Value changed 0.75 → 0.55 when the per-type plausibility band
+    // landed: 0.75 is outside the method-of-use band 0.10–0.60 and now clamps to 0.60, which is the band
+    // working as intended. The assertion's INTENT — a rationale-backed override is USED rather than
+    // discarded — is unchanged and still tested; the clamp has its own dedicated test in the adapter block.)
     const ok = resolveLoe({
       approvalYear: 2030,
       exclusivity: { isNCE: true },
-      patents: [{ id: "US-mou", type: "method-of-use", expiryYear: 2044, coversValuedIndication: true, pProtective: 0.75, pProtectiveRationale: "no non-patented indication exists to skinny-label into" }],
+      patents: [{ id: "US-mou", type: "method-of-use", expiryYear: 2044, coversValuedIndication: true, pProtective: 0.55, pProtectiveRationale: "no non-patented indication exists to skinny-label into" }],
     });
-    expect(ok.cases[0].weight).toBeCloseTo(0.75, 6);
+    expect(ok.cases[0].weight).toBeCloseTo(0.55, 6);
+    expect(ok.cases[0].weight).not.toBeCloseTo(P_PROTECTIVE_DEFAULT["method-of-use"], 6); // not the default
   });
 
   it("the strongest-protection patent governs, and a compound patent carries a higher weight than an MOU", () => {
@@ -219,6 +223,47 @@ describe("patentsFromKeyPatents adapter (/api/patents shape)", () => {
     expect(flags.join(" ")).toMatch(/no patent number/);
     expect(flags.join(" ")).toMatch(/no usable expiry/);
     expect(flags.join(" ")).toMatch(/process patent treated as/);
+  });
+
+  it("honours an explicit scope boolean; absent scope is flagged and treated as covering", () => {
+    const { patents, flags } = patentsFromKeyPatents([
+      { number: "US-ipf", type: "method-of-use", baseExpiry: 2041, coversValuedIndication: true },
+      { number: "US-other", type: "method-of-use", baseExpiry: 2044, coversValuedIndication: false },
+      { number: "US-unk", type: "compound", baseExpiry: 2039 },
+    ]);
+    expect(patents[0].coversValuedIndication).toBe(true);
+    expect(patents[1].coversValuedIndication).toBe(false);
+    expect(patents[2].coversValuedIndication).toBeUndefined();
+    expect(flags.join(" ")).toMatch(/US-unk: no explicit indication scope/);
+  });
+
+  it("SECOND-INDICATION SCOPE: an MOU patent for another indication cannot protect this one", () => {
+    // The lead's IPF method-of-use patent must not extend the solid-tumour indication's window.
+    const { patents } = patentsFromKeyPatents([
+      { number: "US-ipf-mou", type: "method-of-use", baseExpiry: 2045, coversValuedIndication: false },
+    ]);
+    const r = resolveLoe({ approvalYear: 2028, exclusivity: { isNCE: true }, patents });
+    expect(r.patentCeilingYear).toBeNull();
+    expect(r.expectedLoeYear).toBe(2033); // NCE 5yr only — NOT 2045
+    expect(r.flags.join(" ")).toMatch(/does not cover the valued indication/);
+  });
+
+  it("a REASONED pProtective is used inside its type band, and clamped outside it", () => {
+    // In band: an MOU patent with no other indication to skinny-label into is genuinely stronger.
+    const inBand = patentsFromKeyPatents([
+      { number: "US-mou", type: "method-of-use", baseExpiry: 2042, coversValuedIndication: true,
+        pProtective: 0.55, pProtectiveRationale: "sole approved indication — no use left to carve out" },
+    ]).patents;
+    const rIn = resolveLoe({ approvalYear: 2030, exclusivity: { isNCE: true }, patents: inBand });
+    expect(rIn.cases[0].weight).toBeCloseTo(0.55, 6);
+    // Out of band (0.95 for a method-of-use) → clamped to the band max 0.60 + flagged.
+    const outBand = patentsFromKeyPatents([
+      { number: "US-mou", type: "method-of-use", baseExpiry: 2042, coversValuedIndication: true,
+        pProtective: 0.95, pProtectiveRationale: "asserts it is bulletproof" },
+    ]).patents;
+    const rOut = resolveLoe({ approvalYear: 2030, exclusivity: { isNCE: true }, patents: outBand });
+    expect(rOut.cases[0].weight).toBeCloseTo(P_PROTECTIVE_BAND["method-of-use"].max, 6);
+    expect(rOut.flags.join(" ")).toMatch(/OUTSIDE the method-of-use band/);
   });
 
   it("tolerates a non-array (no patents retrieved) without throwing", () => {

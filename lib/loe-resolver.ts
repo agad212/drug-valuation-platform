@@ -120,6 +120,20 @@ export const P_PROTECTIVE_DEFAULT: Record<PatentType, number> = {
   other: 0.40,
 };
 
+// Plausibility BAND per patent type for an LLM-reasoned pProtective. The reasoning layer SHOULD move this
+// number — a method-of-use patent with no non-patented indication left to skinny-label into is genuinely
+// stronger than one in a multi-indication drug, and that is exactly the judgment we want reasoned rather
+// than defaulted. But a cited probability must stay inside defensible limits, or "cite anything, then state
+// any number" reopens. Same contract as resolveNicheParam: cited-in-band → trust; out-of-band → clamp to the
+// nearest edge + flag; uncited (no rationale) → the labeled default + flag. HEURISTIC, pre-calibration:
+// replace with observed generic-entry-vs-expiry distributions by patent type.
+export const P_PROTECTIVE_BAND: Record<PatentType, { min: number; max: number }> = {
+  compound: { min: 0.70, max: 0.98 },
+  formulation: { min: 0.30, max: 0.80 },
+  "method-of-use": { min: 0.10, max: 0.60 },
+  other: { min: 0.15, max: 0.70 },
+};
+
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
 /**
@@ -156,11 +170,18 @@ export function patentsFromKeyPatents(keyPatents: unknown): { patents: PatentInp
       flags.push(`${id}: no baseExpiry emitted → used estimatedExpiry ${est}, which may already include an LLM-applied PTE (double-count risk)`);
     }
     if (rawType === "process") flags.push(`${id}: process patent treated as "other" (manufacturing rarely gates LOE)`);
+    // SCOPE: only a definite boolean is honoured. Anything else (absent/null/unparseable) leaves it
+    // undefined → treated as covering, with the patent-type probability carrying the risk. Never inferred
+    // from prose, so a scope claim must be emitted explicitly to narrow a patent out.
+    const coversValuedIndication = typeof k.coversValuedIndication === "boolean" ? k.coversValuedIndication : undefined;
+    if (coversValuedIndication === undefined) {
+      flags.push(`${id}: no explicit indication scope emitted → treated as covering the valued indication (type probability carries the risk)`);
+    }
+    // A REASONED protective probability is accepted only with a rationale, and is banded by type upstream.
+    const pProtective = typeof k.pProtective === "number" && Number.isFinite(k.pProtective) ? k.pProtective : undefined;
+    const pProtectiveRationale = typeof k.pProtectiveRationale === "string" && k.pProtectiveRationale.trim() ? k.pProtectiveRationale.trim() : undefined;
     patents.push({
-      id, type, expiryYear,
-      // Scope is NOT asserted here. The patents endpoint does not emit which indication a patent covers, so
-      // it is left undefined (treated as covering) and the MOU skinny-label probability carries the risk.
-      // A future emission pass should supply coversValuedIndication explicitly.
+      id, type, expiryYear, coversValuedIndication, pProtective, pProtectiveRationale,
       pteEligible: base != null, // §156 is applied deterministically below, only from a base expiry
     });
   }
@@ -230,7 +251,14 @@ function resolvePatentCeiling(approvalYear: number, patents: PatentInput[], pedi
     let pProt = P_PROTECTIVE_DEFAULT[p.type];
     if (p.pProtective != null) {
       if (p.pProtectiveRationale && p.pProtectiveRationale.trim().length > 0) {
-        pProt = clamp01(p.pProtective);
+        const band = P_PROTECTIVE_BAND[p.type];
+        const cited = clamp01(p.pProtective);
+        if (cited < band.min || cited > band.max) {
+          pProt = Math.min(band.max, Math.max(band.min, cited));
+          flags.push(`${p.id} pProtective ${cited} OUTSIDE the ${p.type} band ${band.min}–${band.max} → clamped to ${pProt}`);
+        } else {
+          pProt = cited;
+        }
       } else {
         flags.push(`${p.id} pProtective ${p.pProtective} UNSOURCED (no rationale) → held at the ${p.type} default ${P_PROTECTIVE_DEFAULT[p.type]}`);
       }
