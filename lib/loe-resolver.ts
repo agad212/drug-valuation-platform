@@ -14,23 +14,37 @@
 // launch/approval year — not at auto-value time.
 //
 // ── US regulatory exclusivity (statutory; pinned, not estimated) ──────────────────────────────────────
+// VERIFIED against FDA "Frequently Asked Questions on Patents and Exclusivity" and 21 USC 360cc (2026-08-06):
 //   NCE (new chemical entity)      5 yr from approval           — whole drug (4 yr if a Para-IV filing lands)
-//   ODE (orphan drug exclusivity)  7 yr from approval           — THAT ORPHAN INDICATION ONLY (21 CFR 316)
+//   ODE (orphan drug exclusivity)  7 yr from approval           — SCOPE IS NARROW, see below
 //   "3-year" (new clinical inv.)   3 yr                         — the NEW INDICATION/change only
 //   BPCIA (biologic)              12 yr from first licensure    — reference product; NOT extended by new indications
-//   Pediatric (BPCA)              +6 months                     — rides ON TOP of patents/exclusivities
+//   Pediatric (BPCA)              +6 months                     — added to ALL existing PATENTS **and** exclusivity
+//                                                                 for that active moiety, so it extends BOTH the
+//                                                                 exclusivity floor AND the patent ceiling
 //   QIDP / GAIN                   +5 yr                         — on top of NCE/ODE/3-yr (anti-infectives)
-// A SECOND INDICATION DOES NOT EXTEND THE FIRST: ODE and the 3-year term are indication-scoped and BPCIA's
-// 12 years is not extended at all. Hence exclusivity is resolved PER INDICATION.
+//
+// A SECOND INDICATION DOES NOT EXTEND THE FIRST. 21 USC 360cc(a) bars approval of "the same drug for the
+// same approved use or indication within such rare disease or condition" — narrower even than per-disease:
+// it is per approved USE. The 3-year term is likewise limited to the new conditions of approval, and
+// BPCIA's 12 years is not extended by new indications at all. Hence exclusivity resolves PER INDICATION,
+// and a portfolio's protection is governed by each indication's own clock.
 //
 // ── Patents: what actually protects revenue ──────────────────────────────────────────────────────────
 //   compound / composition-of-matter — STRONG. Blocks the molecule irrespective of indication.
 //   formulation                     — MEDIUM. Designable-around unless it is the only commercial form.
-//   method-of-use                   — WEAK IN PRACTICE. A generic carves the patented indication out of its
-//                                     label (§viii "skinny label") and launches anyway. A 2041 MOU patent is
-//                                     therefore NOT protection to 2041. Induced-infringement exposure for
-//                                     skinny labels is genuinely unsettled post-GSK v. Teva / Amarin v.
-//                                     Hikma — which is exactly why this is a PROBABILITY, never a constant.
+//   method-of-use                   — WEAK IN PRACTICE, BUT NOT TOOTHLESS. A generic carves the patented
+//                                     indication out of its label (§viii "skinny label") and launches for the
+//                                     remaining uses, so a 2041 MOU patent is NOT protection to 2041.
+//                                     HOWEVER (verified 2026-08-06): the Federal Circuit's GSK v. Teva
+//                                     holding STANDS — the Supreme Court DENIED certiorari on 2023-05-15
+//                                     (Teva Pharms. USA v. GlaxoSmithKline, No. 22-37; Kavanaugh, J., would
+//                                     have granted; the SG filed after a CVSG). So a skinny-label generic CAN
+//                                     be liable for induced infringement where its own conduct/marketing
+//                                     encourages the carved-out use. Net: the carve-out means an MOU patent
+//                                     rarely BLOCKS entry outright, while inducement exposure gives it real
+//                                     but CONDUCT-DEPENDENT settlement/delay leverage. Fact-dependent and
+//                                     bimodal — exactly why this must be a PROBABILITY, never a constant.
 //   PTE (35 USC §156): up to 5 yr for review time, capped at 14 yr of effective life post-approval, ONE
 //   patent only, and the patent MUST still be in force at approval. (PTA §154(b) is a separate PTO-delay
 //   restoration and is assumed already baked into a cited expiry.)
@@ -139,7 +153,7 @@ function resolveExclusivityFloor(approvalYear: number, ex: ExclusivityInput): { 
  * A patent that has already EXPIRED at approval cannot protect the product and cannot receive PTE —
  * the single most consequential rule here (a pre-approval compound-patent expiry is commercially moot).
  */
-function resolvePatentCeiling(approvalYear: number, patents: PatentInput[]): {
+function resolvePatentCeiling(approvalYear: number, patents: PatentInput[], pediatric = false): {
   year: number | null; patent: PatentInput | null; p: number; flags: string[]; note: string;
 } {
   const flags: string[] = [];
@@ -163,6 +177,10 @@ function resolvePatentCeiling(approvalYear: number, patents: PatentInput[]): {
       effective = Math.min(withPte, cap);
       if (withPte > cap) flags.push(`${p.id} PTE clipped by the §156 14-yr effective-life cap (${cap})`);
     }
+    // Pediatric exclusivity (BPCA) is added to ALL existing PATENTS as well as exclusivity for the active
+    // moiety — per FDA: "a 6-month period of exclusivity is added to all existing patents and exclusivity on
+    // all applications held by the sponsor for that active moiety." It therefore rides on top of PTE too.
+    if (pediatric) effective = Math.round(effective + TERM_PEDIATRIC);
     // Probability this patent actually holds: a cited override needs a rationale, else the type default.
     let pProt = P_PROTECTIVE_DEFAULT[p.type];
     if (p.pProtective != null) {
@@ -211,7 +229,7 @@ export function resolveLoe(input: {
 
   const floor = resolveExclusivityFloor(approvalYear, exclusivity);
   flags.push(...floor.flags);
-  const ceiling = resolvePatentCeiling(approvalYear, patents);
+  const ceiling = resolvePatentCeiling(approvalYear, patents, exclusivity.pediatricExclusivity === true);
   flags.push(...ceiling.flags);
 
   const sourced = (input.publicStatements ?? []).filter((s) => s.source?.trim() && Number.isFinite(s.statedYear));

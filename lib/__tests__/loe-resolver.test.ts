@@ -84,6 +84,26 @@ describe("LOE resolver — patents", () => {
     expect(r.flags.join(" ")).toMatch(/14-yr effective-life cap/);
   });
 
+  it("pediatric exclusivity extends the PATENT ceiling too, not just the exclusivity floor", () => {
+    // Per FDA: the 6-month period "is added to all existing PATENTS and exclusivity on all applications held
+    // by the sponsor for that active moiety" — so it rides on top of the patent term (and of PTE), not only
+    // the statutory floor. Control below proves the assertion discriminates.
+    const withPed = resolveLoe({
+      approvalYear: 2030,
+      exclusivity: { isNCE: true, pediatricExclusivity: true },
+      patents: [{ id: "US-com", type: "compound", expiryYear: 2042, coversValuedIndication: true }],
+    });
+    const noPed = resolveLoe({
+      approvalYear: 2030,
+      exclusivity: { isNCE: true },
+      patents: [{ id: "US-com", type: "compound", expiryYear: 2042, coversValuedIndication: true }],
+    });
+    expect(noPed.patentCeilingYear).toBe(2042);
+    expect(withPed.patentCeilingYear).toBe(2043);        // +6mo on the patent, rounded
+    expect(noPed.exclusivityFloorYear).toBe(2035);
+    expect(withPed.exclusivityFloorYear).toBe(2036);     // +6mo on the floor as well
+  });
+
   it("an UNSOURCED pProtective override is not trusted — held at the type default + flagged", () => {
     const r = resolveLoe({
       approvalYear: 2030,
