@@ -28,7 +28,37 @@ export function computePTRS(v: Valuation): { ptrs: number; mechLabel: string } {
 
 // ─── Revenue PV ───────────────────────────────────────────────────────────────
 
+/**
+ * Revenue PV. When the valuation carries an LOE CASE DISTRIBUTION (`loeCases`, produced by
+ * lib/loe-resolver — e.g. 30% "the method-of-use patent holds → 2041" / 70% "it doesn't → the statutory
+ * floor 2038"), this returns the weight-averaged revenue PV **over the cases**, i.e. E[revenuePV(LOE)].
+ *
+ * That is not cosmetic. Revenue PV is NONLINEAR in the LOE year (each extra protected year adds a
+ * discounted full-price year, and the post-LOE tail is eroded), so E[revenuePV(LOE)] ≠ revenuePV(E[LOE]).
+ * Valuing the distribution is therefore materially different from — and more correct than — valuing the
+ * single weight-averaged LOE year.
+ *
+ * CAPABILITY GATE: no `loeCases` (or a single case) → the exact original single-LOE computation, so every
+ * existing caller and the FROZEN deterministic fixtures are byte-identical.
+ */
 export function computeRevenuePV(v: Valuation): number {
+  const rawCases = (v as any).loeCases;
+  if (Array.isArray(rawCases) && rawCases.length > 1) {
+    const cases = rawCases.filter(
+      (c: any) => c && typeof c.loeYear === "number" && Number.isFinite(c.loeYear) && typeof c.weight === "number" && c.weight > 0,
+    );
+    const wsum = cases.reduce((s: number, c: any) => s + c.weight, 0);
+    if (cases.length > 1 && wsum > 0) {
+      // Normalize defensively so a malformed weight vector cannot scale revenue up or down.
+      const pv = cases.reduce((s: number, c: any) => s + c.weight * revenuePvForLoeYear({ ...v, loeYear: c.loeYear }), 0);
+      return pv / wsum;
+    }
+  }
+  return revenuePvForLoeYear(v);
+}
+
+/** The single-LOE revenue PV — the original computation, unchanged. */
+function revenuePvForLoeYear(v: Valuation): number {
   if (!v.launchYear || !v.peakSales) return 0;
   // If LOE missing or before launch, default to launchYear + 10
   const effectiveLoeYear = (!v.loeYear || v.loeYear < v.launchYear)
@@ -139,7 +169,12 @@ export function computeOutputs(v: Valuation): {
       }
 
       const indPtrs = ind.ptrs ?? ptrs;
-      const indRevPV = computeRevenuePV({ ...v, peakSales: ind.peakSales ?? v.peakSales, launchYear: effLaunch, loeYear: ind.loeYear ?? v.loeYear });
+      // LOE cases are SCOPED per indication: exclusivity and method-of-use patents are indication-specific
+      // (21 USC 360cc(a) is per approved use), so the lead's distribution must not leak onto an indication
+      // that has its own LOE. Precedence: the indication's own cases → else, if it has its own loeYear, NO
+      // distribution (that single year governs) → else inherit the lead/global distribution.
+      const indLoeCases = (ind as any).loeCases ?? (ind.loeYear != null ? undefined : (v as any).loeCases);
+      const indRevPV = computeRevenuePV({ ...v, peakSales: ind.peakSales ?? v.peakSales, launchYear: effLaunch, loeYear: ind.loeYear ?? v.loeYear, loeCases: indLoeCases } as Valuation);
       const indDevCost = ind.devCostPV ?? globalDevCostShare;
       const standalone = indPtrs * indRevPV - indDevCost;
 

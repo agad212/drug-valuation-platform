@@ -910,6 +910,10 @@ export default function HomePage() {
       loeYear: newLoe,
       loeBasis: loePin.basis,
       loeExclusivityYears: loePin.exclusivityYears,
+      // The weighted LOE distribution, so revenue is valued as E[revenuePV(LOE)] across cases rather than at
+      // the single weight-averaged year (revenue PV is nonlinear in LOE). Only meaningful with >1 case; a
+      // single-case resolution leaves the engine on its original single-LOE path.
+      loeCases: (loePin.cases?.length ?? 0) > 1 ? loePin.cases!.map((c) => ({ loeYear: c.loeYear, weight: c.weight, basis: c.basis })) : undefined,
       indications: cur.indications?.length
         ? cur.indications.map((ind, i) => (i === 0 ? { ...ind, launchYear: implied, loeYear: newLoe } : ind))
         : cur.indications,
