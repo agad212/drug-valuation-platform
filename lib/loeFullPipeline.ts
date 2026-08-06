@@ -35,6 +35,12 @@ Patent types (most to least important for LOE):
 3. Method-of-use — ONLY its claimed therapeutic indication(s)
 4. Process — manufacturing
 
+ORPHAN DESIGNATION — you are already searching the registries and trade press that report it, so report it
+as STRUCTURED data. FDA/EMA orphan designations are INDICATION-SPECIFIC: 7-year US orphan exclusivity runs
+per approved use (21 USC 360cc(a)), so a designation granted for a DIFFERENT disease earns this valuation
+nothing. Set confirmedForValuedIndication = true ONLY when you positively find a designation granted for the
+indication being valued, and name the source. No source → it is not trusted and the engine default-denies.
+
 YOU EMIT OBSERVABLES; THE ENGINE COMPUTES DATES. Report what the patent record SAYS. Do NOT add term
 extensions, do NOT apply orphan/NCE exclusivity, and do NOT pick a final LOE year — deterministic code applies
 Patent Term Extension (35 USC 156: +5yr cap, 14yr effective-life cap, and ONLY if the patent is still in force
@@ -70,6 +76,12 @@ Respond ONLY with valid JSON:
   "marketIntelligence": [
     { "source": "<publisher>", "url": "<url>", "loeYearMentioned": <integer or null>, "snippet": "<key quote, max 120 chars>" }
   ],
+  "orphanDesignation": {
+    "confirmedForValuedIndication": <true | false | null>,
+    "grantedDate": "<e.g. 2025-07 or null>",
+    "source": "<the publisher/registry that states it — REQUIRED for this to be trusted, else null>",
+    "rationale": "<one sentence: which indication the designation was granted for>"
+  },
   "patentContext": "<2-3 sentences>",
   "caveats": ["<caveat>"]
 }`;
@@ -117,6 +129,14 @@ export type LoePipelineResult = {
     loeDate: string | null;
     reasons: string[];
     sources: { label: string; url?: string }[];
+  } | null;
+  // Indication-scoped orphan designation, default-denied unless explicitly confirmed WITH a named source.
+  orphanDesignation: {
+    confirmedForValuedIndication: boolean;
+    grantedDate: string | null;
+    source: string | null;
+    rationale: string | null;
+    unsourcedClaim: boolean;
   } | null;
   patents: {
     found: number;
@@ -216,5 +236,24 @@ export async function runLoePipeline(
       caveats: patentAnalysis.caveats || [],
       marketIntelligence: patentAnalysis.marketIntelligence || [],
     } : null,
+    // Structured, indication-scoped orphan designation from the retriever that actually reads the orphan
+    // registries/trade press. A SECOND independent confirmation path alongside /api/ptrs-layer2: the two
+    // endpoints search separately, and on the flagship the LOE pipeline found "FDA granted Orphan Drug
+    // Designation … for IPF" while layer2 returned "standard", so the 7-year term was lost. Default-deny:
+    // trusted only when confirmedForValuedIndication is explicitly true AND a source is named.
+    orphanDesignation: (() => {
+      const o = patentAnalysis?.orphanDesignation;
+      if (!o || typeof o !== "object") return null;
+      const source = typeof o.source === "string" && o.source.trim() ? o.source.trim() : null;
+      const confirmed = o.confirmedForValuedIndication === true && !!source;
+      return {
+        confirmedForValuedIndication: confirmed,
+        grantedDate: typeof o.grantedDate === "string" ? o.grantedDate : null,
+        source,
+        rationale: typeof o.rationale === "string" ? o.rationale : null,
+        // Surfaces the "claimed but uncited" case rather than silently dropping it.
+        unsourcedClaim: o.confirmedForValuedIndication === true && !source,
+      };
+    })(),
   };
 }

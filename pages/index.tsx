@@ -874,56 +874,104 @@ export default function HomePage() {
     const implied = devPlan.impliedLaunchYear;
     const current = v.indications?.[0]?.launchYear ?? v.launchYear;
     if (current === implied) return;
-    // Fix #2: LOE from the pinned rule (real patent when cited, else labeled
-    // exclusivity term by modality/designation) anchored to the timeline launch.
-    const patentLoe = v.loeBasis === "patent" ? v.loeYear : null;
-    // Roadmap 4.2: resolve LOE from STRUCTURED CITED OBSERVABLES (patents × statutory exclusivity) now that
-// the implied approval year is known, instead of the old near-circular path that only honoured a patent
-    // expiry when `loeBasis === "patent"` was ALREADY on state — which in practice required a human to click
-    // the LOE panel's "Use <year>" button, so the panel never reached revenue by default.
-    // SHAPE: runLoePipeline nests the patent analysis under `.patents` (loeFullPipeline returns
-    // `patents: { keyPatents, marketIntelligence, ... }`). Reading `patentResult.keyPatents` found nothing, so
-    // the structured path silently ran exclusivity-only with the whole patent side dead. Prefer the nested
-    // shape, fall back to a top-level one (the standalone /api/patents response, and older saved snapshots).
-    const patentBlock = patentResult?.patents ?? patentResult;
-    const { patents: structuredPatents, flags: patentAdapterFlags } = patentsFromKeyPatents(patentBlock?.keyPatents);
-    const publicStatements = publicStatementsFromMarketIntel(patentBlock?.marketIntelligence);
-    const loePin = computeLoeYear({
-      launchYear: implied,
-      modality: inferModality(v.mechanism),
-      regulatoryContext: devPlanRegContext as any,
-      patentLoeYear: patentLoe,
-      // Drives orphan ODE on the structured path REGARDLESS of the LLM-emitted regulatoryContext.
-      orphanConfirmed: layer2Result?.orphanConfirmedForIndication === true,
-      structured: { patents: structuredPatents, publicStatements },
-    });
-    if (patentAdapterFlags.length || loePin.loeFlags?.length) {
-      // Resolve-or-flag: every skipped patent, clamp and divergence is visible, never silent.
-      console.log(JSON.stringify({ tag: "loe-resolution", loeYear: loePin.loeYear, basis: loePin.basis, cases: loePin.cases, flags: [...patentAdapterFlags, ...(loePin.loeFlags ?? [])] }));
-    }
-    const newLoe = loePin.loeYear;
-    setLoeProvenance(loePin.provenance);
-    const loeChanged = newLoe !== v.loeYear;
     setV((cur) => ({
       ...cur,
       launchYear: implied,
-      loeYear: newLoe,
-      loeBasis: loePin.basis,
-      loeExclusivityYears: loePin.exclusivityYears,
-      // The weighted LOE distribution, so revenue is valued as E[revenuePV(LOE)] across cases rather than at
-      // the single weight-averaged year (revenue PV is nonlinear in LOE). Only meaningful with >1 case; a
-      // single-case resolution leaves the engine on its original single-LOE path.
-      loeCases: (loePin.cases?.length ?? 0) > 1 ? loePin.cases!.map((c) => ({ loeYear: c.loeYear, weight: c.weight, basis: c.basis })) : undefined,
       indications: cur.indications?.length
-        ? cur.indications.map((ind, i) => (i === 0 ? { ...ind, launchYear: implied, loeYear: newLoe } : ind))
+        ? cur.indications.map((ind, i) => (i === 0 ? { ...ind, launchYear: implied } : ind))
         : cur.indications,
     }));
     pushToast(
-      `Launch year set to ${implied} from dev plan timeline (${Math.round(devPlan.totalDurationMonths)} months to approval).` +
-      (loeChanged ? ` LOE ${newLoe} — ${loePin.provenance}.` : ""),
-      "info", loeChanged ? 9000 : 6000,
+      `Launch year set to ${implied} from dev plan timeline (${Math.round(devPlan.totalDurationMonths)} months to approval).`,
+      "info", 6000,
     );
   }, [devPlan?.impliedLaunchYear]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── LOE resolution (roadmap 4.2) — its OWN effect, deliberately ─────────────
+  // This used to live inside the launch-sync effect above, where THREE separate early returns prevented it
+  // from ever running:
+  //   1. `if (current === implied) return` — the launch-sync guard. When auto-value already set launchYear to
+  //      the year the dev plan implies (the common case), the effect returned before reaching LOE at all.
+  //      LOE was effectively gated on the launch year CHANGING, which is the wrong trigger entirely.
+  //   2. the silent-restore guard — so a restored session never resolved LOE either.
+  //   3. deps of `[devPlan?.impliedLaunchYear]` only — so the LOE lookup completing (patentResult arriving)
+  //      or orphan being confirmed (layer2Result) could never trigger resolution.
+  // The correct trigger is "the dev plan and its LOE inputs are available", which is what this depends on.
+  // Every statutory clock runs from APPROVAL, so it still waits for the dev plan's implied year.
+  useEffect(() => {
+    if (!devPlan) return;
+    const approvalYear = devPlan.impliedLaunchYear;
+    if (!approvalYear) return;
+    // Wait for the restore-faithfulness assert to finish before re-resolving: a snapshot saved before this
+    // feature existed carries a differently-derived LOE, and re-resolving mid-verification would trip the
+    // assert and surface a spurious "couldn't be restored faithfully" banner. Once verification clears,
+    // restoreVerify flips to null, this effect re-runs, and LOE resolves normally.
+    if (restoreVerify) return;
+    // runLoePipeline nests the patent analysis under `.patents`; fall back to a top-level shape (the
+    // standalone /api/patents response, and older saved snapshots).
+    const patentBlock = patentResult?.patents ?? patentResult;
+    const { patents: structuredPatents, flags: patentAdapterFlags } = patentsFromKeyPatents(patentBlock?.keyPatents);
+    const publicStatements = publicStatementsFromMarketIntel(patentBlock?.marketIntelligence);
+    // Orphan designation from EITHER retriever (orphanDesignation lives at the pipeline result's top level).
+    const loeOrphan = patentResult?.orphanDesignation;
+    const orphanFromLayer2 = layer2Result?.orphanConfirmedForIndication === true;
+    const orphanFromLoe = loeOrphan?.confirmedForValuedIndication === true;
+    const orphanConfirmed = orphanFromLayer2 || orphanFromLoe;
+    const loePin = computeLoeYear({
+      launchYear: approvalYear,
+      modality: inferModality(v.mechanism),
+      regulatoryContext: devPlanRegContext as any,
+      // The legacy circular input is deliberately NOT passed: on the structured path a patent expiry comes
+      // from the patent record itself, not from whatever was already sitting on state.
+      patentLoeYear: null,
+      // Drives orphan ODE REGARDLESS of the LLM-emitted stage regulatoryContext, and accepts EITHER of two
+      // independent, indication-scoped, cited confirmations. The two retrievers search separately: on the
+      // flagship the LOE pipeline found "FDA granted Orphan Drug Designation … for IPF" while ptrs-layer2
+      // returned "standard", so the 7-year term was lost even though the run had already confirmed it.
+      // Either source suffices; both default-deny without an explicit confirmation.
+      orphanConfirmed: orphanConfirmed,
+      structured: { patents: structuredPatents, publicStatements },
+    });
+    // Resolve-or-flag: the resolution, its cases, and every skipped patent / clamp / divergence are logged
+    // so the outcome is inspectable in production rather than silent.
+    console.log(JSON.stringify({
+      tag: "loe-resolution", approvalYear, loeYear: loePin.loeYear, basis: loePin.basis,
+      exclusivityYears: loePin.exclusivityYears, cases: loePin.cases,
+      orphanConfirmed, orphanFromLayer2, orphanFromLoe,
+      orphanSource: loeOrphan?.source ?? null,
+      patentsIn: structuredPatents.length, publicStatementsIn: publicStatements.length,
+      flags: [
+        ...patentAdapterFlags,
+        ...(loePin.loeFlags ?? []),
+        // Resolve-or-flag: an orphan claim without a named source is surfaced, not silently dropped.
+        ...(loeOrphan?.unsourcedClaim ? ["orphan designation claimed but UNSOURCED → not trusted (default-deny)"] : []),
+        ...(orphanFromLoe && !orphanFromLayer2 ? [`orphan confirmed by the LOE retriever (${loeOrphan?.source}) but NOT by ptrs-layer2 — the two retrievers disagree`] : []),
+      ],
+    }));
+    setLoeProvenance(loePin.provenance);
+    const cases = (loePin.cases?.length ?? 0) > 1
+      ? loePin.cases!.map((c) => ({ loeYear: c.loeYear, weight: c.weight, basis: c.basis }))
+      : undefined;
+    setV((cur) => {
+      // Return the SAME object when nothing changed — React bails out, so this cannot loop.
+      const sameCases = JSON.stringify((cur as any).loeCases ?? null) === JSON.stringify(cases ?? null);
+      if (cur.loeYear === loePin.loeYear && cur.loeBasis === loePin.basis && sameCases) return cur;
+      return {
+        ...cur,
+        loeYear: loePin.loeYear,
+        loeBasis: loePin.basis,
+        loeExclusivityYears: loePin.exclusivityYears,
+        // The weighted distribution, so revenue is valued as E[revenuePV(LOE)] across cases rather than at
+        // the single weight-averaged year (revenue PV is nonlinear in LOE). >1 case only; a single-case
+        // resolution leaves the engine on its original single-LOE path.
+        loeCases: cases,
+        indications: cur.indications?.length
+          ? cur.indications.map((ind, i) => (i === 0 ? { ...ind, loeYear: loePin.loeYear } : ind))
+          : cur.indications,
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [devPlan?.impliedLaunchYear, patentResult, layer2Result, devPlanRegContext, restoreVerify]);
 
   function updateDevPlanN(id: string, n: number) {
     setDevPlanStages((prev) => prev?.map((s) =>
