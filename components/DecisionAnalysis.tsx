@@ -276,10 +276,10 @@ function ResultCard({
         </div>
       )}
 
-      {/* Metrics (left) + dev-path (right) on a full-width card so the dev-path never clips */}
+      {/* Metrics first (capped width so the tiles don't stretch across the whole card), then the
+          dev-path on its OWN FULL-WIDTH row below — see the note at the spine. */}
       <div style={{ padding: "14px 14px 6px" }}>
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+        <div style={{ maxWidth: 620 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           {/* eROI */}
           <div>
@@ -403,18 +403,20 @@ function ResultCard({
           </div>
         )}
 
-        </div>{/* /left metrics column */}
-        <div style={{ flex: "2 1 340px", minWidth: 0 }}>
+        </div>{/* /metrics (capped width) */}
+
         {/* Per-option development path — the engine's already-computed plan for THIS option, rendered
-            with the same trial-box spine as the base dev-path (render-only; additive surfacing). */}
+            with the same trial-box spine as the base dev-path (render-only; additive surfacing).
+            Gets its OWN FULL-WIDTH row (it used to sit in a ~600px flex column BESIDE the metrics, which
+            the wider trial boxes overflowed by ~10-70px → a horizontal scrollbar inside every option
+            card). At full card width the ~670px spine fits with the wide boxes + arrows intact — no
+            scroll, and no need to shrink boxes (which would re-introduce the "Phas…" clipping). */}
         {result.devPlan ? (
-          <div>
+          <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.07em" }}>Development path</div>
             <DevPathSpine devPlan={result.devPlan} />
           </div>
         ) : null}
-        </div>{/* /right dev-path column */}
-        </div>{/* /metrics+devpath flex row */}
 
         {/* Key drivers */}
         {keyDrivers.length > 0 && (
