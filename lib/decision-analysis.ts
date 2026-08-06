@@ -21,7 +21,7 @@ import { computeDevPlan, resolveRegAcceptanceLevel } from "./dev-plan";
 import { resolveStageTarget } from "./trial-design-interpreter";
 import type { TrialDesignSpec, FamilyFlag, Assumption } from "./trial-design-interpreter";
 import {
-  deriveMarket, calibrateBaseMarket, deriveEnrichedNiche,
+  deriveMarket, calibrateBaseMarket, deriveEnrichedNiche, resolveNicheEligible, type NicheEligibleResolution,
   NICHE_PRICE_DEFAULT_USD, NICHE_SHARE_DEFAULT_PCT, BIOMARKER_PREVALENCE_DEFAULT,
   NICHE_WAC_BAND_USD, NICHE_SHARE_BAND_PCT,
   type MarketParams, type BaseMarket,
@@ -271,6 +271,9 @@ export type OptionResult = {
   nicheProvenance?: {
     wac:   { value: number; comp: string | null; sourced: boolean; inBand: boolean };
     share: { value: number; comp: string | null; sourced: boolean; inBand: boolean };
+    // The eligible-COUNT containment resolution (clamped / unbounded / trusted) — structured so the critic
+    // and calibration can query "was this count contained, against what?" as data, not prose.
+    eligible?: NicheEligibleResolution;
   };
 
   // Layer 2 design-bridge provenance (present only when a design spec was applied): where it targeted,
@@ -715,13 +718,18 @@ export function computeOption(
     const marketChanging = isBiomarkerEnriched(option) || option.inclusionCriteria === "tight";
 
     if (explicitNicheParams || marketChanging) {
-      // Eligible COUNT: an explicit absolute wins; else derive it from the base eligible
-      // pop × the biomarker prevalence (prevalence is a real driver of the COUNT — allowed).
-      const nicheEligiblePatients =
-        option.nicheEligiblePatients
-        ?? (baseMarket.eligiblePatients != null
-              ? baseMarket.eligiblePatients * (option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT)
-              : null);
+      // Eligible COUNT — CONTAINED (resolve-or-flag, market-model.resolveNicheEligible): a cited absolute
+      // is a CLAIM that must agree with the base pool it is carved from (superset × prevalence); above the
+      // bound it is clamped + flagged, below it is trusted, and with no base pool it is flagged UNBOUNDED.
+      // Previously a cited absolute short-circuited the base-relative path with NO check, which let a "35%
+      // subset" assert more patients than its superset (55,000 vs a ~43,650 pool → 3.6× into peak/eNPV).
+      const prevalence = option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT;
+      const eligible = resolveNicheEligible({
+        cited: option.nicheEligiblePatients,
+        supersetEligible: baseMarket.eligiblePatients,
+        prevalence,
+      });
+      const nicheEligiblePatients = eligible.value;
 
       if (nicheEligiblePatients != null) {
         // Price and share must each be PINNED to a NAMED comparator (nicheWacComp / nicheShareComp)
@@ -732,7 +740,7 @@ export function computeOption(
         // COME FROM is gated — deriveEnrichedNiche receives the resolved values.)
         const wac   = resolveNicheParam(option.nicheAnnualPriceUsd, option.nicheWacComp,   NICHE_WAC_BAND_USD,   NICHE_PRICE_DEFAULT_USD);
         const share = resolveNicheParam(option.nichePeakSharePct,   option.nicheShareComp, NICHE_SHARE_BAND_PCT, NICHE_SHARE_DEFAULT_PCT);
-        nicheProvenance = { wac, share };
+        nicheProvenance = { wac, share, eligible };
         const niche = deriveEnrichedNiche({ nicheEligiblePatients, nicheAnnualPriceUsd: wac.value, nichePeakSharePct: share.value });
         peakSalesM = niche.peakSalesM;
         const wacStr = wac.sourced
@@ -745,13 +753,17 @@ export function computeOption(
               ? `share ${share.value.toFixed(0)}% pinned to ${share.comp}`
               : `share ${share.value.toFixed(0)}% [cited ${share.comp} but OUT-OF-BAND → clamped to heuristic band ${NICHE_SHARE_BAND_PCT.min}–${NICHE_SHARE_BAND_PCT.max}%]`)
           : `share ${share.value.toFixed(0)}% [UNSOURCED estimate — defined-responder midpoint (heuristic), no comp cited]`;
-        const sourcing = [
-          wacStr,
-          shareStr,
-          option.nicheEligiblePatients == null
-            ? `count from base eligible × prevalence ${(option.biomarkerPrevalence ?? BIOMARKER_PREVALENCE_DEFAULT)}`
-            : null,
-        ].filter(Boolean);
+        // The COUNT's resolve-or-flag surface: a clamp (or an unbounded accept) must be VISIBLE, never
+        // silent — same discipline as the WAC/share band flags above.
+        const fmtN = (n: number) => Math.round(n).toLocaleString();
+        const countStr = eligible.derived
+          ? `count from base eligible ${fmtN(eligible.supersetEligible!)} × prevalence ${prevalence}`
+          : eligible.unbounded
+          ? `count ${fmtN(eligible.value!)} [UNBOUNDED — no base eligible population to contain it against]`
+          : eligible.clamped
+          ? `count CLAMPED to ${fmtN(eligible.value!)} [cited ${fmtN(eligible.cited!)} EXCEEDS the base-population bound (base eligible ${fmtN(eligible.supersetEligible!)} × prevalence ${prevalence} = ${fmtN(eligible.bound!)})${eligible.exceededSuperset ? " — STRUCTURAL: the cited subset exceeds the ENTIRE base eligible population" : ""}]`
+          : `count ${fmtN(eligible.value!)} cited, within the base-population bound ${fmtN(eligible.bound!)}`;
+        const sourcing = [wacStr, shareStr, countStr].filter(Boolean);
         marketDrivers.push(niche.provenance +
           (option.nicheMarketBasis ? ` — ${option.nicheMarketBasis}` : "") +
           ` [${sourcing.join("; ")}]`);

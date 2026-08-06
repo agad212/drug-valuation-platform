@@ -90,6 +90,51 @@ export const BIOMARKER_PREVALENCE_DEFAULT = 0.35;    // enriched-eligible fracti
 export const NICHE_WAC_BAND_USD = { min: 150_000, max: 300_000 };  // heuristic, pre-calibration
 export const NICHE_SHARE_BAND_PCT = { min: 20, max: 50 };          // heuristic, pre-calibration
 
+// ─── Containment bound on the niche eligible COUNT (resolve-or-flag) ────────────
+// WAC and peak share each go through resolveNicheParam (band + citation + clamp + flag). The eligible
+// COUNT went through NOTHING: an LLM-supplied absolute short-circuited the base-relative path, so a
+// "35% enriched subset" could assert MORE patients than the broad population it is carved from (observed
+// live: 55,000 cited against a ~43,650 base pool → a 3.6× overstatement that flowed straight into TAM,
+// peak, and eNPV). A subset cannot exceed its superset; this makes that an enforced INPUT invariant.
+//
+// The bound is the enriched FRACTION of the base pool (superset × prevalence) — not merely the superset,
+// which would still admit ~2.9× of the observed error. The base-relative product is exactly the value the
+// fallback path already computed, so the correct derivation becomes the authority and a cited absolute is
+// treated as a CLAIM that must agree with it. Never silently trusted: no base pool → allowed + flagged.
+export type NicheEligibleResolution = {
+  value: number | null;         // the count actually USED (null → none derivable; caller holds at base)
+  cited: number | null;         // the asserted absolute, if any
+  supersetEligible: number | null;
+  prevalence: number;
+  bound: number | null;         // supersetEligible × prevalence
+  derived: boolean;             // count came from the base-relative path (bounded by construction)
+  clamped: boolean;             // cited exceeded the bound → clamped down to it
+  exceededSuperset: boolean;    // cited exceeded the WHOLE base pool (structurally impossible)
+  unbounded: boolean;           // cited accepted with no base pool to contain it against
+};
+
+export function resolveNicheEligible(p: {
+  cited?: number | null;
+  supersetEligible?: number | null;
+  prevalence: number;
+}): NicheEligibleResolution {
+  const prevalence = p.prevalence;
+  const superset = p.supersetEligible != null && p.supersetEligible > 0 ? p.supersetEligible : null;
+  const bound = superset != null ? superset * prevalence : null;
+  const cited = p.cited != null && p.cited > 0 ? p.cited : null;
+  const nil = { cited, supersetEligible: superset, prevalence, bound, derived: false, clamped: false, exceededSuperset: false, unbounded: false };
+
+  // No cited absolute → derive from the base pool (the correct path; contained by construction).
+  if (cited == null) return { ...nil, value: bound, derived: true };
+  // Cited, but no base pool to contain it against → use it, and FLAG (never silently trusted).
+  if (bound == null) return { ...nil, value: cited, unbounded: true };
+  // Cited within the enriched fraction → trust it (a smaller niche is the conservative direction).
+  if (cited <= bound) return { ...nil, value: cited };
+  // Cited exceeds the enriched fraction → clamp to the bound + flag; escalate when it exceeds the whole
+  // pool (a genuine subset ⊄ superset violation; prevalence > 1 is a documented deliberate broadening).
+  return { ...nil, value: bound, clamped: true, exceededSuperset: prevalence <= 1 && cited > superset! };
+}
+
 /**
  * Re-derive a niche market bottom-up from its OWN absolute parameters:
  *   nicheTamM   = nicheEligiblePatients × nicheAnnualPriceUsd / 1e6   (eligible × price)

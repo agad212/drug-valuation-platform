@@ -183,11 +183,14 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     populationType: "broad", placeboResponse: "moderate", regulatoryContext: "standard",
   };
   // Base indication: TAM $4000M × 25% penetration = $1000M peak; WAC $100k/yr → 40,000 eligible.
-  function mkMarketBase(peakSalesM = 1000, tamM = 4000) {
+  // annualPriceUsd is parameterized because base eligible = (peak / penetration) / price — so a fixture can
+  // vary the base PEAK while holding the base POPULATION fixed (needed to isolate peak-decoupling from the
+  // population containment bound), or pass 0 to produce a base with NO derivable eligible population.
+  function mkMarketBase(peakSalesM = 1000, tamM = 4000, annualPriceUsd = 100000) {
     const v: Valuation = {
       asset: "MKTDRUG", phase: "Phase 2",
       discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
-      indications: [{ id: "i1", name: "RP", peakSales: peakSalesM * 1e6, tamM, penetrationPct: 25, annualPriceUsd: 100000, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
+      indications: [{ id: "i1", name: "RP", peakSales: peakSalesM * 1e6, tamM, penetrationPct: 25, annualPriceUsd, launchYear: 2032, loeYear: 2044, devCostPV: 300e6 }],
     };
     const revenuePV = computeRevenuePV({ ...v, peakSales: peakSalesM * 1e6, launchYear: 2032, loeYear: 2044 });
     const out = { ptrs: 0.4, revenuePV, devCostPV: 300e6, rnpv: 0 };
@@ -201,7 +204,9 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     return { base };
   }
   const A: OptionInputs = { id: "opt-a", name: "Baseline", isBaseline: true };
-  const NICHE: OptionInputs = { id: "b", name: "Niche", nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 200000, nichePeakSharePct: 35, nicheWacComp: "analog targeted agent ~$200k/yr", nicheShareComp: "analog defined-responder launch ~35%" };
+  // 10,000 sits INSIDE the containment bound (base eligible 40,000 × default prevalence 0.35 = 14,000), so
+  // this fixture exercises the trusted-cited path (the clamp gets its own dedicated tests below).
+  const NICHE: OptionInputs = { id: "b", name: "Niche", nicheEligiblePatients: 10000, nicheAnnualPriceUsd: 200000, nichePeakSharePct: 35, nicheWacComp: "analog targeted agent ~$200k/yr", nicheShareComp: "analog defined-responder launch ~35%" };
 
   it("base anchor: deriveMarket + calibration + Option A reproduce the base peak", () => {
     expect(deriveMarket({ tamM: 4000, penetrationPct: 25 }).peakSalesM).toBeCloseTo(1000, 6);
@@ -217,17 +222,73 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     expect(n.peakSalesM).toBeCloseTo(1400, 6);
   });
 
-  it("DECOUPLING (load-bearing): niche peak is INVARIANT to the base peak when niche params are fixed", () => {
-    // The guard that would have caught Build 1. Same niche absolute params, wildly different base.
-    const small = computeOption(mkMarketBase(500, 2000).base, NICHE, undefined);
-    const big   = computeOption(mkMarketBase(5000, 20000).base, NICHE, undefined);
-    expect(small.peakSalesM).toBeCloseTo(1400, 3);
-    expect(big.peakSalesM).toBeCloseTo(1400, 3);
-    expect(small.peakSalesM).toBeCloseTo(big.peakSalesM, 6); // independent of base — genuine re-derivation
+  it("DECOUPLING (load-bearing): niche peak is INVARIANT to the base PEAK when niche params are fixed", () => {
+    // The guard that would have caught Build 1. Same niche absolute params, base peak varied 10×.
+    //
+    // RE-AXED when the population containment bound landed. This test previously varied the base peak via
+    // mkMarketBase(500) vs (5000) at a FIXED price — which also moved the base eligible POPULATION (20,000
+    // vs 200,000), because eligible = (peak / penetration) / price. That conflated two different things:
+    //   • base PEAK   — a revenue quantity the niche peak must NOT depend on (the Build-1 bug: peak × mult)
+    //   • base POPULATION — a patient count the niche count MUST be contained by (a subset ⊆ its superset)
+    // Containment and "invariant across bases that also differ in population" are incompatible wherever the
+    // clamp is active, so the axes are now separated: here the price is scaled with the peak to hold the
+    // base population fixed at 40,000, isolating PEAK-decoupling; the population channel it used to cover
+    // incidentally is now pinned explicitly by the three CONTAINMENT BOUND tests below.
+    const small = computeOption(mkMarketBase(500, 2000, 50_000).base, NICHE, undefined);   // eligible 40,000
+    const big   = computeOption(mkMarketBase(5000, 20000, 500_000).base, NICHE, undefined); // eligible 40,000
+    expect(small.peakSalesM).toBeCloseTo(700, 3);  // 10,000 × $200k × 35%
+    expect(big.peakSalesM).toBeCloseTo(700, 3);
+    expect(small.peakSalesM).toBeCloseTo(big.peakSalesM, 6); // independent of base peak — genuine re-derivation
 
     // PROOF the old Build-1 implementation FAILS this: base × (prevalence×premium×penMult) scales with base.
     const oldNiche = (basePeak: number) => basePeak * (0.35 * 1.4 * 1.3); // the disguised multiplier
     expect(oldNiche(500)).not.toBeCloseTo(oldNiche(5000), 3); // scales with base → would FAIL decoupling
+  });
+
+  it("CONTAINMENT BOUND: a cited count ABOVE superset × prevalence is CLAMPED + flagged (the live 3.6× bug)", () => {
+    const { base } = mkMarketBase(); // base eligible 40,000 → bound = 40,000 × 0.35 = 14,000
+    const over = computeOption(base, {
+      id: "b", name: "Over-counted niche",
+      nicheEligiblePatients: 55000, // exceeds the ENTIRE base pool → structurally impossible subset
+      nicheAnnualPriceUsd: 180000, nicheWacComp: "precision analog ~$180k/yr",
+      nichePeakSharePct: 40,       nicheShareComp: "defined-responder analog ~40%",
+    }, undefined);
+    // Clamped to 14,000: 14,000 × $180k × 40% = $1008M — NOT 55,000 × $180k × 40% = $3960M.
+    expect(over.peakSalesM).toBeCloseTo(1008, 0);
+    expect(over.nicheProvenance!.eligible).toMatchObject({
+      value: 14000, cited: 55000, supersetEligible: 40000, bound: 14000,
+      clamped: true, exceededSuperset: true, unbounded: false,
+    });
+    const mkt = over.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
+    expect(mkt).toMatch(/CLAMPED/);     // the clamp is VISIBLE, not silent
+    expect(mkt).toMatch(/STRUCTURAL/);  // escalated: subset exceeded its whole superset
+  });
+
+  it("CONTAINMENT BOUND: a cited count INSIDE the bound is trusted, not clamped", () => {
+    const { base } = mkMarketBase(); // bound 14,000
+    const under = computeOption(base, {
+      id: "b", name: "Small niche",
+      nicheEligiblePatients: 9000,
+      nicheAnnualPriceUsd: 200000, nicheWacComp: "analog targeted agent ~$200k/yr",
+      nichePeakSharePct: 35,       nicheShareComp: "analog defined-responder ~35%",
+    }, undefined);
+    expect(under.peakSalesM).toBeCloseTo(630, 0); // 9,000 × $200k × 35% — the cited count is used as-is
+    expect(under.nicheProvenance!.eligible).toMatchObject({ value: 9000, cited: 9000, clamped: false, unbounded: false });
+    expect(under.keyDrivers.find((d) => /Market:/.test(d)) ?? "").not.toMatch(/CLAMPED/);
+  });
+
+  it("CONTAINMENT BOUND: no base population → the cited count is allowed but flagged UNBOUNDED", () => {
+    const { base } = mkMarketBase(1000, 4000, 0); // price 0 → no derivable base eligible population
+    const un = computeOption(base, {
+      id: "b", name: "Uncontainable niche",
+      nicheEligiblePatients: 55000,
+      nicheAnnualPriceUsd: 180000, nicheWacComp: "precision analog ~$180k/yr",
+      nichePeakSharePct: 40,       nicheShareComp: "defined-responder analog ~40%",
+    }, undefined);
+    // Nothing to contain it against → the count is used, but never silently: the flag must surface.
+    expect(un.peakSalesM).toBeCloseTo(3960, 0);
+    expect(un.nicheProvenance!.eligible).toMatchObject({ value: 55000, supersetEligible: null, bound: null, unbounded: true, clamped: false });
+    expect(un.keyDrivers.find((d) => /Market:/.test(d)) ?? "").toMatch(/UNBOUNDED/);
   });
 
   it("FALSIFIABLE identity: a consistent niche passes, a tampered one FAILS (the guard can fail)", () => {
@@ -240,10 +301,11 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
 
   it("net is COMPUTED not signed: a strong niche exceeds base, a weak niche falls below", () => {
     const { base } = mkMarketBase(); // base peak 1000
-    const strong = computeOption(base, { id: "b", name: "Strong", nicheEligiblePatients: 30000, nicheAnnualPriceUsd: 250000, nichePeakSharePct: 40, nicheWacComp: "premium precision comp ~$250k/yr", nicheShareComp: "dominant analog launch ~40%" }, undefined);
+    // Counts kept inside the containment bound (14,000) so this tests the WAC/share net, not the clamp.
+    const strong = computeOption(base, { id: "b", name: "Strong", nicheEligiblePatients: 12000, nicheAnnualPriceUsd: 250000, nichePeakSharePct: 40, nicheWacComp: "premium precision comp ~$250k/yr", nicheShareComp: "dominant analog launch ~40%" }, undefined);
     const weak   = computeOption(base, { id: "c", name: "Weak",   nicheEligiblePatients: 8000,  nicheAnnualPriceUsd: 160000, nichePeakSharePct: 20, nicheWacComp: "modest-price comp ~$160k/yr", nicheShareComp: "crowded analog ~20%" }, undefined);
-    expect(strong.peakSalesM).toBeGreaterThan(base.peakSalesM); // 30k×$250k×40% = $3000M (both in-band, cited)
-    expect(weak.peakSalesM).toBeLessThan(base.peakSalesM);      // 8k×$160k×20%  = $256M (both in-band, cited)
+    expect(strong.peakSalesM).toBeGreaterThan(base.peakSalesM); // 12k×$250k×40% = $1200M (both in-band, cited)
+    expect(weak.peakSalesM).toBeLessThan(base.peakSalesM);      // 8k×$160k×20%  = $256M  (both in-band, cited)
   });
 
   it("RESOLVE-OR-FLAG (#14): an UNCITED WAC/share is NOT trusted — falls back to the labeled bounded default + FLAG", () => {
@@ -251,10 +313,10 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     // Emits an aggressive $180k / 38% but names NO comp → the engine drops both for the bounded default.
     const uncited = computeOption(base, {
       id: "b", name: "Uncited niche",
-      nicheEligiblePatients: 20000, nicheAnnualPriceUsd: 180000, nichePeakSharePct: 38,
+      nicheEligiblePatients: 10000, nicheAnnualPriceUsd: 180000, nichePeakSharePct: 38,
     }, undefined);
-    // 20,000 × $200k default × 35% default = $1400M — the uncited $180k/38% is NOT used.
-    expect(uncited.peakSalesM).toBeCloseTo(1400, 0);
+    // 10,000 × $200k default × 35% default = $700M — the uncited $180k/38% is NOT used.
+    expect(uncited.peakSalesM).toBeCloseTo(700, 0);
     const mkt = uncited.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
     expect(mkt).toMatch(/UNSOURCED/);   // both WAC and share flagged, not silently trusted
     expect(mkt).not.toMatch(/180k/);    // the uncited number does not appear as a pinned value
@@ -267,12 +329,12 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     const { base } = mkMarketBase();
     const sourced = computeOption(base, {
       id: "b", name: "Sourced niche",
-      nicheEligiblePatients: 20000,
+      nicheEligiblePatients: 10000,
       nicheAnnualPriceUsd: 150000, nicheWacComp: "vismodegib BCC ~$150k/yr",
       nichePeakSharePct: 30,       nicheShareComp: "sonidegib analog ~30%",
     }, undefined);
-    // 20,000 × $150k × 30% = $900M — the CITED values are used (not the $200k/35% default).
-    expect(sourced.peakSalesM).toBeCloseTo(900, 0);
+    // 10,000 × $150k × 30% = $450M — the CITED values are used (not the $200k/35% default).
+    expect(sourced.peakSalesM).toBeCloseTo(450, 0);
     const mkt = sourced.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
     expect(mkt).toMatch(/vismodegib/);
     expect(mkt).not.toMatch(/UNSOURCED/);
@@ -285,12 +347,12 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     // Cites a comp but states $500k/yr (> $300k band max) and 70% (> 50% band max) → both clamp.
     const oob = computeOption(base, {
       id: "b", name: "Out-of-band niche",
-      nicheEligiblePatients: 20000,
+      nicheEligiblePatients: 10000,
       nicheAnnualPriceUsd: 500000, nicheWacComp: "ultra-premium cell therapy",
       nichePeakSharePct: 70,       nicheShareComp: "hypothetical monopoly",
     }, undefined);
-    // clamps to $300k WAC and 50% share: 20,000 × $300k × 50% = $3000M (NOT 20k×$500k×70% = $7000M).
-    expect(oob.peakSalesM).toBeCloseTo(3000, 0);
+    // clamps to $300k WAC and 50% share: 10,000 × $300k × 50% = $1500M (NOT 10k×$500k×70% = $3500M).
+    expect(oob.peakSalesM).toBeCloseTo(1500, 0);
     expect(oob.nicheProvenance!.wac).toMatchObject({ value: 300000, sourced: true, inBand: false });
     expect(oob.nicheProvenance!.share).toMatchObject({ value: 50, sourced: true, inBand: false });
     const mkt = oob.keyDrivers.find((d) => /Market:/.test(d)) ?? "";
