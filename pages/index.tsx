@@ -2391,6 +2391,37 @@ export default function HomePage() {
                   </button>
                 </div>
               ) : (
+                <div />
+              )}
+              {/* THE GOVERNING LOE. The block above is the pipeline's RAW RETRIEVAL — its own legacy
+                  launch+term estimate, which ignores the confirmed orphan designation and the patent record.
+                  What actually drives revenue is the resolver's value (patents × statutory exclusivity ×
+                  public statements, as a weighted case distribution). Showing only the retrieval left two
+                  numbers disagreeing on screen (live: panel 2036 vs state 2039) with no indication which one
+                  counted. This states the governing value, its basis, and — when uncertainty is real — the
+                  cases revenue is actually valued over. */}
+              {v.loeYear != null && (
+                <div style={{ background: "rgba(16,185,129,0.10)", border: "1px solid rgba(16,185,129,0.3)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+                    Governing LOE — drives revenue
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)", fontFamily: "var(--font-display)" }}>
+                    {v.loeYear}{v.loeBasis ? <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-muted)" }}> · {v.loeBasis}</span> : null}
+                  </div>
+                  {(v as any).loeCases?.length > 1 && (
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 6, fontFamily: "var(--font-mono)", lineHeight: 1.6 }}>
+                      Revenue is valued across these cases, not at a single year:
+                      {((v as any).loeCases as { loeYear: number; weight: number; basis: string }[]).map((c, i) => (
+                        <div key={i}>· {Math.round(c.weight * 100)}% → {c.loeYear} ({c.basis})</div>
+                      ))}
+                    </div>
+                  )}
+                  {loeProvenance && (
+                    <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 6, lineHeight: 1.5 }}>{loeProvenance}</div>
+                  )}
+                </div>
+              )}
+              {!patentResult.loeYear && !v.loeYear && (
                 <div style={{ background: "rgba(0,0,0,0.05)", borderRadius: 10, padding: "12px 16px", marginBottom: 16, fontSize: 13, color: "var(--text-muted)" }}>
                   No LOE data found. Try a different asset name or check spelling.
                 </div>
