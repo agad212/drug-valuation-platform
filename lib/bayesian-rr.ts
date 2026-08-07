@@ -1174,9 +1174,19 @@ export function computeStageRR(
   const effectiveNull = flooredNull;
 
   // 0b. Stage margin scale — sourced when a valid expected rate exists (must clear the anchor with a
-  //     real margin and leave grid headroom; μ̄ is the mixture mean, an input-only quantity), else the
-  //     validated 0.10 default. Bad citations fall back silently HERE but are flagged by the caller.
-  const muBar = gaussianMixture.reduce((s, c) => s + c.w * c.mu, 0);
+  //     real margin and leave grid headroom), else the validated 0.10 default. Bad citations fall
+  //     back silently HERE but are flagged by the caller.
+  //     μ̄ is CONDITIONAL ON EFFECT: failure-mass components (μ=0 — the replication-risk and
+  //     surrogate-translation hypotheses, "the drug does nothing") are EXCLUDED from the mean the
+  //     sourced rate is divided by. A sourced expected rate describes the drug WHEN IT WORKS; dividing
+  //     by the unconditional mean would inflate Δ_stage so the success branch overshoots the sourced
+  //     rate to compensate for the failure mass (caught pre-live 8/7: w=0.40 pushed the success
+  //     branch's implied rate from the cited 48% to ~70%). With no failure mass (all μ>0, weights
+  //     summing to 1) this reduces EXACTLY to the previous unconditional mean — FROZEN-safe.
+  const wEffect = gaussianMixture.reduce((s, c) => s + (c.mu > 0 ? c.w : 0), 0);
+  const muBar = wEffect > 1e-9
+    ? gaussianMixture.reduce((s, c) => s + (c.mu > 0 ? c.w * c.mu : 0), 0) / wEffect
+    : gaussianMixture.reduce((s, c) => s + c.w * c.mu, 0);
   const sourcedOk =
     sourcedExpectedRR != null && Number.isFinite(sourcedExpectedRR) &&
     sourcedExpectedRR > anchorNull + 0.01 && sourcedExpectedRR < 0.95 && muBar > 0.05;

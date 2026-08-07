@@ -258,6 +258,23 @@ describe("computeDevPlan — replicationRisk failure-mass component", () => {
     expect(noise.stages[0].riskFlags.some((f) => /below the 5% noise floor/.test(f.message))).toBe(true);
   });
 
+  it("failure mass must NOT inflate a sourced margin: Δ_stage is conditional on effect (same with or without the component)", () => {
+    // Caught pre-live 8/7: dividing the sourced margin by the UNCONDITIONAL μ̄ made the success
+    // branch overshoot the cited rate (48% cited → ~70% implied at w=0.40). The sourced rate
+    // describes the drug WHEN IT WORKS; the failure hypothesis lives in the weights, not the scale.
+    const sourcedStage = () => [
+      makeStage({ expectedResponseRate: 0.48, expectedResponseRateBasis: "48% of patients achieved FVC preservation (ENV-IPF-101)" }),
+    ];
+    const clean = computeDevPlan(mixture, 0.1, { stages: sourcedStage(), regulatoryContext: "standard" }, 0);
+    const risky = computeDevPlan(mixture, 0.1, {
+      stages: sourcedStage(), regulatoryContext: "standard",
+      replicationRisk: { pFail: 0.4, basis },
+    }, 0);
+    expect(risky.stages[0].deltaStageRR).toBeCloseTo(clean.stages[0].deltaStageRR, 9);
+    // And the component still bites: probability drops even though the scale is unchanged.
+    expect(risky.stages[0].trialSuccessProbRaw).toBeLessThan(clean.stages[0].trialSuccessProbRaw);
+  });
+
   it("CAPABILITY GATE: absent field → bit-for-bit legacy (FROZEN-safe by construction)", () => {
     const a = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard" }, 0);
     const b = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard", replicationRisk: undefined }, 0);
