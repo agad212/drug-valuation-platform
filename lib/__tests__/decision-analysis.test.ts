@@ -935,3 +935,48 @@ describe("Layer 2 spec-delivery bridge — stage-addressable design → full-pla
     expect(withSpec.stages[1].sequentialDesign).toBeTruthy();
   });
 });
+
+// ─── Per-option plan parity (8/7 live gap) ────────────────────────────────────────────────────────
+// The live PDF showed option stages priced on the GENERAL CPP band ($100k/$140k) while the base plan
+// priced rare_orphan ($150k/$250k): therapeuticArea / orphanConfirmed / replicationRisk never reached
+// the per-option computeDevPlan. An option must differ from the headline ONLY by what it changes.
+
+describe("per-option dev plans inherit the base plan's full input basis", () => {
+  it("an untouched later stage prices IDENTICALLY in the option plan, and the replication component carries", () => {
+    const v: Valuation = {
+      asset: "PARITY", phase: "Phase 2",
+      discountRate: 0.12, cogsPct: 0.2, taxRate: 0.21, workingCapitalPct: 0.1,
+      indications: [{ id: "i1", name: "IPF", peakSales: 900e6, launchYear: 2032, loeYear: 2039 }],
+    };
+    const revenuePV = computeRevenuePV({ ...v, peakSales: 900e6, launchYear: 2032, loeYear: 2039 });
+    const out = { ptrs: 0.25, revenuePV, devCostPV: 0, rnpv: Math.round(0.25 * revenuePV) };
+    const mixture = mixtureFromMssVariance(0.55, 0.1);
+    const broadRct: TrialDesignInputs = { ...baseDesign, designType: "rct", populationType: "broad", regulatoryContext: "standard" };
+    const stages = [
+      stage({ trialDesign: broadRct }),
+      stage({ id: "stage-2", name: "Ph3", phase: "Phase 3", n: 280, cpp: 135000, isCurrentTrial: false,
+        trialDesign: { ...broadRct, n: 280 } }),
+    ];
+    const devPlan = computeDevPlan(mixture, 0.1, {
+      stages, regulatoryContext: "standard", regCostM: 1.0,
+      therapeuticArea: "general", orphanConfirmedForIndication: true,
+      replicationRisk: { pFail: 0.55, basis: "IPF: nintedanib replicated; pamrevlumab, zinpentraxin, ziritaxestat failed Phase 3 after positive Phase 2" },
+    }, revenuePV / 1e6);
+    // Confirmed orphan promotes pricing to the rare_orphan band even when the stage label is standard (f0afeb4)
+    expect(devPlan.stages[1].cppProvenance).toMatch(/rare_orphan/);
+    expect(devPlan.replicationWeightApplied).toBe(0.55);
+
+    const base = buildBaseContext(v, out, null, { trialInputs: broadRct, ptrsCombined: 0.4 }, null, devPlan)!;
+    const opt = computeOption(base, { id: "opt-b", name: "Reshape (no design change)" });
+    expect(opt.devPlan).toBeTruthy();
+    // The untouched Phase 3 stage: same pinned CPP dollar value, same PRICING BAND — the option is
+    // not allowed to silently re-price the program on a different band than the headline. (Exact
+    // provenance PROSE differs benignly: the option rebuilds from the output stages, whose cpp was
+    // already pinned, so its $250k reads "in band" rather than "clamped from $135k" — same band,
+    // same number.)
+    expect(opt.devPlan!.stages[1].cpp).toBe(devPlan.stages[1].cpp);
+    expect(opt.devPlan!.stages[1].cppProvenance).toMatch(/rare_orphan/);
+    // And the indication replication component rides along at the same weight.
+    expect(opt.devPlan!.replicationWeightApplied).toBe(0.55);
+  });
+});
