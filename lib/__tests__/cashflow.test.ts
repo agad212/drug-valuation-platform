@@ -80,6 +80,40 @@ describe("cashflow — INDEPENDENT aggregation is Σ of independently-risked ind
   });
 });
 
+describe("cashflow — 4.6 deprioritized-indication flag (observe-and-flag, value NOT adjusted)", () => {
+  const mk = (status?: "active" | "stalled" | "discontinued", basis?: string): Valuation => ({
+    ...base,
+    indications: [
+      { id: "lead", name: "Lead", peakSales: 800_000_000, ptrs: 0.3, launchYear: 2030 },
+      { id: "second", name: "Second", peakSales: 400_000_000, ptrs: 0.15, launchYear: 2030,
+        developmentStatus: status, developmentStatusBasis: basis },
+    ],
+  });
+
+  it("a CITED stalled indication is flagged with its basis and its share of the headline", () => {
+    const out = computeOutputs(mk("stalled", "no development reports since 2017; dropped from sponsor pipeline page"));
+    const flag = out.indicationFlags.find((f) => /Second: development STALLED/.test(f));
+    expect(flag).toBeTruthy();
+    expect(flag!).toMatch(/no development reports since 2017/);
+    expect(flag!).toMatch(/% of the headline rides on it/);
+    // Observe-and-flag: the VALUE is identical to the active case (no invented reactivation discount).
+    expect(out.rnpv).toBe(computeOutputs(mk("active")).rnpv);
+  });
+
+  it("an UNCITED stalled status still surfaces — marked as uncited, never silently dropped or trusted", () => {
+    const out = computeOutputs(mk("stalled"));
+    const flag = out.indicationFlags.find((f) => /Second: development STALLED/.test(f));
+    expect(flag).toBeTruthy();
+    expect(flag!).toMatch(/UNCITED — verify/);
+  });
+
+  it("discontinued flags too; active or absent status does not", () => {
+    expect(computeOutputs(mk("discontinued", "sponsor terminated the program")).indicationFlags.some((f) => /DISCONTINUED/.test(f))).toBe(true);
+    expect(computeOutputs(mk("active")).indicationFlags.some((f) => /development (STALLED|DISCONTINUED)/.test(f))).toBe(false);
+    expect(computeOutputs(mk(undefined)).indicationFlags.some((f) => /development (STALLED|DISCONTINUED)/.test(f))).toBe(false);
+  });
+});
+
 describe("cashflow — SEQUENTIAL: a later indication launches no earlier than its prerequisite (revenue shifts later)", () => {
   it("sequential-after shifts launch to the prerequisite's, lowering that indication's revenue PV vs an independent early launch", () => {
     const out = computeOutputs({

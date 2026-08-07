@@ -201,6 +201,25 @@ export function computeOutputs(v: Valuation): {
       indicationFlags.push(`eNPV is correct in expectation; the CI assumes independence and OVERSTATES diversification for a same-mechanism asset (a shared safety/PK failure kills correlated indications) — a later risk-profile refinement`);
     }
 
+    // 4.6 — a STALLED or DISCONTINUED program contributing to the headline is surfaced with its share
+    // named (observe-and-flag: the value is NOT adjusted — a reactivation-probability discount would be
+    // an invented constant; the flag lets a human judge whether ~27% of the headline should ride on a
+    // program with no development activity). Citation-gated: an uncited status still surfaces, marked
+    // as uncited, so a claim is never silently dropped OR silently trusted.
+    {
+      const totalRnpvForShare = indicationOutputs.reduce((s, i) => s + i.rnpv, 0);
+      for (const io of indicationOutputs) {
+        const status = (io as Indication).developmentStatus;
+        if (status !== "stalled" && status !== "discontinued") continue;
+        const basis = (io as Indication).developmentStatusBasis?.trim();
+        const share = totalRnpvForShare > 0 && io.rnpv > 0 ? ` — ${Math.round((io.rnpv / totalRnpvForShare) * 100)}% of the headline rides on it` : "";
+        indicationFlags.push(
+          `${io.name}: development ${status.toUpperCase()}${basis ? ` (${basis})` : " (status UNCITED — verify)"}${share}; ` +
+          `value included as-if-active — deprioritize or remove the row if the program will not be prosecuted`,
+        );
+      }
+    }
+
     const revenuePV = indicationOutputs.reduce((s, i) => s + i.revenuePV, 0);
     // Headline = Σ of the per-indication STRUCTURAL contributions (each already at its own P, own launch,
     // and any conditional P-weight) — never pooled revenue × one P. Shared dev cost is counted once (each

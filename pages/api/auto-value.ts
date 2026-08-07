@@ -17,7 +17,7 @@ async function analyzeWithClaude(
   summary: string;
   mechanism?: string;
   phase?: string;
-  peakSalesEstimates: { indication?: string; peakSalesM: number; confidence: string; basis: string; devCostM?: number }[];
+  peakSalesEstimates: { indication?: string; peakSalesM: number; confidence: string; basis: string; devCostM?: number; developmentStatus?: string; developmentStatusBasis?: string }[];
   primaryIndication?: string;
 }> {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
@@ -90,11 +90,20 @@ Search the web for "${drug} drug" or "${drug} pharmaceutical" or "${drug} clinic
   "phase": "MUST be exactly one of: Preclinical | Phase 1 | Phase 2 | Phase 3 | Filed | Approved",
   "primaryIndication": "plain English disease name e.g. 'Alzheimer's disease', 'NSCLC', 'AML' — NEVER a drug code or compound name",
   "peakSalesEstimates": [
-    { "indication": "Alzheimer's disease", "peakSalesM": 8000, "confidence": "high", "basis": "Goldman Sachs projects $8B peak NSCLC 1L", "devCostM": 500 }
+    { "indication": "Alzheimer's disease", "peakSalesM": 8000, "confidence": "high", "basis": "Goldman Sachs projects $8B peak NSCLC 1L", "devCostM": 500, "developmentStatus": "active", "developmentStatusBasis": "Phase 3 CLARITY-2 enrolling per Q2-2026 corporate deck" }
   ]
 }
 REQUIRED: peakSalesEstimates must have exactly the same length and order as selectedIndices.
-REQUIRED: each peakSalesEstimates entry must include "indication" — the plain English disease name (e.g. "Alzheimer's disease", "NSCLC", "AML"). Never use compound codes or "pre-IND stage risk".`;
+REQUIRED: each peakSalesEstimates entry must include "indication" — the plain English disease name (e.g. "Alzheimer's disease", "NSCLC", "AML"). Never use compound codes or "pre-IND stage risk".
+DEVELOPMENT STATUS — per indication, from what you actually found: "developmentStatus" is one of
+"active" | "stalled" | "discontinued". Mark "stalled" when the indication's program shows NO recent
+development activity (no active/recruiting trials, no pipeline mention in recent corporate materials,
+last update years old) even though it was once pursued; "discontinued" when the sponsor said so. ALWAYS
+pair a non-active status with "developmentStatusBasis": one sentence citing the evidence (e.g. "no
+development reports since 2017; oncology program dropped from sponsor pipeline page"). A stalled program's
+value should not silently ride in a valuation as if active — the engine flags it with its share of the
+headline. When activity is confirmed, "active" needs no basis. Omit the fields only when you truly cannot
+tell.`;
 
   const raw = await callClaudeWithSearch({
     anthropicKey,
@@ -286,6 +295,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       devCostPV: salesEstimate?.devCostM != null && salesEstimate.devCostM > 0 ? Math.round(salesEstimate.devCostM * 1e6) : undefined,
       peakSalesBasis: salesEstimate?.basis || undefined,
       peakSalesConfidence: salesEstimate?.confidence || undefined,
+      // 4.6 — development-activity status (citation-preferred; the engine's flag marks an uncited
+      // non-active status as "UNCITED — verify" rather than dropping or silently trusting it).
+      developmentStatus: (salesEstimate?.developmentStatus === "active" || salesEstimate?.developmentStatus === "stalled" || salesEstimate?.developmentStatus === "discontinued")
+        ? salesEstimate.developmentStatus
+        : undefined,
+      developmentStatusBasis: typeof salesEstimate?.developmentStatusBasis === "string" && salesEstimate.developmentStatusBasis.trim()
+        ? salesEstimate.developmentStatusBasis.trim()
+        : undefined,
       claudeReason: reason,
     }));
 

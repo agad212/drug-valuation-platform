@@ -22,6 +22,12 @@ export type Indication = {
   tamM?: number;            // addressable market $M (eligible patients × annual WAC)
   penetrationPct?: number;  // peak penetration % (peakSales ≈ tamM × penetrationPct/100)
   annualPriceUsd?: number;  // annual WAC $/patient/yr — the base eligible COUNT = tamM/price
+  // 4.6 — development-activity status (LLM-emitted OBSERVABLE, citation-gated). A stalled or
+  // discontinued program contributing to the headline is surfaced as a flag naming its share — the
+  // value is NOT adjusted (a "reactivation probability" would be an invented constant; the flag lets
+  // the human judge). "active" or absent → no flag.
+  developmentStatus?: "active" | "stalled" | "discontinued";
+  developmentStatusBasis?: string;  // the citation (trade press / CT.gov status / sponsor pipeline page)
   nctId?: string;
   sources?: Source[];
 };
