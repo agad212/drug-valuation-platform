@@ -128,7 +128,9 @@ HARD RULES:
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1500,
+        // Headroom for 3-4 flagged options with full reasoning + lever notes: a clipped JSON is a
+        // parse failure and the whole advisory layer goes silent — the worst failure mode here.
+        max_tokens: 3000,
         messages: [{ role: "user", content: prompt }],
       }),
     });

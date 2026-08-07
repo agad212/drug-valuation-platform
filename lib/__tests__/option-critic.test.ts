@@ -76,13 +76,24 @@ describe("option-critic — validateCritiques gates the LLM response", () => {
 
   it("oversized prose is truncated + flagged, never silently passed through", () => {
     const out = validateCritiques(
-      [{ optionId: "opt-2", verdict: "supported", reasoning: "x".repeat(2000), leverNotes: { wac: "y".repeat(600), count: 42 } }],
+      [{ optionId: "opt-2", verdict: "supported", reasoning: "x".repeat(3000), leverNotes: { wac: "y".repeat(700), count: 42 } }],
       IDS,
     );
-    expect(out.critiques[0].reasoning.length).toBeLessThanOrEqual(901); // cap + ellipsis
-    expect(out.critiques[0].leverNotes?.wac?.length).toBeLessThanOrEqual(301);
+    expect(out.critiques[0].reasoning.length).toBeLessThanOrEqual(1601); // cap + ellipsis
+    expect(out.critiques[0].leverNotes?.wac?.length).toBeLessThanOrEqual(601);
     expect(out.critiques[0].leverNotes?.count).toBeUndefined(); // non-string lever note dropped
     expect(out.flags.filter((f) => f.includes("truncated"))).toHaveLength(2);
+  });
+
+  it("truncation backs up to the last sentence boundary — a cut never lands mid-word (the 8/7 'eligible coun…' fix)", () => {
+    const sentence = "This argument is exactly forty-nine chars long ok. ";
+    const out = validateCritiques(
+      [{ optionId: "opt-2", verdict: "supported", reasoning: sentence.repeat(40) }], // ~2080 chars of full sentences
+      IDS,
+    );
+    const r = out.critiques[0].reasoning;
+    expect(r.length).toBeLessThanOrEqual(1601);
+    expect(r.endsWith(".")).toBe(true); // whole sentences kept, no dangling fragment
   });
 
   it("garbage (non-array, no critiques key) yields empty + a flag — the UI just keeps the deterministic flags", () => {

@@ -248,6 +248,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let loeBasis: "patent" | "exclusivity" | null = loeResult?.loeBasis ?? null;
     let loeExclusivityYears: number | null = loeResult?.exclusivityYears ?? null;
     let biologicLoeNote: string | null = null;
+    let loeFallbackSourceLabel: string | null = null;
     if (loeYear === null) {
       const mechLower = (analysis.mechanism || "").toLowerCase();
       const isBiologic =
@@ -262,9 +263,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       loeYear = refLaunchYear + exclusivityYears;
       loeBasis = "exclusivity";
       loeExclusivityYears = exclusivityYears;
+      // Wording is modality-honest AND stale-proof: the launch year here is the trial-based
+      // pre-plan estimate — the dev plan usually moves launch later, and the GOVERNING LOE panel
+      // recomputes from the resolved launch (this note was showing "launch year 2027" next to a
+      // resolved 2032 launch on the 8/7 live run).
       biologicLoeNote = isBiologic
-        ? `BPCIA 12-year biologic exclusivity estimated from launch year ${refLaunchYear}`
-        : `Default ${exclusivityYears}-year exclusivity estimated from launch year ${refLaunchYear}`;
+        ? `BPCIA 12-year biologic exclusivity from trial-based launch ~${refLaunchYear} (pre-plan; the GOVERNING LOE recomputes from the resolved launch)`
+        : `Small-molecule default: ${exclusivityYears} years from trial-based launch ~${refLaunchYear} — a heuristic (NCE 5-yr data exclusivity typically extended by patent cover; the GOVERNING LOE recomputes from the resolved launch + any confirmed orphan exclusivity)`;
+      loeFallbackSourceLabel = isBiologic
+        ? "BPCIA 12-year data exclusivity (42 U.S.C. § 262(k)(7))"
+        : "Hatch-Waxman NCE 5-yr data exclusivity (21 U.S.C. § 355(j)(5)(F)(ii)) — the 8-yr default is a heuristic, not a statute";
     }
     console.log("[auto-value] loeYear:", loeYear, "| inferredLaunchYear:", inferredLaunchYear, "| loeResult?.loeYear:", loeResult?.loeYear);
 
@@ -323,7 +331,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             found: false,
             loeDate: `${loeYear}-12-31`,
             reasons: [biologicLoeNote],
-            sources: [{ label: "BPCIA 12-year data exclusivity (42 U.S.C. § 262(k)(7))" }],
+            // Modality-matched statute (the 8/7 live run showed a biologics law cited for a
+            // small molecule — wrong statute on screen erodes trust in the whole panel).
+            sources: [{ label: loeFallbackSourceLabel ?? "Regulatory exclusivity estimate" }],
           },
         }
       : loeResult;

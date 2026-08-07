@@ -1360,7 +1360,7 @@ export default function HomePage() {
       const indCount = data.indications.length;
       const withSales = data.indications.filter((i: any) => i.peakSales).length;
       pushToast(
-        `Auto-value complete: ${indCount} indication${indCount !== 1 ? "s" : ""} added${withSales ? `, ${withSales} with peak sales estimates` : ""}${data.loeYear ? `, LOE ${data.loeYear}` : ""}. Running revenue deep-dive…`,
+        `Auto-value complete: ${indCount} indication${indCount !== 1 ? "s" : ""} added${withSales ? `, ${withSales} with peak sales estimates` : ""}${data.loeYear ? `, initial LOE est. ${data.loeYear}` : ""}. Running revenue deep-dive…`,
         "success", 8000
       );
       // Auto-value indication names — fallback only (used for the base case if the
@@ -1416,7 +1416,9 @@ export default function HomePage() {
 
       // Return summary for chat
       const mechStr = data.mechanism ? ` · ${data.mechanism}` : "";
-      const loeStr = data.loeYear ? ` · LOE ${data.loeYear}` : "";
+      // "initial estimate", deliberately: this snapshot goes stale once the LOE resolver computes
+      // the GOVERNING year from the resolved launch (8/7 live run: blurb said 2035, governing 2039).
+      const loeStr = data.loeYear ? ` · initial LOE estimate ${data.loeYear} (see LOE panel for the governing year)` : "";
       const salesStr = withSales > 0
         ? ` · Peak sales estimates loaded for ${withSales} indication${withSales !== 1 ? "s" : ""}`
         : "";
@@ -2142,7 +2144,12 @@ export default function HomePage() {
                 ["Working Capital %", v.workingCapitalPct != null ? fmtPct(v.workingCapitalPct) : "—"],
                 ...(v.ownerType === "Licensor" ? [["Avg Royalty %", v.avgRoyalty != null ? fmtPct(v.avgRoyalty) : "—"] as [string, any]] : []),
                 ["Peak Sales", v.peakSales != null ? fmtMoney(v.peakSales) : "—"],
-                ["Dev Cost PV", v.devCostPV != null ? fmtMoney(v.devCostPV) : "—"],
+                // When a computed dev plan exists it GOVERNS cost (per-indication risk-adjusted
+                // shares) — say so, or this input reads authoritative while doing nothing
+                // (8/7 live run: "$800M" on screen, engine correctly using the plan's $82M).
+                ["Dev Cost PV", v.devCostPV != null
+                  ? `${fmtMoney(v.devCostPV)}${devPlan ? ` — superseded: dev plan governs ($${Math.round(devPlan.totalRiskAdjCostM)}M expected)` : ""}`
+                  : devPlan ? `dev plan governs ($${Math.round(devPlan.totalRiskAdjCostM)}M expected)` : "—"],
                 ["Launch Year", v.launchYear ?? "—"],
                 ["LOE Year", v.loeYear != null ? `${v.loeYear}${v.loeBasis ? ` (${v.loeBasis})` : ""}` : "—"],
                 ["P(approval) override", v.ptrs != null ? fmtPct(v.ptrs) : "auto"],

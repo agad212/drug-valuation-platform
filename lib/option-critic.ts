@@ -26,14 +26,21 @@ export type CritiqueValidation = {
 };
 
 const VERDICTS: OptionCritiqueVerdict[] = ["supported", "partially-supported", "unsupported"];
-const REASONING_MAX = 900;
-const LEVER_NOTE_MAX = 300;
+// Caps raised after the 8/7 live run cut real arguments mid-sentence ("Critically, the eligible
+// coun…") — a truncated critique reads as a broken feature. These are safety rails against a
+// runaway response, not an editorial length target; truncation also backs up to the last sentence
+// end so a cut never lands mid-word.
+const REASONING_MAX = 1600;
+const LEVER_NOTE_MAX = 600;
 
 function capped(s: string, max: number, what: string, flags: string[]): string {
   const t = s.trim();
   if (t.length <= max) return t;
-  flags.push(`${what} exceeded ${max} chars — truncated`);
-  return t.slice(0, max).trimEnd() + "…";
+  flags.push(`${what} exceeded ${max} chars — truncated at the last sentence boundary`);
+  const cut = t.slice(0, max);
+  const lastEnd = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  // Keep whole sentences when a boundary exists in the back half; otherwise fall back to a clean cut.
+  return lastEnd > max * 0.5 ? cut.slice(0, lastEnd + 1) : cut.trimEnd() + "…";
 }
 
 /** Gate the raw LLM output. Accepts either a bare array or { critiques: [...] }. */
