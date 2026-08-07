@@ -170,9 +170,16 @@ therapeuticArea/orphanConfirmed/classGraveyardProb/replicationRisk (live gap: op
 CPP band while the base priced rare_orphan) + regression pin; (5) display sweep — critic truncation caps
 1600/600 with sentence-boundary cuts + max_tokens 3000, modality-matched LOE statute (no more BPCIA on a
 small molecule), stale LOE snapshots labeled as pre-plan estimates, ghost devCostPV row shows
-"superseded: dev plan governs". **CHEAP VERIFY:** refresh just the Development Path (one dev-plan call)
-→ expect the margin-scale line, the unit gate rejecting non-responder bases, the replication flag with
-the IPF graveyard, raw powers under the ceilings, headline near the 12–25% band — derived, not targeted.
+"superseded: dev plan governs". **VERIFIED LIVE 8/7 night (second refresh, after hard-reload):** replication flag fired (pFail 0.52,
+named tally "~2 of 5-6 replicated"), margin-scale line renders on both stages (sourced Δ_stage 0.26 on
+Ph2b with citation + unit caveat; labeled default on Ph3), failure mass visible in the bands (28% below
+threshold → 0% by Ph3 = Bayes self-retirement working), Ph2b 43% raw (no ceiling), Ph3 raw 89% (was
+100%), headline P 61% → **29%** — just above the strategic assessment's own 12–25% band, derived from
+the named record. Comparator upgraded to an INPULSIS/ASCEND meta-analysis (σ²=0.009). Judgment items
+surfaced by the flags, deliberately left to the human: the 45% rate is AI-INFERRED from continuous FVC
+data (basis says so; VERIFY caveat displayed); the graveyard tally is slightly generous (pamrevlumab
+double-listed, ziritaxestat/ISABELA omitted — the fuller record suggests pFail 0.6+, i.e. 29% errs
+optimistic).
 **Known open on this axis:** native continuous (dScale) routing for FVC-class endpoints instead of the
 RR proxy; evidence-chain σ² calibration (the audit's own "may be too optimistic" pointer); stalled
 oncology row still carries the IPF P + a 2028 launch (4.5 per-indication plans is the structural fix).
