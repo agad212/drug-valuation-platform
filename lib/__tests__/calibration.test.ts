@@ -147,29 +147,42 @@ describe("Part-final — base-rate ceilings + stage-integral stability (general)
     n: 600, endpointType: "surrogate", designType: "rct",
     populationType: "biomarker_selected", placeboResponse: "low", regulatoryContext: "btd",
   };
-  // A well-powered RCT with a strong effect vs a tight, well-studied comparator —
-  // the saturation setup that produced tau's non-credible 96%.
+  // A well-powered RCT with a maximal effect prior vs a near-point comparator — the saturation setup.
+  // FIXTURE RESCALED with 2.2 (§1.6): under the old absolute map, mss 0.75 asserted a 37-point margin
+  // and raw P saturated at ~0.96 on ordinary fixtures — the ceilings were capping an inflated number
+  // (that was the 2.2 bug). On the anchored map an ORDINARY strong asset no longer saturates (see the
+  // new (i-c) below), so keeping this guard NON-VACUOUS requires the honest extreme: maximal evidence
+  // (mss 1.0 → μ = 2.0, a doubling over the comparator) against a near-point benchmark.
   function saturatingPlan(mss: number, phase: "Phase 2" | "Phase 3") {
     const stages: DevStageInput[] = [
       { id: "s1", name: "cur", phase, n: 600, cpp: 200000, trialDesign: tightDesign,
         isCurrentTrial: true, enrollmentRatePerMonth: 10, treatmentObsMonths: 12, startupCushionMonths: 5,
-        isTimeToEvent: false, nullResponseRate: 0.20, comparatorSigma2: 0.004 },
+        isTimeToEvent: false, nullResponseRate: 0.20, comparatorSigma2: 0.0005 },
     ];
     return computeDevPlan(mixtureFromMssVariance(mss, 0.08), 0.1, { stages, regulatoryContext: "btd" }, 0);
   }
 
-  it("(i) a tight-comparator stage no longer saturates above the general ceiling", () => {
-    const plan = saturatingPlan(0.75, "Phase 2");
+  it("(i) a saturating stage is capped at the general ceiling (the backstop still bites)", () => {
+    const plan = saturatingPlan(1.0, "Phase 2");
     const st = plan.stages[0];
-    expect(st.trialSuccessProbRaw).toBeGreaterThan(0.9); // raw integral WOULD saturate
+    expect(st.trialSuccessProbRaw).toBeGreaterThan(0.9); // raw integral genuinely saturates
     expect(st.trialSuccessProb).toBeLessThanOrEqual(0.90 + 1e-9); // capped
     expect(st.successCeilingBound).toBe(0.90);
   });
 
   it("(i-b) a confirmatory (Phase 3) stage is capped at the lower late-phase ceiling", () => {
-    const st = saturatingPlan(0.75, "Phase 3").stages[0];
+    const st = saturatingPlan(1.0, "Phase 3").stages[0];
     expect(st.trialSuccessProb).toBeLessThanOrEqual(0.80 + 1e-9);
     expect(st.successCeilingBound).toBe(0.80);
+  });
+
+  it("(i-c) THE 2.2 FIX ITSELF: an ordinary strong asset no longer saturates — the ceiling stays idle", () => {
+    // mss 0.75 (μ = 1.5, an above-average margin) on the SAME tight fixture used to produce the raw
+    // ~96% that the ceiling had to cap. On the anchored scale the raw integral is an honest
+    // probability well below the cap, so the ceiling never fires.
+    const st = saturatingPlan(0.75, "Phase 2").stages[0];
+    expect(st.trialSuccessProbRaw).toBeLessThan(0.90);
+    expect(st.successCeilingBound).toBeUndefined();
   });
 
   it("(ii) a small prior perturbation produces only a small stage-probability change (no knife-edge)", () => {
@@ -192,10 +205,17 @@ describe("Regression — un-pinned comparator cannot zero a non-degenerate prior
   };
   const healthyPrior = mixtureFromMssVariance(0.5, 0.12); // priorMean ≈ 0.5, non-degenerate
 
-  it("a pathological SOC threshold (0.80) above the prior mean does NOT zero P(success)", () => {
+  // RECONCILED with the 2.2 anchored map (§1.6 — the INTENT, "a mis-derived comparator cannot zero a
+  // non-degenerate prior", is preserved; the MECHANISM changed from a runtime guard to a structural
+  // impossibility). The old guard fired when flooredNull > priorMean — a state only expressible under
+  // the ABSOLUTE map, where the comparator and the prior lived on independent scales. On the anchored
+  // map the prior is BUILT at (anchor + μ·Δ), so it sits above its comparator by construction; a
+  // corrupted 0.80 SOC relocates the comparison, it cannot strand the prior below the bar. The
+  // comparatorUnreliable flag is retired (always false) and the threshold is no longer discarded.
+  it("a pathological SOC threshold (0.80) above the old prior scale does NOT zero P(success)", () => {
     const bad = computeStageRR(healthyPrior, 300, 0.80, rrDesign, false);
-    expect(bad.comparatorUnreliable).toBe(true);
-    expect(bad.effectiveNullRR).toBeCloseTo(MEANINGFUL_RR_FLOOR, 6); // discarded → clinical floor
+    expect(bad.comparatorUnreliable).toBe(false);                    // retired — structurally impossible
+    expect(bad.effectiveNullRR).toBeCloseTo(0.80, 6);                // threshold kept, not discarded
     expect(bad.trialSuccessProb).toBeGreaterThan(0.05);              // NOT a definitional 0
     expect(bad.bandsBefore.belowThreshold).toBeLessThan(0.999);      // not "100% below threshold"
   });
@@ -206,9 +226,9 @@ describe("Regression — un-pinned comparator cannot zero a non-degenerate prior
     expect(good.effectiveNullRR).toBeCloseTo(0.12, 6);
   });
 
-  it("keys on the prior relationship, not an absolute ceiling: a high-but-valid SOC below a higher prior is untouched", () => {
-    const strongPrior = mixtureFromMssVariance(0.7, 0.10); // priorMean ≈ 0.7
-    const r = computeStageRR(strongPrior, 300, 0.55, rrDesign, false); // 0.55 < 0.7 → legit
+  it("a high-but-valid SOC is likewise kept as the threshold (no discard at any level)", () => {
+    const strongPrior = mixtureFromMssVariance(0.7, 0.10);
+    const r = computeStageRR(strongPrior, 300, 0.55, rrDesign, false);
     expect(r.comparatorUnreliable).toBe(false);
     expect(r.effectiveNullRR).toBeCloseTo(0.55, 6);
   });
@@ -231,7 +251,9 @@ describe("Regression — un-pinned comparator cannot zero a non-degenerate prior
     ];
     const plan = computeDevPlan(mixtureFromMssVariance(0.5, 0.12), 0.1,
       { stages, regulatoryContext: "standard" }, 1000);
-    expect(plan.stages[0].comparatorUnreliable).toBe(true);
+    // §1.6 reconciled: the flag is retired (anchored map — see the stage-level test above); the
+    // INTENT stands — a corrupted comparator cannot produce a definitional zero.
+    expect(plan.stages[0].comparatorUnreliable).toBe(false);
     expect(plan.stages[0].trialSuccessProb).toBeGreaterThan(0.05);
     expect(plan.pApproval).toBeGreaterThan(0);
   });

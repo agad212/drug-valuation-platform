@@ -10,8 +10,9 @@ import { computeStageRR, rrTrialPower, mixtureToBeta, betaToGrid, gridMoments, t
 
 const RCT: RRTrialDesign = { designType: "rct", endpointType: "surrogate", populationType: "broad", regulatoryContext: "standard" };
 const SINGLE_ARM: RRTrialDesign = { designType: "single_arm", endpointType: "surrogate", populationType: "broad", regulatoryContext: "standard" };
-const MIX = [{ w: 1, mu: 1.0, sigma2: 0.15 }]; // prior mean_rr ≈ 0.5
-const priorMean = () => gridMoments(betaToGrid(mixtureToBeta(MIX))).mean;
+const MIX = [{ w: 1, mu: 1.0, sigma2: 0.15 }]; // anchored at the 0.15 null used throughout → mean_rr ≈ 0.25
+// Invariance probe (compared only to itself): the anchor just has to be held fixed across reads.
+const priorMean = () => gridMoments(betaToGrid(mixtureToBeta(MIX, 0.15))).mean;
 
 // ══ tte-power PRIMITIVES — validated against known sample-size points (absolute correctness) ══
 describe("Layer 1 — TTE primitives (Schoenfeld + accrual), known-point validation", () => {

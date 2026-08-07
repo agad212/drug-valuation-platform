@@ -38,6 +38,7 @@ import {
   computeStageRR,
   gridToGaussianMixture,
   downsampleGrid,
+  MEANINGFUL_RR_FLOOR,
   type RRBands,
   type RRTrialDesign,
 } from "./bayesian-rr";
@@ -231,6 +232,12 @@ export type DevStageInput = {
 
   // Bayesian RR engine inputs (AI-estimated or user-entered)
   nullResponseRate?: number;      // SOC/historical control response rate (0-1)
+  // The BASELINE null the effect prior's margin is scored against, when it differs from
+  // nullResponseRate — i.e. when an option RAISED this stage's bar (active comparator / corrected
+  // control rate). The prior anchors here; the raised nullResponseRate is only the threshold, so a
+  // harder bar genuinely lowers P instead of re-anchoring the prior up with it. Absent → the stage's
+  // own nullResponseRate is both anchor and threshold (the unmodified base case).
+  anchorNullResponseRate?: number;
   observedResponseRate?: number;  // actual observed RR from a completed trial
   observedN?: number;             // n for the observed result
   isTimeToEvent?: boolean;        // true = OS/PFS/DFS endpoint, approximated via RR proxy
@@ -467,15 +474,25 @@ export function computeDevPlan(
 
   for (const stageInput of inputs.stages) {
 
-    // ── Surrogate-translation penalty (Part 4) ────────────────────────────────
-    // If the previous stage gated on a RATE surrogate (e.g. ctDNA clearance) and
-    // THIS stage gates on a harder time-to-event endpoint (e.g. RFS), the
-    // molecular-surrogate → clinical-endpoint link is not fully validated in this
-    // setting. Widen the incoming prior's variance so a low-information surrogate
-    // win does NOT fully de-risk the hard-endpoint trial. Additive penalty,
-    // analogous to the cross-setting penalty in the own-clinical evidence step.
+    // ── Surrogate-translation penalty (Part 4, re-expressed for the 2.2 anchored scale) ─────────
+    // If the previous stage gated on a RATE surrogate (e.g. ctDNA clearance) and THIS stage gates on
+    // a harder time-to-event endpoint (e.g. RFS), the molecular-surrogate → clinical-endpoint link is
+    // not fully validated in this setting. Previously modeled as VARIANCE WIDENING
+    // (addMixtureVariance(σ²+0.15)) — which only attenuated P by accident of the old absolute scale.
+    // On the anchored scale, symmetric widening around a mean in the CONVEX region of the power curve
+    // can RAISE the integral (Jensen), inverting the penalty. Re-expressed as what the risk actually
+    // is: a TRANSLATION-FAILURE component — with probability p_fail the surrogate effect simply does
+    // not carry to the hard endpoint (μ → 0, no margin), else the belief is unchanged. This
+    // attenuates monotonically by construction: P_new ≈ (1 − p_fail)·P_old + p_fail·(≈α). The 0.15 is
+    // the SAME hand-set, pre-calibration magnitude the widening used, now with the honest semantics
+    // (a 15% chance the surrogate win means nothing for the hard endpoint); the empirical replacement
+    // is a calibration deliverable (observed surrogate→hard concordance rates by setting).
     if (prevStage && prevStage.isTimeToEvent === false && stageInput.isTimeToEvent === true) {
-      currentMixture = addMixtureVariance(currentMixture, SURROGATE_TRANSLATION_SIGMA2);
+      const pFail = SURROGATE_TRANSLATION_FAILURE_P;
+      currentMixture = [
+        ...currentMixture.map((c) => ({ ...c, w: c.w * (1 - pFail) })),
+        { w: pFail, mu: 0, sigma2: 0.05 }, // no-translation component: zero margin over the comparator
+      ];
     }
 
     const { mss: currentMSS, variance: currentVariance } = mixtureMoments(currentMixture);
@@ -563,6 +580,7 @@ export function computeDevPlan(
       stageInput.observedResponseRate,
       stageInput.observedN,
       stageInput.comparatorSigma2 ?? 0,
+      stageInput.anchorNullResponseRate,
     );
 
     // Propagation belief: the UN-enriched posterior, so the enrichment does NOT carry into the
@@ -572,6 +590,7 @@ export function computeDevPlan(
           currentMixture, stageInput.n, nullRR, rrDesign,
           stageInput.isTimeToEvent === true, stageInput.observedResponseRate, stageInput.observedN,
           stageInput.comparatorSigma2 ?? 0,
+          stageInput.anchorNullResponseRate,
         )
       : rrResult;
 
@@ -617,9 +636,14 @@ export function computeDevPlan(
     // Convert the posterior grid back to a Gaussian mixture for the next stage.
     // Uses the UN-enriched propagation posterior (propagationResult) so a biomarker stage's
     // concentration does NOT carry forward; identical to rrResult when the stage wasn't enriched.
+    // Inverted with the SAME anchor the stage's prior was built on (the 2.2 anchored map's inverse) —
+    // μ is the portable relative-effect quantity, so the earned margin re-expresses over the next
+    // stage's own comparator context.
+    const stageAnchor = Math.max(stageInput.anchorNullResponseRate ?? nullRR, MEANINGFUL_RR_FLOOR);
     const mixtureIfSuccess = gridToGaussianMixture(
       propagationResult.posteriorGrid,
       currentMixture.length,
+      stageAnchor,
     );
     const { mss: mssIfSuccess, variance: varianceIfSuccess } = mixtureMoments(mixtureIfSuccess);
 
@@ -810,11 +834,11 @@ export function computeDevPlan(
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Added to each mixture component's variance when a stage gating on a rate
-// surrogate is followed by one gating on a hard time-to-event endpoint (Part 4).
-// Moderate: reflects a real, not-fully-validated surrogate→hard translation
-// without cratering the harder stage.
-const SURROGATE_TRANSLATION_SIGMA2 = 0.15;
+// Probability that a rate-surrogate win does NOT translate to the following hard time-to-event
+// endpoint (Part 4, re-expressed for the anchored scale — see the translation-failure block above).
+// HEURISTIC, pre-calibration: same 0.15 magnitude the old variance-widening penalty used, now as an
+// explicit failure probability. Replace with observed surrogate→hard concordance rates at calibration.
+const SURROGATE_TRANSLATION_FAILURE_P = 0.15;
 
 // Per-trial-success-stage multiplier applied when the modality/target class is a
 // "graveyard" (zero approvals + documented failure pattern). ~20% relative
@@ -874,9 +898,9 @@ function normalizeDurationMonths(raw: number, ceiling: number): {
   return { months: v, wasWeeks, wasClamped, raw };
 }
 
-function addMixtureVariance(mixture: EffectPriorMixture, add: number): EffectPriorMixture {
-  return mixture.map((c) => ({ ...c, sigma2: c.sigma2 + add }));
-}
+// (addMixtureVariance was removed with the 2.2 rescale: its only caller — the surrogate→TTE
+// translation penalty — was re-expressed as an explicit translation-failure mixture component,
+// because symmetric variance widening no longer guarantees attenuation on the anchored scale.)
 
 // Fix B: downgrade an orphan designation to its non-orphan equivalent for ENGINE
 // purposes (significance bar + reg-approval prob) when the orphan status is NOT
