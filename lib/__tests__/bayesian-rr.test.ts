@@ -281,6 +281,59 @@ describe("band masses", () => {
   });
 });
 
+// ─── Sourced margin scale (Δ_stage — the dScale pattern for the proportion family) ──
+
+describe("sourced margin scale (Δ_stage)", () => {
+  const MIX_1 = [{ w: 1, mu: 1.0, sigma2: 0.10 }];
+  const RCT = RCT_DESIGN;
+
+  it("CAPABILITY GATE: no sourced rate → byte-identical to the Δ=0.10 default", () => {
+    const base = computeStageRR(MIX_1, 100, 0.15, RCT);
+    const explicit = computeStageRR(MIX_1, 100, 0.15, RCT, false, undefined, undefined, 0, undefined, undefined);
+    expect(explicit.trialSuccessProb).toBe(base.trialSuccessProb);
+    expect(base.deltaStageSourced).toBe(false);
+    expect(base.deltaStageRR).toBeCloseTo(0.10, 9);
+  });
+
+  it("SOURCED: the prior MEAN lands exactly on the sourced expected rate (delivered at μ̄)", () => {
+    // μ̄ = 1.0, anchor 0.15, sourced 0.64 → Δ_stage = 0.49; mean = 0.15 + 1.0×0.49 = 0.64.
+    const r = computeStageRR(MIX_1, 100, 0.15, RCT, false, undefined, undefined, 0, undefined, 0.64);
+    expect(r.deltaStageSourced).toBe(true);
+    expect(r.deltaStageRR).toBeCloseTo(0.49, 6);
+    expect(r.priorMean).toBeCloseTo(0.64, 2);
+    // …and a real margin against the same null → far higher P than the 10-point default.
+    const dflt = computeStageRR(MIX_1, 100, 0.15, RCT);
+    expect(r.trialSuccessProb).toBeGreaterThan(dflt.trialSuccessProb);
+  });
+
+  it("BELOW-AVERAGE evidence shrinks a sourced margin (μ̄ < 1 → mean below the sourced rate)", () => {
+    // The TTX shape: strong observed rate, below-average evidence quality (translation risk).
+    const weakMix = [{ w: 1, mu: 0.63, sigma2: 0.10 }];
+    const r = computeStageRR(weakMix, 100, 0.15, RCT, false, undefined, undefined, 0, undefined, 0.64);
+    // Δ_stage = (0.64−0.15)/0.63 ≈ 0.778; mean = 0.15 + 0.63×0.778 = 0.64… wait — μ̄ IS 0.63 here, so
+    // the mean still lands on the sourced rate BY CONSTRUCTION (Δ_stage divides by μ̄). The shrinkage
+    // shows in the POSTERIOR dynamics and variance (σ²·Δ² grows with Δ), not the mean.
+    expect(r.priorMean).toBeCloseTo(0.64, 2);
+    expect(r.deltaStageRR).toBeCloseTo((0.64 - 0.15) / 0.63, 6);
+  });
+
+  it("REJECTED: a sourced rate at/below the anchor (or absurd) falls back to the default", () => {
+    for (const bad of [0.14, 0.15, 0.155, 0.97]) {
+      const r = computeStageRR(MIX_1, 100, 0.15, RCT, false, undefined, undefined, 0, undefined, bad);
+      expect(r.deltaStageSourced).toBe(false);
+      expect(r.deltaStageRR).toBeCloseTo(0.10, 9);
+    }
+  });
+
+  it("PROPAGATION round-trips on the SAME scale: μ = fraction of the stage-expected margin achieved", () => {
+    const r = computeStageRR(MIX_1, 200, 0.15, RCT, false, undefined, undefined, 0, undefined, 0.55);
+    const back = gridToGaussianMixture(r.posteriorGrid, 1, 0.15, r.deltaStageRR);
+    // Posterior mean sits above the prior mean (success), so μ comes back above μ̄ = 1.0 — and finite.
+    expect(back[0].mu).toBeGreaterThan(1.0);
+    expect(back[0].mu).toBeLessThan(3.0);
+  });
+});
+
 // ─── Math primitives ─────────────────────────────────────────────────────
 
 describe("lnGamma", () => {

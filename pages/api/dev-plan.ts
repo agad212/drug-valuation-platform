@@ -139,6 +139,8 @@ type StageOutput = {
   enrollmentComplete?: boolean;
   completionDate?: string;
   nullResponseRate?: number;
+  expectedResponseRate?: number;
+  expectedResponseRateBasis?: string;
   isTimeToEvent?: boolean;
   endpointRationale?: string;
   endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
@@ -243,6 +245,17 @@ NULL RESPONSE RATE — REQUIRED for each stage:
    are inferring it from FDA precedent, regulatory convention, or clinical practice — e.g.
    "Phase 3 modeled on RFS — FDA precedent in adjuvant/MRD settings; not stated by company."
    NEVER present a convention-based inference as CONFIRMED.
+
+EXPECTED RESPONSE RATE — set when SOURCED, omit when not:
+13b. For each stage, IF the drug has its OWN observed data on this stage's endpoint (a completed or
+   read-out trial) OR a directly comparable NAMED analog reported a rate on the same endpoint in the
+   same setting, set "expectedResponseRate": the sourced expected response rate for the DRUG (0-1
+   decimal), and "expectedResponseRateBasis": one sentence naming the source (trial + figure, or the
+   analog + figure). The engine uses this to scale the effect prior's margin — a drug with an observed
+   64% clearance vs a 15% null carries a far larger expected margin than an unsourced default.
+   WITHOUT a named basis the number is IGNORED and flagged, so an uncited estimate is wasted effort.
+   OMIT both fields entirely when no sourced figure exists — do NOT guess one from the mechanism.
+   This is the DRUG's expected rate; nullResponseRate remains the comparator's.
 
 14. COMPARATOR UNCERTAINTY — REQUIRED for each stage:
    Set "comparatorSigma2": the variance of the historical control / SOC response rate estimate.
@@ -447,6 +460,15 @@ Reason about the full development path. Return the current trial as stage 1 (use
         nullResponseRate: (typeof s.nullResponseRate === "number" && s.nullResponseRate > 0 && s.nullResponseRate < 1)
           ? Math.round(s.nullResponseRate * 1000) / 1000  // clamp to 3 decimal places
           : undefined,  // let dev-plan.ts use DEFAULT_NULL_RR
+        // Sourced expected rate (13b) — sets the stage's margin scale (Δ_stage). Passed through only
+        // as a valid decimal; the citation gate (basis required, else ignored + flagged) is enforced
+        // deterministically in lib/dev-plan.ts, not here.
+        expectedResponseRate: (typeof s.expectedResponseRate === "number" && s.expectedResponseRate > 0 && s.expectedResponseRate < 1)
+          ? Math.round(s.expectedResponseRate * 1000) / 1000
+          : undefined,
+        expectedResponseRateBasis: typeof s.expectedResponseRateBasis === "string" && s.expectedResponseRateBasis.trim()
+          ? s.expectedResponseRateBasis.trim()
+          : undefined,
         isTimeToEvent: s.isTimeToEvent === true,
         endpointRationale: typeof s.endpointRationale === "string" ? s.endpointRationale : undefined,
         endpointEvidenceBasis: (s.endpointEvidenceBasis === "CONFIRMED" || s.endpointEvidenceBasis === "INFERRED")

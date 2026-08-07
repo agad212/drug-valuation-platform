@@ -468,19 +468,30 @@ export function betaFromMeanVar(meanIn: number, varIn: number): { alpha: number;
  * `anchorNull` is the FLOORED null (an input-only quantity — never the effectiveNull that depends on
  * prior moments, which would be circular).
  */
-export function gaussianToBeta(mu: number, sigma2: number, anchorNull: number): { alpha: number; beta: number } {
-  const mean = anchorNull + mu * AVERAGE_EVIDENCE_DELTA_RR;
-  const varRR = sigma2 * AVERAGE_EVIDENCE_DELTA_RR * AVERAGE_EVIDENCE_DELTA_RR;
+export function gaussianToBeta(
+  mu: number, sigma2: number, anchorNull: number,
+  deltaRR: number = AVERAGE_EVIDENCE_DELTA_RR,
+): { alpha: number; beta: number } {
+  const mean = anchorNull + mu * deltaRR;
+  const varRR = sigma2 * deltaRR * deltaRR;
   return betaFromMeanVar(mean, varRR);
 }
 
 /**
  * Convert a full Gaussian mixture (from effect-prior.ts) to a Beta mixture, anchored on the
  * comparator. Each component is converted independently; weights are preserved.
+ *
+ * `deltaRR` is the stage's margin scale: the default 0.10 (the clinical-meaningfulness margin,
+ * validated against phase base rates) — or a SOURCED per-stage value (see computeStageRR's
+ * sourcedExpectedRR), the same pattern the continuous family's dScale and the TTE family's hrScale
+ * use, which is why those two families were immune to the 2.2 absolute-scale bug.
  */
-export function mixtureToBeta(mixture: EffectPriorMixture, anchorNull: number): BetaMixture {
+export function mixtureToBeta(
+  mixture: EffectPriorMixture, anchorNull: number,
+  deltaRR: number = AVERAGE_EVIDENCE_DELTA_RR,
+): BetaMixture {
   return mixture.map((c) => {
-    const { alpha, beta } = gaussianToBeta(c.mu, c.sigma2, anchorNull);
+    const { alpha, beta } = gaussianToBeta(c.mu, c.sigma2, anchorNull, deltaRR);
     return { w: c.w, alpha, beta };
   });
 }
@@ -548,6 +559,7 @@ export function gridToGaussianMixture(
   grid: RRGrid,
   nComponents: number = 1,
   anchorNull: number = 0,
+  deltaRR: number = AVERAGE_EVIDENCE_DELTA_RR,
 ): EffectPriorMixture {
   // EXACT INVERSE of the comparator-anchored forward map (gaussianToBeta):
   //   mu = (mean_rr − anchorNull) / Δ    (clamped ≥ 0 — μ-space has no below-comparator state)
@@ -557,9 +569,9 @@ export function gridToGaussianMixture(
   // comparator. THE 2.2 COLLAPSE BUG lived here: the forward map was re-anchored but this inverse
   // still used the old absolute mu = mean×2, so each stage hand-off roughly halved the margin and
   // multi-stage P(approval) collapsed (tau hit 0.0099 mid-refactor).
-  const toMu = (mean: number) => Math.max(0, (mean - anchorNull) / AVERAGE_EVIDENCE_DELTA_RR);
+  const toMu = (mean: number) => Math.max(0, (mean - anchorNull) / deltaRR);
   const toSigma2 = (variance: number) =>
-    Math.max(1e-6, variance / (AVERAGE_EVIDENCE_DELTA_RR * AVERAGE_EVIDENCE_DELTA_RR));
+    Math.max(1e-6, variance / (deltaRR * deltaRR));
 
   if (nComponents <= 1 || grid.theta.length === 0) {
     const { mean, variance } = gridMoments(grid);
@@ -1008,6 +1020,7 @@ export function generateCounterfactuals(
   comparatorSigma2: number = 0,
   gaussianMixture?: EffectPriorMixture,  // Build 2: biomarker what-if shifts the PRIOR (needs the mixture)
   anchorNull: number = nullRR,           // the evidence-context anchor the stage's prior was built on
+  deltaRR: number = AVERAGE_EVIDENCE_DELTA_RR, // the stage's margin scale (sourced or default)
 ): { label: string; pSuccess: number }[] {
   const results: { label: string; pSuccess: number }[] = [];
 
@@ -1046,9 +1059,9 @@ export function generateCounterfactuals(
   // mixture to shift; otherwise fall back to the (pre-Build-2) effective-n view.
   if (design.populationType !== "biomarker_selected") {
     if (gaussianMixture) {
-      // Anchor on the SAME evidence context the stage's own prior was built on (anchorNull, not the
-      // threshold), so the enriched prior and the base prior live on the same anchored scale.
-      const enrichedGrid = betaToGrid(mixtureToBeta(enrichEffectPrior(gaussianMixture, DEFAULT_ENRICHMENT_LIFT), anchorNull));
+      // Anchor on the SAME evidence context and margin scale the stage's own prior was built on
+      // (anchorNull + deltaRR, not the threshold), so the enriched and base priors are commensurate.
+      const enrichedGrid = betaToGrid(mixtureToBeta(enrichEffectPrior(gaussianMixture, DEFAULT_ENRICHMENT_LIFT), anchorNull, deltaRR));
       const alt = computeStageSuccess(enrichedGrid, n, nullRR, design, comparatorSigma2);
       results.push({ label: "If biomarker-selected population", pSuccess: alt });
     } else {
@@ -1075,6 +1088,8 @@ export type StageRRResult = {
   priorMean: number;
   posteriorMean: number;
   effectiveNullRR: number;       // the threshold actually used (after floor + reliability guard)
+  deltaStageRR: number;          // the margin scale used (sourced Δ_stage, or the 0.10 default)
+  deltaStageSourced: boolean;    // true → Δ came from a sourced expected rate (dScale pattern)
   rawNullRR: number;             // the raw SOC rate before floor
   comparatorUnreliable: boolean; // raw threshold exceeded the drug's own prior mean →
                                  //   comparator discarded, held to clinical floor (fix #3 pins it)
@@ -1122,6 +1137,15 @@ export function computeStageRR(
   observedN?: number,
   comparatorSigma2: number = 0,
   anchorNullRR?: number,
+  // A SOURCED expected response rate for this stage's endpoint (the drug's own observed data or a
+  // named analog — the caller enforces the citation gate). When present and valid, the margin scale
+  // becomes stage-derived: Δ_stage = (sourcedExpectedRR − anchor) / μ̄, so the prior MEAN lands
+  // exactly on the sourced rate and μ reads as "fraction of the stage-expected margin achieved" —
+  // the dScale/hrScale pattern (deliver the sourced magnitude at the prior mean), which is what made
+  // the continuous/TTE families immune to the absolute-scale bug. Absent → Δ = 0.10, the validated
+  // clinical-meaningfulness default. This is what lets a rate-evidenced asset (e.g. an observed 64%
+  // clearance vs a 15% null) carry its real ~50-point margin instead of the 10-point default.
+  sourcedExpectedRR?: number,
 ): StageRRResult {
   // 0. ANCHOR vs THRESHOLD — two different quantities, deliberately (the 2.2 semantics):
   //
@@ -1149,8 +1173,19 @@ export function computeStageRR(
   const flooredNull = Math.max(nullRR, floor);
   const effectiveNull = flooredNull;
 
+  // 0b. Stage margin scale — sourced when a valid expected rate exists (must clear the anchor with a
+  //     real margin and leave grid headroom; μ̄ is the mixture mean, an input-only quantity), else the
+  //     validated 0.10 default. Bad citations fall back silently HERE but are flagged by the caller.
+  const muBar = gaussianMixture.reduce((s, c) => s + c.w * c.mu, 0);
+  const sourcedOk =
+    sourcedExpectedRR != null && Number.isFinite(sourcedExpectedRR) &&
+    sourcedExpectedRR > anchorNull + 0.01 && sourcedExpectedRR < 0.95 && muBar > 0.05;
+  const deltaStage = sourcedOk
+    ? (sourcedExpectedRR! - anchorNull) / muBar
+    : AVERAGE_EVIDENCE_DELTA_RR;
+
   // 1. Convert to Beta mixture (anchored on the evidence context — see gaussianToBeta) and discretize
-  const betaMix = mixtureToBeta(gaussianMixture, anchorNull);
+  const betaMix = mixtureToBeta(gaussianMixture, anchorNull, deltaStage);
   const priorGrid = betaToGrid(betaMix);
   const priorMoments = gridMoments(priorGrid);
 
@@ -1307,9 +1342,9 @@ export function computeStageRR(
   // 5. Summary statistics
   const posteriorMoments = gridMoments(posteriorGrid);
 
-  // 6. Counterfactual ablations (power against the effective threshold; priors on the anchor)
+  // 6. Counterfactual ablations (power against the effective threshold; priors on the anchor/scale)
   const counterfactuals = generateCounterfactuals(
-    priorGrid, n, effectiveNull, powerDesign, trialSuccessProb, comparatorSigma2, gaussianMixture, anchorNull,
+    priorGrid, n, effectiveNull, powerDesign, trialSuccessProb, comparatorSigma2, gaussianMixture, anchorNull, deltaStage,
   );
 
   // 7. Build comparator distribution curve for display
@@ -1324,6 +1359,8 @@ export function computeStageRR(
     priorMean: priorMoments.mean,
     posteriorMean: posteriorMoments.mean,
     effectiveNullRR: effectiveNull,
+    deltaStageRR: deltaStage,
+    deltaStageSourced: sourcedOk,
     rawNullRR: nullRR,
     comparatorUnreliable,
     comparatorSigma2,

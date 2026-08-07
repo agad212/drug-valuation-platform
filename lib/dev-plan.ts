@@ -233,6 +233,12 @@ export type DevStageInput = {
 
   // Bayesian RR engine inputs (AI-estimated or user-entered)
   nullResponseRate?: number;      // SOC/historical control response rate (0-1)
+  // SOURCED expected response rate for THIS stage's endpoint — the drug's own observed data on that
+  // endpoint or a NAMED analog. Sets the stage's margin scale (Δ_stage, the dScale/hrScale pattern) so
+  // a rate-evidenced asset carries its real margin instead of the 0.10 default. Resolve-or-flag: used
+  // ONLY when expectedResponseRateBasis names a source — an uncited number is ignored + flagged.
+  expectedResponseRate?: number;
+  expectedResponseRateBasis?: string;
   // The BASELINE null the effect prior's margin is scored against, when it differs from
   // nullResponseRate — i.e. when an option RAISED this stage's bar (active comparator / corrected
   // control rate). The prior anchors here; the raised nullResponseRate is only the threshold, so a
@@ -572,6 +578,18 @@ export function computeDevPlan(
       : { lift: 0, flagged: false };
     const powerMixture = enrichment.lift > 0 ? enrichEffectPrior(currentMixture, enrichment.lift) : currentMixture;
 
+    // Sourced expected rate — citation-gated (resolve-or-flag): a number without a named basis is
+    // IGNORED and flagged, never silently trusted (same contract as the niche WAC/share/count).
+    const expectedRRCited = stageInput.expectedResponseRate != null &&
+      !!stageInput.expectedResponseRateBasis?.trim();
+    const sourcedExpectedRR = expectedRRCited ? stageInput.expectedResponseRate : undefined;
+    if (stageInput.expectedResponseRate != null && !expectedRRCited) {
+      l2.riskFlags.push({
+        severity: "info",
+        message: `expectedResponseRate ${stageInput.expectedResponseRate} UNSOURCED (no basis) → ignored; margin scale held at the 0.10 default`,
+      });
+    }
+
     const rrResult = computeStageRR(
       powerMixture,
       stageInput.n,
@@ -582,6 +600,7 @@ export function computeDevPlan(
       stageInput.observedN,
       stageInput.comparatorSigma2 ?? 0,
       stageInput.anchorNullResponseRate,
+      sourcedExpectedRR,
     );
 
     // Propagation belief: the UN-enriched posterior, so the enrichment does NOT carry into the
@@ -592,6 +611,7 @@ export function computeDevPlan(
           stageInput.isTimeToEvent === true, stageInput.observedResponseRate, stageInput.observedN,
           stageInput.comparatorSigma2 ?? 0,
           stageInput.anchorNullResponseRate,
+          sourcedExpectedRR,
         )
       : rrResult;
 
@@ -647,6 +667,10 @@ export function computeDevPlan(
       propagationResult.posteriorGrid,
       currentMixture.length,
       stageAnchor,
+      // The SAME margin scale the stage's prior used (sourced Δ_stage or the default): μ round-trips
+      // as "fraction of the stage-expected margin achieved", so a success confirming ~90% of a sourced
+      // margin seeds the next stage at ~90% of ITS margin scale — proportional, not absolute.
+      propagationResult.deltaStageRR,
     );
     const { mss: mssIfSuccess, variance: varianceIfSuccess } = mixtureMoments(mixtureIfSuccess);
 
