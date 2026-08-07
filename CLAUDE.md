@@ -15,9 +15,11 @@ than an unfinished honest one.
 
 ## 1. Governing invariants — non-negotiable
 
-**1.1 FROZEN (regression tripwire).** Reference assets: **TTX-MC138 pApproval = 0.08985679656422688**
-(`0.08986`), **tau / bms-986446 = 0.2675078005848638** (`0.26751`). `tests/harness` must pass **29/29
-byte-identical** on every commit. FROZEN protects against *accidental* movement. A **deliberate re-pin**
+**1.1 FROZEN (regression tripwire).** Reference assets: **TTX-MC138 pApproval = 0.02844308071545876**
+(`0.02844`), **tau / bms-986446 = 0.025185030829508463** (`0.02519`) — re-pinned 2026-08-07 by the 2.2
+anchored-scale fix (lineage + literature validation documented in the FROZEN_PAPPROVAL block of
+`tests/harness/valuation-harness.test.ts`). `tests/harness` must pass **29/29 byte-identical** on every
+commit. FROZEN protects against *accidental* movement. A **deliberate re-pin**
 is allowed when a change legitimately touches the reference path: recompute, confirm the movement is
 intended and correct, update the fixture `expected` block, and document why in the commit. **Forbidden:**
 silent drift. An unexplained change is an accidental regression — find it, don't re-pin around it.
@@ -145,10 +147,25 @@ data; Evaluate Omnium access.
 
 ---
 
-## 4. The open defect: 2.2 — probability scale conflation
+## 4. 2.2 — probability scale conflation: **FIXED AND MERGED (2026-08-07, merge 97deae5)**
 
-> **STATUS 2026-08-07: attempted at full session scale; parked on branch `feat/2.2-anchored-scale`
-> (commit 0680dcd) — do NOT merge as-is; main remains on the old scale, harness green.**
+> **STATUS: COMPLETE on main.** All four strata landed: the anchored map (`betaFromMeanVar` +
+> `gaussianToBeta(μ,σ²,anchor)`, comparator built directly — no inverse), the cross-stage inverse
+> (`gridToGaussianMixture`), anchor≠threshold (`anchorNullRR`, with the anchor sharing the threshold's
+> ENDPOINT-FAMILY floor so the TTE-proxy floor relocates rather than taxes — the earlier "endpoint-
+> agnostic anchor" was the TTX-collapse bug), and the surrogate→TTE translation-failure component.
+> Tripwires re-pinned with literature validation: TTX 0.08986→**0.02844** (≈ the 3.4% oncology
+> early-phase base, Wong/Siah/Lo 2019), tau 0.26751→**0.02519** (anti-tau class: zero approvals,
+> p_graveyard 0.872; band re-authored [0.01,0.15]). G2-2a proxy-vs-native divergence: 3.52× → 1.43×.
+> **DEFERRED refinement (the next item on this axis): sourced-margin unification for the proportion
+> family** — Δ_stage from a sourced expectedResponseRate (the dScale/hrScale pattern that made the
+> continuous/TTE families immune), Δ=0.10 as labeled fallback; needs an emission field + a
+> no-double-count design vs the evidence chain. Rate-evidenced assets (TTX's 64% observed clearance)
+> currently ride the 0.10 default — conservative, flagged, not silent.
+> The history below is retained for context; the "parked" status it describes is superseded.
+
+> **(superseded) STATUS 2026-08-07 earlier: attempted at full session scale; parked on branch
+> `feat/2.2-anchored-scale` (commit 0680dcd) — main remained on the old scale at that point.**
 > Three of the four architectural strata are SOLVED in working code on that branch (393/399 green):
 > the anchored map + `betaFromMeanVar` (comparator built directly — the bidirectional inverse is
 > *eliminated*, not changed); the cross-stage inverse in `gridToGaussianMixture` (without it every
