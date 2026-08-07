@@ -114,6 +114,56 @@ describe("cashflow — 4.6 deprioritized-indication flag (observe-and-flag, valu
   });
 });
 
+describe("cashflow — 4.5 v1: a non-lead indication's P derives from ITS OWN remaining path (never the lead plan's)", () => {
+  const yr = new Date().getFullYear();
+  const mk = (second: Partial<Valuation["indications"] extends (infer T)[] | undefined ? T : never>): Valuation => ({
+    ...base,
+    ptrs: 0.29, // the lead plan's P — the number the second row must STOP inheriting
+    indications: [
+      { id: "lead", name: "IPF", peakSales: 1_400_000_000, ptrs: 0.29, launchYear: 2032, phase: "Phase 2b" },
+      { id: "st", name: "Solid Tumors With PTCH1 Loss-of-function Mutations", peakSales: 350_000_000, launchYear: 2028, ...second },
+    ],
+  });
+
+  it("the taladegib shape: Phase-2 oncology row gets LOA 24.6%×47.7%×90.6% ≈ 10.6%, launch floored, both flagged", () => {
+    const out = computeOutputs(mk({ phase: "Phase 2" }));
+    const st = out.indicationOutputs[1];
+    expect(st.ptrs).toBeCloseTo(0.246 * 0.477 * 0.906, 6); // ≈ 0.1063 — oncology bucket via the row's name
+    expect(st.ptrsBasis).toMatch(/BIO\/Informa/);
+    expect(out.indicationFlags.some((f) => /Solid Tumors.*derived from its OWN remaining path/.test(f) && /10\.6%/.test(f))).toBe(true);
+    // Launch floor: Phase 2 → ~+5yr; the claimed 2028 is impossible with no Phase 3 started
+    expect(st.effLaunch).toBe(yr + 5);
+    expect(out.indicationFlags.some((f) => /launch 2028 precedes/.test(f) && new RegExp(String(yr + 5)).test(f))).toBe(true);
+    // And the row is worth LESS than under the inherited-P fiction (lower P AND later launch)
+    const inherited = computeOutputs(mk({ phase: undefined }));
+    expect(st.rnpv).toBeLessThan(inherited.indicationOutputs[1].rnpv);
+  });
+
+  it("an explicit per-row P always wins — no derivation, no derivation flag", () => {
+    const out = computeOutputs(mk({ phase: "Phase 2", ptrs: 0.5 }));
+    expect(out.indicationOutputs[1].ptrs).toBe(0.5);
+    expect(out.indicationOutputs[1].ptrsBasis).toBeUndefined();
+    expect(out.indicationFlags.some((f) => /derived from its OWN remaining path/.test(f))).toBe(false);
+  });
+
+  it("non-oncology Phase 3 row uses the pooled rates: 57.8% × 90.6% ≈ 52.4%", () => {
+    const out = computeOutputs(mk({ name: "Idiopathic Membranous Nephropathy", phase: "Phase 3", launchYear: yr + 3 }));
+    expect(out.indicationOutputs[1].ptrs).toBeCloseTo(0.578 * 0.906, 6);
+  });
+
+  it("no parseable phase → INHERITS the lead's P, but says so out loud (resolve-or-flag)", () => {
+    const out = computeOutputs(mk({}));
+    expect(out.indicationOutputs[1].ptrs).toBe(0.29);
+    expect(out.indicationFlags.some((f) => /no parseable phase.*P INHERITED from the lead plan/.test(f))).toBe(true);
+  });
+
+  it("the LEAD is never derived — its P is governed by the computed dev plan", () => {
+    const out = computeOutputs(mk({ phase: "Phase 2" }));
+    expect(out.indicationOutputs[0].ptrs).toBe(0.29);
+    expect(out.indicationOutputs[0].ptrsBasis).toBeUndefined();
+  });
+});
+
 describe("cashflow — SEQUENTIAL: a later indication launches no earlier than its prerequisite (revenue shifts later)", () => {
   it("sequential-after shifts launch to the prerequisite's, lowering that indication's revenue PV vs an independent early launch", () => {
     const out = computeOutputs({

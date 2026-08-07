@@ -147,9 +147,32 @@ its % of headline, observe-and-flag, value not adjusted).
 
 **Other open items:** `inferTherapeuticArea` has no respiratory/pulmonary-fibrosis TA so IPF falls
 to `general` (an INPULSIS/ASCEND-scale Phase 3 costed as a cheap general trial — needs a literature CPP
-band, calibration-blocked); 4.5 true per-indication dev plans; Tier 3 (calibration, ChEMBL/Open Targets
-translational layer); Tier 5 exotics. **External blockers:** calibration
-historical outcome/trial-cost data; Evaluate Omnium access.
+band, calibration-blocked); 4.5 true per-indication dev plans (v1 IN PROGRESS — see below); Tier 3
+(calibration, ChEMBL/Open Targets translational layer); Tier 5 exotics. **External blockers:**
+calibration historical outcome/trial-cost data; Evaluate Omnium access.
+
+**ROADMAP ORDER (agreed with the user 8/7 night): 4.5 first, THEN the AI-elicitation axis.**
+- **4.5 v1 (now):** per-indication P derived from each indication's OWN remaining path — LOA from its
+  current phase (BIO/Informa/QLS 2011–2020 transitions, `lib/indication-loa.ts`), non-lead rows only,
+  explicit ptrs always wins, lead stays governed by the computed dev plan. Plus a launch-year floor
+  (a row still needing Phase 3 cannot launch in 2 years). Zero API; capability-gated in effect (lead
+  and single-indication paths byte-identical). Emissions stay interview-ready (structured fields +
+  basis strings). v2 later: mechanism read-through, per-indication cost paths, class haircut.
+- **AI-ELICITATION AXIS (next major axis, after 4.5):** recast the LLM layer as an SME under a
+  facilitated elicitation (per the user's BMS SOA training docs, in repo lore 8/7). Where it goes:
+  (1) **Interview protocol** replaces one-shot emissions — extremes first, then bounds, then center,
+  then a consistency cross-check via a second framing; ONE batched call per module (API frugality).
+  Dev-plan module first (replicationRisk, expectedResponseRate, comparatorSigma2, nullRR), then LOE
+  cases (pProtective), then revenue (WAC/share/count, bull/bear as p05/p95 or 15/85, never absolutes).
+  (2) **Distributions, not points**: elicit fractiles; deterministic code fits (mirrors §1.4). Replace
+  the hand-set 0.25/0.5/0.25 scenario weights with **Extended Pearson-Tukey 0.185/0.63/0.185 on
+  p05/p50/p95 (Keefer & Bodily 1983)** — a derived, cited discretization.
+  (3) **Checker pass** generalizes the Option B critic: one batched call auditing every elicited
+  quantity's RATIONALE (not the number) for anchoring/availability/base-rate-neglect/motivated
+  narrative + rationale↔number arithmetic (a tally of "2 of 6" must imply the stated pFail), on top of
+  the existing deterministic coherence gates (sums-to-1, bands, unit gate).
+  (4) Dependency statements: the AI must declare independence beliefs (same-mechanism indications are
+  NOT defensibly independent — the existing correlation caveat becomes an elicited quantity).
 
 **8/7 LIVE RUN (taladegib PDF) — verified & fixed same day.** Every shipped feature rendered correctly
 (4.6 stalled flag with 27% share, critic verdicts, intensity flags 3.3×, containment clamp, designation

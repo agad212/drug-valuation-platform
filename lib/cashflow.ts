@@ -1,4 +1,6 @@
 import type { Valuation, Indication } from "./types";
+import { indicationLoa } from "./indication-loa";
+import { inferTherapeuticArea } from "./financial-pins";
 
 // ─── Phase-baseline P(approval) fallback ──────────────────────────────────────
 //
@@ -112,6 +114,9 @@ export type IndicationOutput = Indication & {
   rnpv: number;
   ptrs: number;
   devCostPV: number;
+  // 4.5 v1 — set when this row's P was DERIVED from its own remaining path (indication-loa.ts)
+  // instead of inherited from the lead plan. Display-ready citation + arithmetic.
+  ptrsBasis?: string;
   // ADDITIVE render-support (no math change): the RESOLVED effective launch used for revenue (a
   // sequential-after indication's launch floored at its prerequisite's) and the conditional P-weight
   // applied to its contribution (present only for conditional-on). The multi-indication Gantt READS
@@ -157,18 +162,45 @@ export function computeOutputs(v: Valuation): {
       // Effective launch. sequential-after:<id> → no earlier than the prerequisite's launch (fixes a
       // later indication silently inheriting the lead's early launch). Otherwise own launch, falling
       // back to the drug's — flagged for a non-lead, since inheriting the lead's early launch inflates PV.
+      // ── 4.5 v1: a NON-LEAD indication's P and launch derive from ITS OWN remaining path ─────────
+      // The lead's P is governed by the computed dev plan (v.ptrs); before this fix every other row
+      // silently inherited it — the live 8/7 gap: a stalled Phase-2-completed oncology row carrying
+      // the IPF program's 29%. Resolve-or-flag: an explicit ind.ptrs always wins; an unparseable
+      // phase falls back to inheritance WITH a flag; the derivation names its literature basis.
+      const loa = !isLead && ind.ptrs == null
+        ? indicationLoa(ind.phase, inferTherapeuticArea(ind.name) === "oncology")
+        : null;
+      if (!isLead && ind.ptrs == null && !loa) {
+        indicationFlags.push(`${ind.name}: no parseable phase — P INHERITED from the lead plan (${(ptrs * 100).toFixed(1)}%), which reflects the LEAD's trials, not this row's. Set the row's phase or an explicit P.`);
+      }
+      if (loa) {
+        indicationFlags.push(
+          `${ind.name}: P(approval) ${(loa.p * 100).toFixed(1)}% derived from its OWN remaining path — ${loa.basis}. ` +
+          `No longer inheriting the lead plan's ${(ptrs * 100).toFixed(1)}% (which priced the lead's trials). ` +
+          `Normal-prosecution assumption; mechanism-class haircut not applied (v1). Set an explicit P to override.`,
+        );
+      }
+
       const ownLaunch = ind.launchYear ?? v.launchYear;
       let effLaunch = ownLaunch;
+      // Launch floor: a row still needing its remaining phases cannot launch earlier than the path
+      // allows (live 8/7: the Phase-2-completed row claimed a 2028 launch — impossible with no
+      // Phase 3 started). Same heuristic family as the trial-based launch estimate; RAISE-only.
+      if (loa && !(ind as { alreadyLaunched?: boolean }).alreadyLaunched && ownLaunch != null && ownLaunch < loa.minLaunchYear) {
+        indicationFlags.push(`${ind.name}: launch ${ownLaunch} precedes the earliest credible completion of its remaining path — floored to ${loa.minLaunchYear} (${loa.phaseBucket} → ~+${loa.minLaunchYear - new Date().getFullYear()}yr)`);
+        effLaunch = loa.minLaunchYear;
+      }
       const seqId = typeof rel === "string" && rel.startsWith("sequential-after:") ? rel.slice("sequential-after:".length) : null;
       if (seqId) {
         const prereqLaunch = byId.get(seqId)?.launchYear ?? indications[0]?.launchYear ?? v.launchYear;
-        if (prereqLaunch != null) effLaunch = ind.launchYear != null ? Math.max(ind.launchYear, prereqLaunch) : prereqLaunch;
+        // Respect the 4.5 launch floor: the LATEST of (own/prereq resolution, remaining-path floor).
+        if (prereqLaunch != null) effLaunch = Math.max(effLaunch ?? -Infinity, ind.launchYear != null ? Math.max(ind.launchYear, prereqLaunch) : prereqLaunch);
         if (effLaunch !== ownLaunch) indicationFlags.push(`${ind.name}: sequential-after ${byId.get(seqId)?.name ?? seqId} — launch shifted to ${effLaunch} (≥ prerequisite; refine with an explicit later launch)`);
       } else if (!isLead && ind.launchYear == null) {
         indicationFlags.push(`${ind.name}: no launch year — inherited the lead's (${v.launchYear}); revenue may be inflated — set its own launch or mark it sequential`);
       }
 
-      const indPtrs = ind.ptrs ?? ptrs;
+      const indPtrs = ind.ptrs ?? loa?.p ?? ptrs;
       // LOE cases are SCOPED per indication: exclusivity and method-of-use patents are indication-specific
       // (21 USC 360cc(a) is per approved use), so the lead's distribution must not leak onto an indication
       // that has its own LOE. Precedence: the indication's own cases → else, if it has its own loeYear, NO
@@ -194,7 +226,7 @@ export function computeOutputs(v: Valuation): {
       // effLaunch + conditionalPWeight are ADDITIVE render-support (no math change): the RESOLVED launch
       // used for revenue and the conditional weight applied — the Gantt reads these to place the
       // stagger/gate from resolved data (never re-deriving the floor).
-      return { ...ind, revenuePV: indRevPV, rnpv: Math.round(contribution), ptrs: indPtrs, devCostPV: indDevCost, effLaunch, conditionalPWeight };
+      return { ...ind, revenuePV: indRevPV, rnpv: Math.round(contribution), ptrs: indPtrs, devCostPV: indDevCost, effLaunch, conditionalPWeight, ...(loa ? { ptrsBasis: loa.basis } : {}) };
     });
 
     if (n > 1) {
