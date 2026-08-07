@@ -11,6 +11,7 @@
     "pages/api/dev-plan.ts":          { "maxDuration": 240 },
     "pages/api/indication-structure.ts": { "maxDuration": 120 },
     "pages/api/decision-options.ts":  { "maxDuration": 120 },
-    "pages/api/design-interpreter.ts": { "maxDuration": 120 }
+    "pages/api/design-interpreter.ts": { "maxDuration": 120 },
+    "pages/api/option-critic.ts":     { "maxDuration": 60 }
   }
 }
