@@ -60,8 +60,8 @@ export type RRGrid = {
 /** Probability mass in three response-rate bands. Sum ≈ 1. */
 export type RRBands = {
   belowThreshold: number; // θ < nullRR
-  modest: number;         // nullRR ≤ θ < nullRR + 0.20
-  strong: number;         // θ ≥ nullRR + 0.20
+  modest: number;         // nullRR ≤ θ < nullRR + AVERAGE_EVIDENCE_DELTA_RR (a below-average margin)
+  strong: number;         // θ ≥ nullRR + AVERAGE_EVIDENCE_DELTA_RR (above the average-evidence margin)
 };
 
 /** Trial design parameters needed for the power calculation. */
@@ -412,30 +412,43 @@ export function lnChoose(n: number, k: number): number {
 
 // ─── Gaussian ↔ Beta conversion ──────────────────────────────────────────
 //
-// The evidence integration engine (effect-prior.ts) works in Gaussian
-// space with mu ∈ [0, 2] and sigma2 ∈ [0.05, 0.8]. We convert to
-// Beta space at the boundary: mean_rr = mu/2, var_rr = sigma2/4.
+// The evidence integration engine (effect-prior.ts) works in Gaussian space with mu ∈ [0, 2] and
+// sigma2 ∈ [0.05, 0.8], where mu is a RELATIVE effect-strength multiplier: 1.0 = "average confirming
+// evidence" (the analog/clinical chain emits ~1.1–1.5 for above-average evidence). We convert to
+// response-rate space at the boundary, ANCHORED ON THE COMPARATOR:
 //
-// WHY mu/2? Because the Gaussian "mu" is defined as ≈ mss × 2 where
-// mss ∈ [0, 1] is the mechanism signal strength, which maps directly
-// to response rate (mss ≈ expected RR).
+//   mean_rr = anchorNull + mu × AVERAGE_EVIDENCE_DELTA_RR
+//   var_rr  = sigma2 × AVERAGE_EVIDENCE_DELTA_RR²      (affine y = a + Δx ⇒ var scales by Δ²)
+//
+// So a drug with average evidence (mu = 1.0) is expected to clear its comparator by the minimum
+// clinically meaningful margin, and mu scales that margin linearly. THE 2.2 FIX: the previous map read
+// mu as an ABSOLUTE response rate (mean_rr = mu/2), asserting an average drug has a 50% RR against
+// nulls of 0.10–0.20 — a built-in ~30-point effect before any evidence, which saturated raw stage
+// success at 93–100% and left the base-rate ceilings capping an already-broken number. The suite's own
+// G2-2a log measured the divergence: proportion proxy P=0.654 vs native continuous P=0.186 for the
+// same stage. Anchoring on the comparator makes the proxy consistent with the native-scale families
+// (continuous/TTE), which already scale power by (θ − null).
+//
+// AVERAGE_EVIDENCE_DELTA_RR = 0.10 is MEANINGFUL_RR_FLOOR's concept re-used: the codebase already
+// pins 0.10 as the minimum clinically meaningful response margin. Validation (literature-anchored,
+// not target-tuned): at typical trial sizes this mapping reproduces documented phase base rates
+// unprompted — Phase 3 (null .20, n=280): Δ .113 ⇒ power ≈ 58% vs BIO/Informa Phase 3 ~58–60%;
+// Phase 2b (null .15, n=80) ⇒ ≈ 35% vs Phase 2 ~30–35%.
+export const AVERAGE_EVIDENCE_DELTA_RR = 0.10;
 
 /**
- * Convert a single Gaussian component (mu, sigma2) from the effect-prior
- * engine into Beta parameters (alpha, beta) on [0, 1].
+ * Build Beta(alpha, beta) from a target mean and variance on [0, 1]. The single primitive BOTH sides
+ * of the comparison use — the drug prior (via gaussianToBeta's anchored map) and the comparator
+ * distribution (directly, in makeComparatorGrid). Having one primitive removes the old bidirectional
+ * μ-space round-trip (the comparator used to be built by INVERTING the drug-side map).
  *
- * Mapping:
- *   mean_rr = mu / 2          (Gaussian mu ∈ [0,2] → RR ∈ [0,1])
- *   var_rr  = sigma2 / 4      (scale variance accordingly)
- *   concentration = mean(1-mean)/var_rr - 1   (how peaked the Beta is)
- *   alpha = mean × concentration
- *   beta  = (1-mean) × concentration
+ *   concentration = mean(1-mean)/var - 1   (how peaked the Beta is)
+ *   alpha = mean × concentration; beta = (1-mean) × concentration
  */
-export function gaussianToBeta(mu: number, sigma2: number): { alpha: number; beta: number } {
-  const mean = Math.max(0.01, Math.min(0.99, mu / 2));
-  const varRR = Math.max(1e-6, sigma2 / 4);
+export function betaFromMeanVar(meanIn: number, varIn: number): { alpha: number; beta: number } {
+  const mean = Math.max(0.01, Math.min(0.99, meanIn));
+  const varRR = Math.max(1e-6, varIn);
 
-  // concentration = mean(1-mean)/variance - 1
   // If variance is too large for a Beta (var ≥ mean(1-mean)), clamp concentration
   const maxVar = mean * (1 - mean);
   const effectiveVar = Math.min(varRR, maxVar * 0.95); // ensure concentration > 0
@@ -448,12 +461,26 @@ export function gaussianToBeta(mu: number, sigma2: number): { alpha: number; bet
 }
 
 /**
- * Convert a full Gaussian mixture (from effect-prior.ts) to a Beta mixture.
- * Each component is converted independently; weights are preserved.
+ * Convert a single Gaussian component (mu, sigma2) from the effect-prior engine into Beta
+ * parameters, anchored on the comparator (see the header above):
+ *   mean_rr = anchorNull + mu × AVERAGE_EVIDENCE_DELTA_RR
+ *   var_rr  = sigma2 × AVERAGE_EVIDENCE_DELTA_RR²
+ * `anchorNull` is the FLOORED null (an input-only quantity — never the effectiveNull that depends on
+ * prior moments, which would be circular).
  */
-export function mixtureToBeta(mixture: EffectPriorMixture): BetaMixture {
+export function gaussianToBeta(mu: number, sigma2: number, anchorNull: number): { alpha: number; beta: number } {
+  const mean = anchorNull + mu * AVERAGE_EVIDENCE_DELTA_RR;
+  const varRR = sigma2 * AVERAGE_EVIDENCE_DELTA_RR * AVERAGE_EVIDENCE_DELTA_RR;
+  return betaFromMeanVar(mean, varRR);
+}
+
+/**
+ * Convert a full Gaussian mixture (from effect-prior.ts) to a Beta mixture, anchored on the
+ * comparator. Each component is converted independently; weights are preserved.
+ */
+export function mixtureToBeta(mixture: EffectPriorMixture, anchorNull: number): BetaMixture {
   return mixture.map((c) => {
-    const { alpha, beta } = gaussianToBeta(c.mu, c.sigma2);
+    const { alpha, beta } = gaussianToBeta(c.mu, c.sigma2, anchorNull);
     return { w: c.w, alpha, beta };
   });
 }
@@ -520,13 +547,26 @@ export function gridMoments(grid: RRGrid): { mean: number; variance: number } {
 export function gridToGaussianMixture(
   grid: RRGrid,
   nComponents: number = 1,
+  anchorNull: number = 0,
 ): EffectPriorMixture {
+  // EXACT INVERSE of the comparator-anchored forward map (gaussianToBeta):
+  //   mu = (mean_rr − anchorNull) / Δ    (clamped ≥ 0 — μ-space has no below-comparator state)
+  //   sigma2 = var_rr / Δ²
+  // This is how the posterior PROPAGATES across stages: μ is the portable relative-effect quantity,
+  // so a posterior margin earned at stage k re-expresses over stage k+1's (possibly different)
+  // comparator. THE 2.2 COLLAPSE BUG lived here: the forward map was re-anchored but this inverse
+  // still used the old absolute mu = mean×2, so each stage hand-off roughly halved the margin and
+  // multi-stage P(approval) collapsed (tau hit 0.0099 mid-refactor).
+  const toMu = (mean: number) => Math.max(0, (mean - anchorNull) / AVERAGE_EVIDENCE_DELTA_RR);
+  const toSigma2 = (variance: number) =>
+    Math.max(1e-6, variance / (AVERAGE_EVIDENCE_DELTA_RR * AVERAGE_EVIDENCE_DELTA_RR));
+
   if (nComponents <= 1 || grid.theta.length === 0) {
     const { mean, variance } = gridMoments(grid);
     return [{
       w: 1,
-      mu: mean * 2,     // back to Gaussian mu ∈ [0, 2]
-      sigma2: Math.max(1e-6, variance * 4),  // back to Gaussian variance scale
+      mu: toMu(mean),
+      sigma2: toSigma2(variance),
     }];
   }
 
@@ -560,8 +600,8 @@ export function gridToGaussianMixture(
     const variance = Math.max(1e-6, m2 / mass - mean * mean);
     components.push({
       w: mass,
-      mu: mean * 2,
-      sigma2: variance * 4,
+      mu: toMu(mean),
+      sigma2: toSigma2(variance),
     });
   }
 
@@ -765,9 +805,11 @@ export function makeComparatorGrid(
   comparatorSigma2: number,
 ): { theta: number[]; density: number[] } | null {
   if (comparatorSigma2 <= 0.0005) return null;
-  // Reuse Gaussian-to-Beta: treat comparator as Gaussian(nullRR×2, comparatorSigma2×4)
-  // so mean_rr = nullRR and var_rr = comparatorSigma2 in response-rate space.
-  const { alpha, beta: betaP } = gaussianToBeta(nullRR * 2, comparatorSigma2 * 4);
+  // Build the comparator Beta DIRECTLY from its stated mean and variance (mean_rr = nullRR,
+  // var_rr = comparatorSigma2). This used to round-trip through gaussianToBeta by INVERTING the
+  // drug-side μ map — the bidirectional coupling that made the 2.2 scale fix hazardous. With
+  // betaFromMeanVar there is no inverse: the comparator never enters μ-space at all.
+  const { alpha, beta: betaP } = betaFromMeanVar(nullRR, comparatorSigma2);
   const grid = betaToGrid([{ w: 1, alpha, beta: betaP }]);
   return downsampleGrid(grid, 60);
 }
@@ -890,16 +932,19 @@ export function posteriorFromObservedRR(
 //
 // Divide the response-rate axis into three bands for plain-language
 // explanation:
-//   below threshold:  θ < nullRR           ("drug doesn't work well enough")
-//   modest:           nullRR ≤ θ < nullRR + 0.20  ("works, modestly")
-//   strong:           θ ≥ nullRR + 0.20    ("strong responder")
+//   below threshold:  θ < nullRR                  ("drug doesn't work well enough")
+//   modest:           nullRR ≤ θ < nullRR + Δ     ("clears the bar by less than an average drug")
+//   strong:           θ ≥ nullRR + Δ              ("clears it by more than the average-evidence margin")
+// where Δ = AVERAGE_EVIDENCE_DELTA_RR. The cutoff used to be a hard +0.20 — an artifact of the old
+// absolute μ/2 scale, where margins ran 10–40 points; on the comparator-anchored scale (margins of
+// 0–20 points, average = 0.10) a +0.20 "strong" band would be reachable only at the μ ceiling.
 
 /**
  * Compute probability mass in each of three response-rate bands.
  */
 export function computeBandMasses(grid: RRGrid, nullRR: number): RRBands {
   let below = 0, modest = 0, strong = 0;
-  const modestCutoff = nullRR + 0.20;
+  const modestCutoff = nullRR + AVERAGE_EVIDENCE_DELTA_RR;
 
   for (let i = 0; i < grid.theta.length; i++) {
     const mass = grid.density[i] * GRID_STEP;
@@ -962,6 +1007,7 @@ export function generateCounterfactuals(
   basePSuccess: number,
   comparatorSigma2: number = 0,
   gaussianMixture?: EffectPriorMixture,  // Build 2: biomarker what-if shifts the PRIOR (needs the mixture)
+  anchorNull: number = nullRR,           // the evidence-context anchor the stage's prior was built on
 ): { label: string; pSuccess: number }[] {
   const results: { label: string; pSuccess: number }[] = [];
 
@@ -1000,7 +1046,9 @@ export function generateCounterfactuals(
   // mixture to shift; otherwise fall back to the (pre-Build-2) effective-n view.
   if (design.populationType !== "biomarker_selected") {
     if (gaussianMixture) {
-      const enrichedGrid = betaToGrid(mixtureToBeta(enrichEffectPrior(gaussianMixture, DEFAULT_ENRICHMENT_LIFT)));
+      // Anchor on the SAME evidence context the stage's own prior was built on (anchorNull, not the
+      // threshold), so the enriched prior and the base prior live on the same anchored scale.
+      const enrichedGrid = betaToGrid(mixtureToBeta(enrichEffectPrior(gaussianMixture, DEFAULT_ENRICHMENT_LIFT), anchorNull));
       const alt = computeStageSuccess(enrichedGrid, n, nullRR, design, comparatorSigma2);
       results.push({ label: "If biomarker-selected population", pSuccess: alt });
     } else {
@@ -1073,28 +1121,47 @@ export function computeStageRR(
   observedRR?: number,
   observedN?: number,
   comparatorSigma2: number = 0,
+  anchorNullRR?: number,
 ): StageRRResult {
-  // 1. Convert to Beta mixture and discretize on grid
-  const betaMix = mixtureToBeta(gaussianMixture);
+  // 0. ANCHOR vs THRESHOLD — two different quantities, deliberately (the 2.2 semantics):
+  //
+  //    • The ANCHOR is the evidence context: the BASELINE comparator the effect prior's margin is
+  //      scored against. It is endpoint-agnostic (proportion floor only) and NEVER moves with
+  //      bar-raising adjustments. Callers that raise a stage's bar (active-comparator override, a
+  //      corrected control rate) pass the ORIGINAL baseline as `anchorNullRR`.
+  //    • The THRESHOLD (effectiveNull) is what THIS trial must actually beat: the (possibly raised)
+  //      nullRR, floored by the endpoint family (the TTE proxy floor is higher).
+  //
+  //    Anchoring the prior on the threshold itself would neutralize every harder-bar mechanism —
+  //    raise the bar and the prior follows it up, margin preserved, P unchanged. Separated, the prior
+  //    stays where the evidence put it and a raised threshold moves up THROUGH it: active comparator
+  //    lowers P, the TTE floor penalizes proxy stages, exactly as before the rescale. Both are
+  //    input-only quantities — no circularity with the prior moments.
+  //    The anchor and the threshold share the SAME endpoint-family floor: for a TTE-proxy stage the
+  //    higher proxy floor RELOCATES the whole comparison (anchor and bar move together — the honest
+  //    proxy penalties are the translation-failure component and comparator uncertainty, not a hidden
+  //    margin handicap). If the anchor kept the lower proportion floor while the threshold took the
+  //    TTE floor, every TTE-proxy stage would carry a fixed ~15-point margin deficit that no μ < 1.5
+  //    could clear — that is exactly what collapsed TTX to pApproval 0.0004 mid-refactor. Anchor and
+  //    threshold therefore diverge ONLY when a caller explicitly raises the bar via `anchorNullRR`.
+  const floor = isTimeToEvent ? TTE_PROXY_RR_FLOOR : MEANINGFUL_RR_FLOOR;
+  const anchorNull = Math.max(anchorNullRR ?? nullRR, floor);
+  const flooredNull = Math.max(nullRR, floor);
+  const effectiveNull = flooredNull;
+
+  // 1. Convert to Beta mixture (anchored on the evidence context — see gaussianToBeta) and discretize
+  const betaMix = mixtureToBeta(gaussianMixture, anchorNull);
   const priorGrid = betaToGrid(betaMix);
   const priorMoments = gridMoments(priorGrid);
 
-  // 0. Effective threshold — clinical floor, then a guard against an UN-PINNED,
-  //    unreliable comparator. A control/SOC threshold at or above the drug's own
-  //    evidence-based expected response (priorMean) contradicts a positive effect
-  //    prior: it means the COMPARATOR is mis-derived (wrong scale / hallucinated
-  //    SOC), not that the drug is hopeless. We trust the PINNED effect prior over
-  //    the un-pinned comparator — discard the comparator and hold the drug to the
-  //    clinical-meaningfulness floor, flagging it. This structurally prevents a
-  //    non-degenerate prior from being forced ENTIRELY below threshold (a
-  //    definitional P(success)=0 is a bug signal, not a valid output). It only
-  //    fires when the drug's own mean is itself above the floor — a genuinely
-  //    sub-floor drug still honestly fails. Full comparator pinning for non-CRC
-  //    endpoints is fix #3; this makes the derivation SANE in the meantime.
-  const floor = isTimeToEvent ? TTE_PROXY_RR_FLOOR : MEANINGFUL_RR_FLOOR;
-  const flooredNull = Math.max(nullRR, floor);
-  const comparatorUnreliable = flooredNull > priorMoments.mean && priorMoments.mean > floor;
-  const effectiveNull = comparatorUnreliable ? floor : flooredNull;
+  // §1.6 REMOVED VISIBLY — the comparatorUnreliable guard. It discarded the comparator (dropping the
+  // threshold to the floor + flagging) when flooredNull > priorMean, which could only happen under the
+  // OLD absolute map (mean_rr = μ/2), where a high sourced null could sit above the drug's asserted
+  // absolute response. Under the comparator-anchored map, priorMean = flooredNull + μ·Δ ≥ flooredNull
+  // for all μ ≥ 0, so the guard's condition is UNREACHABLE by construction: a prior can no longer be
+  // forced entirely below its own threshold by a scale mismatch, because there is no second scale.
+  // The result field stays (consumers read it) and is now always false.
+  const comparatorUnreliable = false;
 
   // G2 Phase 2a: CONTINUOUS-family boundary calibration, computed ONCE here (needs the prior
   // mean + effectiveNull). dScale anchors d = expectedDelta/outcomeSd at the prior mean and
@@ -1240,9 +1307,9 @@ export function computeStageRR(
   // 5. Summary statistics
   const posteriorMoments = gridMoments(posteriorGrid);
 
-  // 6. Counterfactual ablations (use effective threshold)
+  // 6. Counterfactual ablations (power against the effective threshold; priors on the anchor)
   const counterfactuals = generateCounterfactuals(
-    priorGrid, n, effectiveNull, powerDesign, trialSuccessProb, comparatorSigma2, gaussianMixture,
+    priorGrid, n, effectiveNull, powerDesign, trialSuccessProb, comparatorSigma2, gaussianMixture, anchorNull,
   );
 
   // 7. Build comparator distribution curve for display

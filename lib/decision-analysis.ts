@@ -563,7 +563,11 @@ export function computeOption(
       ...baseStage0,
       n: trialDesign.n,
       trialDesign: recomputeTrialDesign,
-      ...(comparatorNull != null ? { nullResponseRate: comparatorNull } : {}),
+      // A raised comparator bar moves the THRESHOLD only — the effect prior stays anchored on the
+      // BASELINE null (anchorNullResponseRate), so the harder bar genuinely lowers P. Without the
+      // anchor, the comparator-anchored prior (2.2) would re-anchor on the raised null and the
+      // active-comparator penalty would cancel out.
+      ...(comparatorNull != null ? { nullResponseRate: comparatorNull, anchorNullResponseRate: baseNull } : {}),
     };
     // ── Regulatory acceptability (scenario-only, graded): if this option CHANGES the
     // registration endpoint (type, evidence basis, or any acceptance observable) vs the

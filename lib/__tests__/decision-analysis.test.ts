@@ -532,11 +532,23 @@ describe("Strategy Advisor — biomarker enrichment shifts the effect prior", ()
     const { base, stages, revenuePVM } = mkBase();
     const a = computeOption(base, A);
     const enriched = computeOption(base, { id: "b", name: "Biomarker", populationType: "biomarker_selected" }, a);
-    // Reconstruct the recompute the option SHOULD do: enriched prior + BASE (broad) design
-    // stages (no POP_N_FACTOR flip). If the option also flipped POP_N_FACTOR, it would be higher.
+    // Reconstruct the recompute the option SHOULD do: enrichment CONFINED to stage 0 (the per-stage
+    // lift, exactly as computeOption wires it) + BASE (broad) design stages — no POP_N_FACTOR flip.
+    // §1.6 note: this used to pass the pre-enriched mixture for the WHOLE chain, which is a different
+    // computation (it propagates the enriched posterior into stage 1) — the two only agreed because the
+    // old absolute scale saturated stage-1 power to ≈1 either way, flattening the difference. On the
+    // honest 2.2 scale the equality must be asserted against the genuinely-confined reconstruction.
     const manual = computeDevPlan(
-      enrichEffectPrior(mixtureFromMssVariance(0.5, 0.2), DEFAULT_ENRICHMENT_LIFT),
-      0.1, { stages, regulatoryContext: "standard", regCostM: 1.0 }, revenuePVM,
+      mixtureFromMssVariance(0.5, 0.2),
+      0.1,
+      {
+        stages: [
+          { ...stages[0], trialDesign: { ...stages[0].trialDesign, enrichmentEffectLift: DEFAULT_ENRICHMENT_LIFT } },
+          ...stages.slice(1),
+        ],
+        regulatoryContext: "standard", regCostM: 1.0,
+      },
+      revenuePVM,
     );
     expect(enriched.ptrs).toBeCloseTo(manual.pApproval, 6); // prior-shift only; broad design retained
     expect(enriched.ptrs).toBeGreaterThan(a.ptrs);          // still higher than baseline

@@ -142,23 +142,26 @@ describe.each(FIXTURES)("Deterministic harness — %s", (file) => {
 // Bayesian fusion, ceilings and haircut FORMULA are frozen — a change here means a
 // math regression. The value legitimately moves ONLY when we deliberately pin a new
 // INPUT (a designation, a comparator, a classification), which is recorded below.
-// TTX = 0.09993 (live capture 2026-07-18) → RE-PINNED 2026-07-26 to 0.08986 by the base
-// re-pin capstone (ONE unified engine, no base/scenario split). Mechanism deltas: (1)
-// POP_N_FACTOR retired → biomarker enrichment is a per-stage enrichEffectPrior μ-shift; (2)
-// UNCONFIRMED-prevalence hold-at-zero — TTX's biomarker Ph2a has NO sourced prevalence, so it
-// earns lift 0 (held un-enriched) instead of the old flat POP 1.3× boost, which is why s0
-// falls 0.20646→0.18282 and pApproval 0.09993→0.08986 (an unconfirmed biomarker design no
-// longer receives unearned de-risking — mirrors the reg axis holding an unconfirmed endpoint
-// at base rate); (3) flat reg base rate → graded deriveRegConfidence, INFERRED-no-observables
-// HELD at base rate (reg unchanged at 0.85). NOT tuned toward the old value — this is the
-// honest hold-at-zero consequence. Per-stage non-propagation: Ph3 (broad) stays un-enriched.
-// tau = 0.26751: UNCHANGED by the capstone (broad population → no enrichment; reg L2/held at
-// fast_track base 0.85) — byte-identical, the control proving the unification left the
-// non-biomarker path untouched. (Prior 2026-07-20 re-baseline to the pinned-input world
-// stands: regContext fast_track; AD comparator nullRR 0.10; deterministic analog μ0.30/σ²0.13.)
+// TTX = 0.09993 (live capture 2026-07-18) → 0.08986 (2026-07-26 base re-pin capstone) →
+// RE-PINNED 2026-08-07 to 0.02844 by the 2.2 ANCHORED-SCALE re-pin. The old absolute map
+// (mean_rr = μ/2) read the effect prior's relative multiplier as an absolute response rate,
+// building in a ~30-point effect against typical nulls — raw stage success saturated at
+// 93–100% and the ceilings capped an inflated number. The anchored map (mean_rr = anchor +
+// μ·Δ, Δ = 0.10 = the clinical-meaningfulness margin) derives the margin from the evidence:
+// TTX (μ ≈ 0.63, below-average; TTE-proxy stages anchored at the proxy floor 0.25) lands at
+// 0.02844 — consistent with the oncology early-phase base rate (3.4% Phase-1→approval,
+// Wong/Siah/Lo 2019, Biostatistics) for an asset with below-average evidence. eNPV honestly
+// goes slightly negative (−$3.2M). Validated, not tuned: at μ = 1.0 the same fixtures
+// reproduce phase base rates (Ph2b ≈ 30–35%, Ph3 ≈ 55–60%).
+// tau = 0.26751 → RE-PINNED 2026-08-07 to 0.02519 by the same rescale. An anti-tau antibody
+// (class: ZERO approvals, documented failure pattern — gosuranemab, tilavonemab,
+// semorinemab; this fixture's blended p_graveyard = 0.872) with below-average evidence
+// (μ ≈ 0.70) at 2.5% is defensible against the class record; the old 26.75% would have made
+// it a near-best-in-industry CNS bet. The fixture's documented pApprovalBand was re-authored
+// [0.168,0.368] → [0.01,0.15] with the rationale recorded in the fixture meta.
 const FROZEN_PAPPROVAL: Record<string, number> = {
-  "ttx-mc138.fixture.json": 0.08986,
-  "bms-986446.fixture.json": 0.26751,
+  "ttx-mc138.fixture.json": 0.02844,
+  "bms-986446.fixture.json": 0.02519,
 };
 
 describe.each(FIXTURES)("Fix #2 financial pins — %s", (file) => {

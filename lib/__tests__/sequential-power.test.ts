@@ -168,8 +168,9 @@ describe("Phase 2 futility — the three load-bearing checks + monotonicity", ()
 
 // ══ 5. Layer wiring via computeStageRR — non-vacuity, fallbacks, single-locus ══
 const RCT: RRTrialDesign = { designType: "rct", endpointType: "surrogate", populationType: "broad", regulatoryContext: "confirmatory" };
-const MIX = [{ w: 1, mu: 1.0, sigma2: 0.15 }]; // prior mean_rr ≈ 0.5
-const priorMean = () => gridMoments(betaToGrid(mixtureToBeta(MIX))).mean;
+const MIX = [{ w: 1, mu: 1.0, sigma2: 0.15 }]; // anchored at the 0.15 null used throughout → mean_rr ≈ 0.25
+// Invariance probe (compared only to itself): the anchor just has to be held fixed across reads.
+const priorMean = () => gridMoments(betaToGrid(mixtureToBeta(MIX, 0.15))).mean;
 
 describe("Phase 2 — group-sequential via computeStageRR (non-vacuity + composition)", () => {
   it("GS FIRES: boundaries resolve to the OBF table (confirmatory → α=0.025 → 2.797/1.977)", () => {
@@ -222,20 +223,22 @@ describe("Phase 2 — Bayesian via computeStageRR + fallbacks (flag-not-fake)", 
 
 describe("Phase 2 — single-locus (effect stays in the prior on both paths)", () => {
   it("vary SPENDING only → P moves; prior mean unchanged", () => {
-    const before = priorMean();
+    // Single-locus in its pure form: the two runs' priors must be IDENTICAL to each other (the design
+    // lever moved P without touching the prior). Under the 2.2 anchored map the stage's prior mean is
+    // anchor-relative (null 0.3 → 0.40), so the old comparison to a 0.15-anchored external helper no
+    // longer applies — the invariance is across the two runs.
     const obf = computeStageRR(MIX, 50, 0.3, { ...RCT, sequential: { lookFractions: [0.5, 1], spending: "OBF" } });
     const poc = computeStageRR(MIX, 50, 0.3, { ...RCT, sequential: { lookFractions: [0.5, 1], spending: "POCOCK" } });
     expect(Math.abs(obf.trialSuccessProb - poc.trialSuccessProb)).toBeGreaterThan(1e-4);
-    expect(obf.priorMean).toBeCloseTo(before, 10);
-    expect(poc.priorMean).toBeCloseTo(before, 10);
+    expect(obf.priorMean).toBeCloseTo(poc.priorMean, 10);
+    expect(obf.priorMean).toBeCloseTo(0.3 + 0.10, 2); // anchored: null + μ·Δ at μ=1.0
   });
   it("vary ANALYSIS PRIOR only → k* moves; prior mean unchanged (mixture can't reach analysisPrior — type-enforced)", () => {
-    const before = priorMean();
     const uniform = computeStageRR(MIX, 30, 0.4, { ...RCT, bayesian: { refTheta: 0.4, postThreshold: 0.9, analysisPrior: { a: 1, b: 1 } } });
     const skeptical = computeStageRR(MIX, 30, 0.4, { ...RCT, bayesian: { refTheta: 0.4, postThreshold: 0.9, analysisPrior: { a: 1, b: 6 } } });
     expect(skeptical.bayesianDesign!.kStar).toBeGreaterThan(uniform.bayesianDesign!.kStar);
-    expect(uniform.priorMean).toBeCloseTo(before, 10);
-    expect(skeptical.priorMean).toBeCloseTo(before, 10);
+    expect(uniform.priorMean).toBeCloseTo(skeptical.priorMean, 10);
+    expect(uniform.priorMean).toBeCloseTo(0.4 + 0.10, 2); // anchored: null + μ·Δ at μ=1.0
   });
 });
 

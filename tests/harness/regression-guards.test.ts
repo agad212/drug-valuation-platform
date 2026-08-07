@@ -86,9 +86,15 @@ describe("Guard 2 — a non-degenerate prior can never yield 0.0% stage success"
   const rr = { designType: "rct" as const, endpointType: "surrogate" as const,
     populationType: "broad" as const, regulatoryContext: "standard" as const };
 
-  it("a pathological SOC above the prior mean is discarded, not zeroed (the tau incident)", () => {
+  it("a pathological SOC cannot strand the prior below the bar (the tau incident, 2.2 structural form)", () => {
+    // §1.6 reconciled: the old guard DISCARDED an implausible comparator (comparatorUnreliable flag)
+    // because under the absolute map the prior could be forced entirely below the threshold. On the
+    // 2.2 anchored map the prior is BUILT at (anchor + μ·Δ) — above its comparator by construction —
+    // so the zero state is inexpressible and the flag is retired. The intent (never a definitional 0)
+    // is unchanged and still asserted.
     const r = computeStageRR(mixtureFromMssVariance(0.5, 0.12), 300, 0.80, rr, false);
-    expect(r.comparatorUnreliable).toBe(true);
+    expect(r.comparatorUnreliable).toBe(false);      // retired — structurally impossible
+    expect(r.effectiveNullRR).toBeCloseTo(0.80, 6);  // the threshold is kept, not discarded
     expect(r.trialSuccessProb).toBeGreaterThan(0.05);
     expect(r.bandsBefore.belowThreshold).toBeLessThan(0.999);
   });
@@ -106,16 +112,19 @@ describe("Guard 2 — a non-degenerate prior can never yield 0.0% stage success"
 describe("Guard 3 — base-rate ceilings cap saturating stages (raw preserved)", () => {
   const tight = design({ n: 600, designType: "rct", populationType: "biomarker_selected",
     placeboResponse: "low", regulatoryContext: "btd" });
-  it("a tight-comparator Phase 2 caps at ≤0.90 general ceiling", () => {
+  // FIXTURES RESCALED with 2.2 (§1.6): on the anchored map an mss-0.75 asset no longer saturates (that
+  // inflation WAS the 2.2 bug), so keeping these guards non-vacuous takes the honest extreme — maximal
+  // evidence (mss 1.0 → μ 2.0, a doubling over the comparator) vs a near-point benchmark.
+  it("a saturating Phase 2 caps at ≤0.90 general ceiling", () => {
     const st = plan([stage({ n: 600, phase: "Phase 2", trialDesign: tight,
-      nullResponseRate: 0.20, comparatorSigma2: 0.004 })], 0.75).stages[0];
-    expect(st.trialSuccessProbRaw).toBeGreaterThan(0.9); // raw WOULD saturate
+      nullResponseRate: 0.20, comparatorSigma2: 0.0005 })], 1.0).stages[0];
+    expect(st.trialSuccessProbRaw).toBeGreaterThan(0.9); // raw genuinely saturates
     expect(st.trialSuccessProb).toBeLessThanOrEqual(0.90 + 1e-9);
     expect(st.successCeilingBound).toBe(0.90);
   });
   it("a Phase 3 (confirmatory) caps at the lower ≤0.80 late-phase ceiling", () => {
     const st = plan([stage({ n: 600, phase: "Phase 3", trialDesign: tight,
-      nullResponseRate: 0.20, comparatorSigma2: 0.004 })], 0.75).stages[0];
+      nullResponseRate: 0.20, comparatorSigma2: 0.0005 })], 1.0).stages[0];
     expect(st.trialSuccessProb).toBeLessThanOrEqual(0.80 + 1e-9);
     expect(st.successCeilingBound).toBe(0.80);
   });
