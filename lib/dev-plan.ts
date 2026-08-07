@@ -282,6 +282,13 @@ export type DevStage = DevStageInput & {
   trialSuccessProb: number; // final — after base-rate ceiling AND modality haircut
   trialSuccessProbRaw: number; // raw integral, before ceiling or haircut
   successCeilingBound: number | null; // the base-rate ceiling that clamped this stage, if any
+
+  // Margin scale — ALWAYS surfaced (§1.5): the single number that sets how big a claim the prior
+  // makes. 0.10 = the validated clinical-meaningfulness default; anything else means a SOURCED
+  // expected response rate re-derived it (Δ_stage = (sourcedRR − anchor)/μ̄) and the prior mean now
+  // sits ON that sourced rate — the reader must be able to see which rate and whose citation did it.
+  deltaStageRR: number;
+  deltaStageSourced: boolean;
   modalityHaircut: number;     // 1.0 = none; <1 = class-graveyard haircut applied to this stage
   layer2Multiplier: number;
   sigma2Trial: number;
@@ -382,6 +389,12 @@ export type DevPlanResult = {
   // Fix B: true when an orphan/btd_orphan context was downgraded for engine purposes
   // because it wasn't confirmed for the base-case indication (audit/UI signal).
   orphanGatedOff?: boolean;
+  // Echoed inputs for per-option plan parity (decision-analysis rebuilds plans from these; see the
+  // return-site comment) + the replication weight actually applied (post-clamp; null = none).
+  therapeuticArea?: TherapeuticArea;
+  orphanConfirmedForIndication?: boolean;
+  replicationRisk?: { pFail: number; basis: string };
+  replicationWeightApplied?: number | null;
 };
 
 // Inputs for the full plan computation
@@ -408,7 +421,31 @@ export type DevPlanInputs = {
   // Carries the full acceptance observables (RegAcceptanceObservables); endpointType +
   // endpointEvidenceBasis alone remain a valid subset (back-compat).
   regEndpoint?: RegAcceptanceObservables;
+  // INDICATION-LEVEL replication risk (LLM-emitted OBSERVABLE, citation-gated — the "IPF trap").
+  // pFail = P(this indication's positive early-phase efficacy signal fails to reproduce in later
+  // trials), grounded ONLY in the indication's NAMED Phase-2→confirmatory replication record (e.g.
+  // IPF: nintedanib replicated; pamrevlumab, zinpentraxin, ziritaxestat, IFN-γ failed Phase 3 after
+  // positive earlier signals). Applied as a discrete failure-mass mixture component {w, μ=0} on the
+  // INITIAL prior — the same structural move as the surrogate→TTE translation component, because a
+  // "the signal isn't real/durable" hypothesis is a discrete failure mode that symmetric variance
+  // (σ²·Δ²) structurally cannot represent: with a large sourced margin the Gaussian prior can sit
+  // 4σ above threshold and saturate every stage power, no matter how honest σ is.
+  // NO-DOUBLE-COUNT: the effect prior's analog step carries MECHANISM-class effect-size evidence;
+  // the modality haircut carries mechanism-class gate-completion risk; this component carries the
+  // INDICATION's signal-durability record, mechanism-agnostic. The prompt forbids counting either
+  // of the other two here. Bayes shrinks the component after each observed stage success (it sits
+  // in the mixture during propagation), so it self-retires as real evidence accumulates.
+  // Citation-gated (§1.5): no basis → ignored + flagged. Band-clamped with the clamp shown.
+  replicationRisk?: { pFail: number; basis: string };
 };
+
+// Replication-risk weight band. 0.80 lets the worst documented indication records (~4 failures per
+// success) be expressed; a record worse than that belongs in the effect prior's class evidence (the
+// anti-tau pattern), not in a dev-plan weight. Below 0.05 the emission is noise → IGNORED (never
+// raised to the floor — the engine must not add risk the source didn't claim). Above 0.80 → clamped
+// DOWN with the clamp shown (§1.5).
+const REPLICATION_PFAIL_MIN = 0.05;
+const REPLICATION_PFAIL_MAX = 0.80;
 
 // Default null/control response rates by phase (when AI doesn't provide one)
 const DEFAULT_NULL_RR: Record<string, number> = {
@@ -478,6 +515,43 @@ export function computeDevPlan(
   const isOrphanCtx = (c: RegulatoryContext) => c === "orphan" || c === "btd_orphan";
   const orphanGatedOff = !orphanConfirmed &&
     (isOrphanCtx(inputs.regulatoryContext) || inputs.stages.some((s) => isOrphanCtx(s.trialDesign.regulatoryContext)));
+
+  // ── Indication replication-risk component (see DevPlanInputs.replicationRisk) ──────────────────
+  // Applied ONCE to the initial prior; propagation then owns it (a survived stage success Bayes-shrinks
+  // the failure weight automatically, so it self-retires as the drug earns real replications).
+  // Capability-gated: absent → the mixture is untouched → bit-for-bit legacy (FROZEN-safe).
+  let replicationWeightApplied: number | null = null;
+  let replicationFlag: TrialRiskFlag | null = null;
+  {
+    const rr = inputs.replicationRisk;
+    if (rr != null && typeof rr.pFail === "number" && Number.isFinite(rr.pFail) && rr.pFail > 0) {
+      const basis = rr.basis?.trim() ?? "";
+      if (!basis) {
+        replicationFlag = {
+          severity: "info",
+          message: `replicationRisk ${(rr.pFail * 100).toFixed(0)}% UNCITED (no named Phase 2→confirmatory record for this indication) → ignored`,
+        };
+      } else if (rr.pFail < REPLICATION_PFAIL_MIN) {
+        replicationFlag = {
+          severity: "info",
+          message: `replicationRisk ${(rr.pFail * 100).toFixed(1)}% is below the ${REPLICATION_PFAIL_MIN * 100}% noise floor → ignored (the engine never raises a cited risk above what the source claimed)`,
+        };
+      } else {
+        const w = Math.min(rr.pFail, REPLICATION_PFAIL_MAX);
+        currentMixture = [
+          ...currentMixture.map((c) => ({ ...c, w: c.w * (1 - w) })),
+          { w, mu: 0, sigma2: 0.05 },
+        ];
+        replicationWeightApplied = w;
+        replicationFlag = {
+          severity: "medium",
+          message: `indication replication risk: ${(w * 100).toFixed(0)}% prior weight that the positive early-phase signal does not reproduce in later trials` +
+            (w !== rr.pFail ? ` (requested ${(rr.pFail * 100).toFixed(0)}%, CLAMPED to the ${REPLICATION_PFAIL_MAX * 100}% cap)` : "") +
+            ` — ${basis}. This weight shrinks after each observed trial success (Bayes), and is distinct from the mechanism-class haircut.`,
+        };
+      }
+    }
+  }
 
   for (const stageInput of inputs.stages) {
 
@@ -578,15 +652,37 @@ export function computeDevPlan(
       : { lift: 0, flagged: false };
     const powerMixture = enrichment.lift > 0 ? enrichEffectPrior(currentMixture, enrichment.lift) : currentMixture;
 
-    // Sourced expected rate — citation-gated (resolve-or-flag): a number without a named basis is
-    // IGNORED and flagged, never silently trusted (same contract as the niche WAC/share/count).
+    // Replication-risk component surfaces on the FIRST stage's card (it re-shaped the initial prior
+    // that this stage consumes; later stages inherit it through propagation).
+    if (replicationFlag && stages.length === 0) {
+      l2.riskFlags.unshift(replicationFlag);
+    }
+
+    // Sourced expected rate — citation-gated AND unit-gated (resolve-or-flag):
+    //  • no basis → ignored + flagged (never silently trusted; same contract as niche WAC/share/count).
+    //  • basis without patient-proportion language → ignored + flagged. A response rate is a fraction
+    //    of PATIENTS meeting a responder criterion; the deadliest emission error is a continuous
+    //    effect size wearing rate clothing ("67% slowing of FVC decline" is a % improvement, not a %
+    //    of patients — reading it as a rate multiplies the prior's margin ~3× and saturates every
+    //    downstream trial power). The gate requires the basis to SAY it is a proportion of patients
+    //    (responder/response-rate language); the prompt states this contract, and rejection is
+    //    conservative (falls back to the validated 0.10 default, visibly).
+    const expectedRRBasisTrim = stageInput.expectedResponseRateBasis?.trim() ?? "";
+    const expectedRRUnitOk =
+      /\bof\s+(?:all\s+|the\s+|treated\s+|enrolled\s+|evaluable\s+)?(?:patients|subjects|participants)\b/i.test(expectedRRBasisTrim) ||
+      /\bresponders?\b|\bresponse\s+rate\b|\bORR\b|\b(?:clearance|remission|clearance\s+of\s+ctDNA)\s+rate\b/i.test(expectedRRBasisTrim);
     const expectedRRCited = stageInput.expectedResponseRate != null &&
-      !!stageInput.expectedResponseRateBasis?.trim();
+      !!expectedRRBasisTrim && expectedRRUnitOk;
     const sourcedExpectedRR = expectedRRCited ? stageInput.expectedResponseRate : undefined;
-    if (stageInput.expectedResponseRate != null && !expectedRRCited) {
+    if (stageInput.expectedResponseRate != null && !expectedRRBasisTrim) {
       l2.riskFlags.push({
         severity: "info",
         message: `expectedResponseRate ${stageInput.expectedResponseRate} UNSOURCED (no basis) → ignored; margin scale held at the 0.10 default`,
+      });
+    } else if (stageInput.expectedResponseRate != null && !expectedRRUnitOk) {
+      l2.riskFlags.push({
+        severity: "info",
+        message: `expectedResponseRate ${stageInput.expectedResponseRate} REJECTED — its basis ("${expectedRRBasisTrim.slice(0, 140)}") does not state a proportion of PATIENTS (responder/response-rate language). A % improvement or % slowing of a continuous measure is an effect size, not a response rate → ignored; margin scale held at the 0.10 default`,
       });
     }
 
@@ -616,6 +712,22 @@ export function computeDevPlan(
       : rrResult;
 
     const trialSuccessProbRaw = rrResult.trialSuccessProb;
+
+    // Margin-scale resolve-or-flag (§1.5): the sourced-rate substitution is the single most
+    // P-moving input a stage can carry, so EVERY outcome is named — fired (with the exact rate,
+    // its basis, and the unit caveat), or cited-but-rejected (with why). The uncited case was
+    // already flagged above, before the compute.
+    if (rrResult.deltaStageSourced && sourcedExpectedRR != null) {
+      l2.riskFlags.push({
+        severity: "info",
+        message: `margin scale SOURCED: prior mean set to the cited ${(sourcedExpectedRR * 100).toFixed(0)}% expected response rate (Δ_stage ${rrResult.deltaStageRR.toFixed(2)} vs default 0.10) — basis: ${stageInput.expectedResponseRateBasis!.trim()}. VERIFY the source reports a % of PATIENTS meeting a responder definition — a % improvement/slowing of a continuous measure is NOT a response rate`,
+      });
+    } else if (sourcedExpectedRR != null && !rrResult.deltaStageSourced) {
+      l2.riskFlags.push({
+        severity: "info",
+        message: `expectedResponseRate ${(sourcedExpectedRR * 100).toFixed(0)}% cited but REJECTED (must exceed the anchor by >1pt and sit below 95%, with a usable prior mean) → margin scale held at the 0.10 default`,
+      });
+    }
 
     // ── Base-rate ceilings (Part B) — GENERAL, all assets, applied before the
     //    class haircut. Decouples statistical DETECTION from clinical SUCCESS.
@@ -755,6 +867,8 @@ export function computeDevPlan(
       trialSuccessProb,
       trialSuccessProbRaw,
       successCeilingBound,
+      deltaStageRR:      rrResult.deltaStageRR,
+      deltaStageSourced: rrResult.deltaStageSourced,
       modalityHaircut,
       layer2Multiplier:  l2.layer2Multiplier,
       sigma2Trial:       l2.sigma2Trial,
@@ -865,6 +979,14 @@ export function computeDevPlan(
     classGraveyardProbability: inputs.classGraveyardProbability
       ?? (inputs.modalityClassStatus === "graveyard" ? 1 : 0),
     orphanGatedOff,
+    // Echoes so downstream per-option plans (decision-analysis) rebuild with the SAME inputs —
+    // without these the options silently recompute on a different basis than the headline
+    // (live-verified 8/7: option stages priced on the general CPP band while the base plan priced
+    // rare_orphan, because therapeuticArea/orphanConfirmed never reached the option plans).
+    therapeuticArea: inputs.therapeuticArea,
+    orphanConfirmedForIndication: inputs.orphanConfirmedForIndication,
+    replicationRisk: inputs.replicationRisk,
+    replicationWeightApplied,
     revenuePVM,
     eNPVM,
     eROI,

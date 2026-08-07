@@ -256,6 +256,29 @@ EXPECTED RESPONSE RATE — set when SOURCED, omit when not:
    WITHOUT a named basis the number is IGNORED and flagged, so an uncited estimate is wasted effort.
    OMIT both fields entirely when no sourced figure exists — do NOT guess one from the mechanism.
    This is the DRUG's expected rate; nullResponseRate remains the comparator's.
+   UNIT RULE (hard): expectedResponseRate must be a PROPORTION OF PATIENTS — the fraction of treated
+   patients meeting a defined responder criterion (e.g. "52% of patients achieved ORR", "48% met the
+   MCID responder definition"). It is NEVER a percent change, percent improvement, percent slowing,
+   or relative reduction of a continuous measure. "67% slowing of FVC decline", "+3.95% FVC vs
+   placebo", "40% reduction in decline rate" are effect sizes, NOT response rates — emitting one of
+   those here corrupts the probability engine with a unit error. For continuous endpoints (FVC, mL,
+   points, mm Hg), only emit a rate if the source explicitly reports a RESPONDER ANALYSIS (% of
+   patients above/below a defined cutoff) — otherwise OMIT. The basis sentence must contain the
+   words "of patients" describing the sourced figure, or the value will be ignored.
+
+INDICATION REPLICATION RISK — the graveyard check (top-level field, not per-stage):
+13c. Set "replicationRisk": { "pFail": 0-1, "basis": "..." } = the probability that a positive
+   early/mid-phase efficacy signal in THIS INDICATION fails to reproduce in later confirmatory
+   trials, grounded ONLY in the indication's NAMED replication record: list the programs whose
+   positive Phase 2 (or 2a/2b) efficacy readouts went on to confirmatory trials, and tally how many
+   replicated vs failed. Example (IPF): nintedanib replicated (TOMORROW→INPULSIS); pamrevlumab
+   (PRAISE→ZEPHYRUS), zinpentraxin (PRM-151), ziritaxestat (ISABELA), interferon-γ (INSPIRE) failed —
+   pFail ≈ 0.55-0.7. The basis MUST name the programs and give the tally; an uncited pFail is
+   ignored. Do NOT count mechanism-class effect evidence (that lives in the effect prior) or generic
+   industry base rates — this is the INDICATION's own Phase 2→3 signal-durability history,
+   mechanism-agnostic. If fewer than 3 named precedents exist for the indication, OMIT the field
+   entirely. Range 0.05-0.8. This drives a real probability component — a lazy default here corrupts
+   the valuation; a well-researched one is among the most valuable numbers in the plan.
 
 14. COMPARATOR UNCERTAINTY — REQUIRED for each stage:
    Set "comparatorSigma2": the variance of the historical control / SOC response rate estimate.
@@ -367,7 +390,11 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
     }
   ],
   "regulatoryContext": "btd_orphan",
-  "reasoning": "2-3 sentence explanation of the development path rationale."
+  "reasoning": "2-3 sentence explanation of the development path rationale.",
+  "replicationRisk": {
+    "pFail": 0.55,
+    "basis": "IPF Phase 2→3 replication record: nintedanib (TOMORROW→INPULSIS) replicated; pamrevlumab (PRAISE→ZEPHYRUS-1/2), zinpentraxin/PRM-151, ziritaxestat (ISABELA), and interferon-γ (INSPIRE) all failed confirmatory trials after positive earlier signals — ~1-2 of 6-7 named attempts replicated."
+  }
 }`;
 
   const userMessage = `Drug: ${drug}
@@ -532,13 +559,24 @@ Reason about the full development path. Return the current trial as stage 1 (use
       if (st.trialDesign) st.trialDesign.regulatoryContext = regulatoryContext;
     }
 
-    logEnd("dev-plan", __t0, "ok", { stages: cappedStages.length });
+    // Replication risk (13c) — validated pass-through only; the citation gate + band clamp live
+    // deterministically in lib/dev-plan.ts. Malformed → omitted (no claim, no component).
+    const rrRaw = parsed.replicationRisk;
+    const replicationRisk =
+      rrRaw && typeof rrRaw.pFail === "number" && Number.isFinite(rrRaw.pFail) &&
+      rrRaw.pFail > 0 && rrRaw.pFail < 1 &&
+      typeof rrRaw.basis === "string" && rrRaw.basis.trim()
+        ? { pFail: Math.round(rrRaw.pFail * 1000) / 1000, basis: rrRaw.basis.trim() }
+        : undefined;
+
+    logEnd("dev-plan", __t0, "ok", { stages: cappedStages.length, replicationRisk: replicationRisk?.pFail ?? null });
     return res.status(200).json({
       stages: cappedStages,
       regulatoryContext,
       regulatoryProvenance: regPin.provenance,
       regulatoryDesignations: regPin.designations,
       reasoning: parsed.reasoning || "",
+      ...(replicationRisk ? { replicationRisk } : {}),
     });
 
   } catch (e: any) {

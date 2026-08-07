@@ -430,6 +430,26 @@ function StageCard({
                 </div>
               )}
 
+              {/* Margin scale — the single number that sets how big a claim this prior makes.
+                  ALWAYS shown (§1.5): a sourced expected rate silently re-deriving Δ_stage is the
+                  most P-moving substitution a stage can carry, so the reader sees WHICH rate and
+                  WHOSE citation did it — or that the validated default is in play. */}
+              {typeof stage.deltaStageRR === "number" && (
+                <div style={{ marginTop: 5, fontSize: 10, color: stage.deltaStageSourced ? "#f59e0b" : "var(--text-faint)", fontStyle: "italic" }}>
+                  {stage.deltaStageSourced && stage.expectedResponseRate != null ? (
+                    <>
+                      Margin scale Δ_stage = {stage.deltaStageRR.toFixed(2)} — <b>SOURCED</b>: prior mean set to the
+                      cited {(stage.expectedResponseRate * 100).toFixed(0)}% expected response rate
+                      {stage.expectedResponseRateBasis ? <> ({stage.expectedResponseRateBasis})</> : null}.
+                      Verify the source reports a % of <b>patients</b> meeting a responder definition — a %
+                      improvement/slowing of a continuous measure is not a response rate.
+                    </>
+                  ) : (
+                    <>Margin scale Δ = {stage.deltaStageRR.toFixed(2)} (validated clinical-meaningfulness default — no sourced expected response rate)</>
+                  )}
+                </div>
+              )}
+
               {/* Un-pinned comparator guard — the LLM-derived SOC threshold exceeded the
                   drug's own effect prior, so it was discarded in favor of the clinical floor */}
               {stage.comparatorUnreliable && (

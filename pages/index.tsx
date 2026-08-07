@@ -482,6 +482,9 @@ export default function HomePage() {
   const [devPlanStages, setDevPlanStages] = useState<DevStageInput[] | null>(null);
   const [devPlanRegContext, setDevPlanRegContext] = useState<RegulatoryContext>("standard");
   const [devPlanReasoning, setDevPlanReasoning] = useState<string | null>(null);
+  // 13c — indication replication risk (citation-gated in lib/dev-plan.ts). Part of the compute
+  // snapshot: it moves P, so a restore must replay it or the faithfulness assert would trip.
+  const [devPlanReplicationRisk, setDevPlanReplicationRisk] = useState<{ pFail: number; basis: string } | null>(null);
   const [devPlanLoading, setDevPlanLoading] = useState(false);
   // Surfaces a HALT after the effect prior: if the development-path stage is
   // reached but can't build, this makes the reason visible instead of silently
@@ -573,10 +576,14 @@ export default function HomePage() {
     const orphanConfirmedForIndication = layer2Result?.orphanConfirmedForIndication === true;
     return computeDevPlan(
       mixture, base.ciHalfWidth,
-      { stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0, modalityClassStatus, classGraveyardProbability: classGraveyardProb, therapeuticArea, orphanConfirmedForIndication },
+      {
+        stages: devPlanStages, regulatoryContext: devPlanRegContext, regCostM: 1.0,
+        modalityClassStatus, classGraveyardProbability: classGraveyardProb, therapeuticArea, orphanConfirmedForIndication,
+        ...(devPlanReplicationRisk ? { replicationRisk: devPlanReplicationRisk } : {}),
+      },
       revenuePVM,
     );
-  }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief, v.indication, layer2Result]);
+  }, [devPlanStages, base, out.revenuePV, devPlanRegContext, effectPrior, valuationBrief, v.indication, layer2Result, devPlanReplicationRisk]);
 
 
   // Single source of truth for the displayed P(approval): a genuine user
@@ -662,6 +669,7 @@ export default function HomePage() {
     setDevPlanStages(null);
     setDevPlanRegContext("standard");
     setDevPlanReasoning(null);
+    setDevPlanReplicationRisk(null);
     setEffectPrior(null);
     setValuationBrief(null);
     setBriefSummary(null);
@@ -678,7 +686,7 @@ export default function HomePage() {
   // generated output — persisted so it survives reload; it doesn't feed the headline memos.)
   function buildComputeSnapshot() {
     return {
-      devPlanStages, devPlanRegContext, devPlanReasoning,
+      devPlanStages, devPlanRegContext, devPlanReasoning, devPlanReplicationRisk,
       effectPrior, valuationBrief, briefSummary, briefStatus,
       ptrsResult, layer2Result, expectationAudit, structureFlags,
       decisionState,
@@ -705,6 +713,7 @@ export default function HomePage() {
       setDevPlanStages(c.devPlanStages ?? null);
       setDevPlanRegContext(c.devPlanRegContext ?? "standard");
       setDevPlanReasoning(c.devPlanReasoning ?? null);
+      setDevPlanReplicationRisk(c.devPlanReplicationRisk ?? null);
       setEffectPrior(c.effectPrior ?? null);
       setValuationBrief(c.valuationBrief ?? null);
       setBriefSummary(c.briefSummary ?? null);
@@ -1607,6 +1616,7 @@ export default function HomePage() {
       setDevPlanStages(stages);
       setDevPlanRegContext(data.regulatoryContext ?? "standard");
       setDevPlanReasoning(data.reasoning ?? null);
+      setDevPlanReplicationRisk(data.replicationRisk ?? null);
     } catch (e: any) {
       console.error("[dev-plan] auto-generate failed:", e?.message);
       setDevPlanError(`Development path could not be built: ${e?.message || "unknown error"}. The final value metrics need this stage — retry.`);

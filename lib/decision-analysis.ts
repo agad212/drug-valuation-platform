@@ -187,11 +187,19 @@ export type BaseContext = {
   // Full dev-plan stage inputs — used to re-run computeDevPlan per option so
   // each option's P(approval) reflects its specific trial design across all
   // stages, not just a single-stage Layer 2 scoreLayer2() call.
+  // PARITY (live-verified 8/7 gap): everything the BASE plan was computed with must ride along,
+  // or per-option plans silently recompute on a different basis than the headline — the option
+  // stages were pricing on the general CPP band while the base plan priced rare_orphan, because
+  // therapeuticArea/orphanConfirmed never reached here.
   devPlanInputs?: {
     stages: DevStageInput[];
     regulatoryContext: RegulatoryContext;
     regCostM?: number;
     modalityClassStatus?: ClassStatus;
+    classGraveyardProbability?: number;
+    therapeuticArea?: DevPlanResult["therapeuticArea"];
+    orphanConfirmedForIndication?: boolean;
+    replicationRisk?: { pFail: number; basis: string };
   } | null;
 
   // Cached overall P(approval) from the base dev plan — used as Option A's
@@ -630,6 +638,13 @@ export function computeOption(
         regulatoryContext: base.devPlanInputs!.regulatoryContext,
         regCostM: base.devPlanInputs!.regCostM,
         modalityClassStatus: base.devPlanInputs!.modalityClassStatus,
+        // Parity with the base plan (see BaseContext.devPlanInputs comment): same haircut blend,
+        // same CPP band keys, same replication component — an option differs from the headline
+        // ONLY by what the option itself changes.
+        classGraveyardProbability: base.devPlanInputs!.classGraveyardProbability,
+        therapeuticArea: base.devPlanInputs!.therapeuticArea,
+        orphanConfirmedForIndication: base.devPlanInputs!.orphanConfirmedForIndication,
+        ...(base.devPlanInputs!.replicationRisk ? { replicationRisk: base.devPlanInputs!.replicationRisk } : {}),
         ...(regEndpoint ? { regEndpoint } : {}),
       },
       0, // revenuePVM not needed — we use pApproval + totalRiskAdjCostM
@@ -1132,6 +1147,11 @@ export function buildBaseContext(
         regulatoryContext:  devPlan.regStage.regulatoryContext,
         regCostM:           devPlan.regStage.costM,
         modalityClassStatus: devPlan.modalityClassStatus,
+        // Parity echoes (the base plan's full input basis — see the type's comment)
+        classGraveyardProbability:    devPlan.classGraveyardProbability,
+        therapeuticArea:              devPlan.therapeuticArea,
+        orphanConfirmedForIndication: devPlan.orphanConfirmedForIndication,
+        replicationRisk:              devPlan.replicationRisk,
       }
     : null;
 

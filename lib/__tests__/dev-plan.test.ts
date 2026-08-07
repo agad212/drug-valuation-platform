@@ -147,3 +147,121 @@ describe("shiftLoeForLaunch — LOE response to a moved launch year", () => {
     expect(shiftLoeForLaunch(undefined, "patent", 2032, 8)).toBeUndefined();
   });
 });
+
+// ─── Sourced-margin UNIT GATE (the 8/7 live finding: an effect size wearing rate clothing) ────────
+// The margin scale is the most P-moving input a stage carries. The gate requires the basis to SAY
+// it is a proportion of patients — "67% slowing of FVC decline" (a % improvement) must never set it.
+
+describe("computeDevPlan — expectedResponseRate unit gate (resolve-or-flag)", () => {
+  const mixture = mixtureFromMssVariance(0.5, 0.05); // μ = 1.0 exactly
+
+  it("responder-language basis FIRES the sourced margin: Δ_stage re-derived, flag names the rate + basis", () => {
+    const plan = computeDevPlan(mixture, 0.1, {
+      stages: [makeStage({ expectedResponseRate: 0.64, expectedResponseRateBasis: "64% of patients achieved ctDNA clearance in the drug's own Phase 1 readout (NCT-X)" })],
+      regulatoryContext: "standard",
+    }, 0);
+    const st = plan.stages[0];
+    expect(st.deltaStageSourced).toBe(true);
+    // anchor = max(DEFAULT_NULL_RR Phase 2 = 0.15, floor 0.10) = 0.15; μ̄ = 1.0 → Δ = 0.49
+    expect(st.deltaStageRR).toBeCloseTo(0.49, 6);
+    expect(st.riskFlags.some((f) => /margin scale SOURCED/.test(f.message) && /64%/.test(f.message) && /of patients/i.test(f.message))).toBe(true);
+  });
+
+  it("effect-size language is REJECTED: '67% slowing of FVC decline' is a % improvement, not a rate", () => {
+    const plan = computeDevPlan(mixture, 0.1, {
+      stages: [makeStage({ expectedResponseRate: 0.67, expectedResponseRateBasis: "67% slowing of FVC decline vs historical control in the Phase 2a" })],
+      regulatoryContext: "standard",
+    }, 0);
+    const st = plan.stages[0];
+    expect(st.deltaStageSourced).toBe(false);
+    expect(st.deltaStageRR).toBeCloseTo(0.10, 9);
+    expect(st.riskFlags.some((f) => /REJECTED/.test(f.message) && /not a response rate/i.test(f.message))).toBe(true);
+    // And the rejected rate must produce the SAME probability as never emitting it (identical claim size)
+    const clean = computeDevPlan(mixture, 0.1, { stages: [makeStage()], regulatoryContext: "standard" }, 0);
+    expect(st.trialSuccessProbRaw).toBeCloseTo(clean.stages[0].trialSuccessProbRaw, 12);
+  });
+
+  it("no basis at all → UNSOURCED flag, default margin (unchanged contract)", () => {
+    const plan = computeDevPlan(mixture, 0.1, {
+      stages: [makeStage({ expectedResponseRate: 0.5 })],
+      regulatoryContext: "standard",
+    }, 0);
+    expect(plan.stages[0].deltaStageSourced).toBe(false);
+    expect(plan.stages[0].riskFlags.some((f) => /UNSOURCED/.test(f.message))).toBe(true);
+  });
+});
+
+// ─── Indication replication-risk component (the IPF trap: positive Phase 2 → failed Phase 3) ─────
+// A discrete "the signal doesn't reproduce" hypothesis that symmetric variance cannot represent.
+// Citation-gated, band-capped, applied ONCE to the initial prior, self-retiring via Bayes.
+
+describe("computeDevPlan — replicationRisk failure-mass component", () => {
+  const mixture = mixtureFromMssVariance(0.6, 0.05);
+  const twoStages = () => [
+    makeStage({ id: "s1", phase: "Phase 2" }),
+    makeStage({ id: "s2", phase: "Phase 3", isCurrentTrial: false, n: 280 }),
+  ];
+  const basis = "IPF record: nintedanib replicated; pamrevlumab, zinpentraxin, ziritaxestat, IFN-γ failed Phase 3 after positive Phase 2 — ~1-2 of 6 replicated";
+
+  it("a CITED pFail carves real failure mass out of the prior: stage-0 raw P drops, weight echoed, flag names the record", () => {
+    const clean = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard" }, 0);
+    const risky = computeDevPlan(mixture, 0.1, {
+      stages: twoStages(), regulatoryContext: "standard",
+      replicationRisk: { pFail: 0.5, basis },
+    }, 0);
+    expect(risky.replicationWeightApplied).toBe(0.5);
+    expect(risky.stages[0].trialSuccessProbRaw).toBeLessThan(clean.stages[0].trialSuccessProbRaw);
+    // The carve-out is roughly proportional at stage 0: a 50% failure component leaves at most
+    // ~(0.5 × clean + 0.5 × noise-level success) — assert the drop is material, not cosmetic.
+    expect(risky.stages[0].trialSuccessProbRaw).toBeLessThan(0.62 * clean.stages[0].trialSuccessProbRaw + 0.05);
+    expect(risky.pApproval).toBeLessThan(clean.pApproval);
+    expect(risky.stages[0].riskFlags.some((f) => /indication replication risk: 50%/.test(f.message) && /nintedanib/.test(f.message))).toBe(true);
+  });
+
+  it("SELF-RETIRES via Bayes: the stage-1 hit is proportionally smaller than the stage-0 hit (a survived success shrinks the failure weight)", () => {
+    const clean = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard" }, 0);
+    const risky = computeDevPlan(mixture, 0.1, {
+      stages: twoStages(), regulatoryContext: "standard",
+      replicationRisk: { pFail: 0.6, basis },
+    }, 0);
+    const hit0 = risky.stages[0].trialSuccessProbRaw / clean.stages[0].trialSuccessProbRaw;
+    const hit1 = risky.stages[1].trialSuccessProbRaw / clean.stages[1].trialSuccessProbRaw;
+    expect(hit0).toBeLessThan(1);
+    expect(hit1).toBeGreaterThan(hit0); // conditioning on stage-0 success already paid most of the toll
+  });
+
+  it("UNCITED → ignored + flagged; probabilities identical to no-claim", () => {
+    const clean = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard" }, 0);
+    const uncited = computeDevPlan(mixture, 0.1, {
+      stages: twoStages(), regulatoryContext: "standard",
+      replicationRisk: { pFail: 0.5, basis: "   " },
+    }, 0);
+    expect(uncited.pApproval).toBeCloseTo(clean.pApproval, 12);
+    expect(uncited.replicationWeightApplied ?? null).toBeNull();
+    expect(uncited.stages[0].riskFlags.some((f) => /UNCITED/.test(f.message) && /replicationRisk/.test(f.message))).toBe(true);
+  });
+
+  it("band edges: 0.95 clamps DOWN to the 0.80 cap (shown); 0.01 is IGNORED, never raised to the floor", () => {
+    const capped = computeDevPlan(mixture, 0.1, {
+      stages: twoStages(), regulatoryContext: "standard",
+      replicationRisk: { pFail: 0.95, basis },
+    }, 0);
+    expect(capped.replicationWeightApplied).toBe(0.8);
+    expect(capped.stages[0].riskFlags.some((f) => /CLAMPED to the 80% cap/.test(f.message))).toBe(true);
+
+    const noise = computeDevPlan(mixture, 0.1, {
+      stages: twoStages(), regulatoryContext: "standard",
+      replicationRisk: { pFail: 0.01, basis },
+    }, 0);
+    const clean = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard" }, 0);
+    expect(noise.pApproval).toBeCloseTo(clean.pApproval, 12);
+    expect(noise.stages[0].riskFlags.some((f) => /below the 5% noise floor/.test(f.message))).toBe(true);
+  });
+
+  it("CAPABILITY GATE: absent field → bit-for-bit legacy (FROZEN-safe by construction)", () => {
+    const a = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard" }, 0);
+    const b = computeDevPlan(mixture, 0.1, { stages: twoStages(), regulatoryContext: "standard", replicationRisk: undefined }, 0);
+    expect(b.pApproval).toBe(a.pApproval);
+    expect(b.stages[0].trialSuccessProbRaw).toBe(a.stages[0].trialSuccessProbRaw);
+  });
+});
