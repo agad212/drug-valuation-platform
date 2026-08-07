@@ -149,10 +149,34 @@ its % of headline, observe-and-flag, value not adjusted).
 to `general` (an INPULSIS/ASCEND-scale Phase 3 costed as a cheap general trial — needs a literature CPP
 band, calibration-blocked); 4.5 true per-indication dev plans; Tier 3 (calibration, ChEMBL/Open Targets
 translational layer); Tier 5 exotics. **External blockers:** calibration
-historical outcome/trial-cost data; Evaluate Omnium access. **Live-verify on the user's next natural
-run:** honest-scale headline P, sourced-margin return via `expectedResponseRate`, intensity flags on
-biomarker options, LOE case distribution, the 4.6 flag on the stalled leg, critic verdicts on the
-intensity-flagged options. Gate counts: vitest 418, harness 54.
+historical outcome/trial-cost data; Evaluate Omnium access.
+
+**8/7 LIVE RUN (taladegib PDF) — verified & fixed same day.** Every shipped feature rendered correctly
+(4.6 stalled flag with 27% share, critic verdicts, intensity flags 3.3×, containment clamp, designation
+propagation). BUT headline P hit 61% vs the app's own 12–25% prior band (raw powers 91%/100%, ceilings
+load-bearing): a sourced `expectedResponseRate` ≈0.5 had fired the Δ_stage path INVISIBLY — likely
+"67% slowing of FVC decline" (a % improvement) wearing rate clothing. Fixed (f019eb9 + 7dd2f52 +
+94f74e5): (1) margin scale ALWAYS rendered on the stage card (sourced rate + citation + unit caveat, or
+labeled default) + riskFlags for FIRED/REJECTED/UNSOURCED; (2) deterministic UNIT GATE — the basis must
+contain patient-proportion language or the rate is ignored + flagged (prompt 13b states the contract);
+(3) **indication replication-risk component** (prompt 13c): LLM-cited NAMED Phase 2→confirmatory record
+(IPF: nintedanib replicated; pamrevlumab/zinpentraxin/ziritaxestat/IFN-γ failed) → `replicationRisk
+{pFail, basis}` → {w, μ=0} failure mass on the initial prior, citation-gated, band [0.05,0.80] (below
+floor IGNORED never raised; above cap clamped DOWN shown), Bayes self-retiring, threaded through the
+compute snapshot/restore (faithfulness) — the structural insight: σ²·Δ² keeps margin/sd = μ̄/σ regardless
+of Δ, so a discrete non-replication hypothesis is representable ONLY as mixture mass (same move as the
+surrogate→TTE component); (4) option-plan parity — per-option computeDevPlan now receives
+therapeuticArea/orphanConfirmed/classGraveyardProb/replicationRisk (live gap: options priced the general
+CPP band while the base priced rare_orphan) + regression pin; (5) display sweep — critic truncation caps
+1600/600 with sentence-boundary cuts + max_tokens 3000, modality-matched LOE statute (no more BPCIA on a
+small molecule), stale LOE snapshots labeled as pre-plan estimates, ghost devCostPV row shows
+"superseded: dev plan governs". **CHEAP VERIFY:** refresh just the Development Path (one dev-plan call)
+→ expect the margin-scale line, the unit gate rejecting non-responder bases, the replication flag with
+the IPF graveyard, raw powers under the ceilings, headline near the 12–25% band — derived, not targeted.
+**Known open on this axis:** native continuous (dScale) routing for FVC-class endpoints instead of the
+RR proxy; evidence-chain σ² calibration (the audit's own "may be too optimistic" pointer); stalled
+oncology row still carries the IPF P + a 2028 launch (4.5 per-indication plans is the structural fix).
+Gate counts: vitest 428, harness 54.
 
 ---
 
