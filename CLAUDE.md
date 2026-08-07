@@ -147,6 +147,35 @@ data; Evaluate Omnium access.
 
 ## 4. The open defect: 2.2 — probability scale conflation
 
+> **STATUS 2026-08-07: attempted at full session scale; parked on branch `feat/2.2-anchored-scale`
+> (commit 0680dcd) — do NOT merge as-is; main remains on the old scale, harness green.**
+> Three of the four architectural strata are SOLVED in working code on that branch (393/399 green):
+> the anchored map + `betaFromMeanVar` (comparator built directly — the bidirectional inverse is
+> *eliminated*, not changed); the cross-stage inverse in `gridToGaussianMixture` (without it every
+> posterior hand-off halves the margin — tau collapsed to 0.0099 until fixed); and **anchor ≠
+> threshold** in `computeStageRR` + `DevStageInput.anchorNullResponseRate` (without the separation,
+> every harder-bar mechanism — active comparator, TTE floor — is neutralized because the prior
+> re-anchors on the raised bar). Plus: the surrogate→TTE penalty re-expressed as a translation-failure
+> mixture component (variance widening can INVERT under Jensen on the anchored scale), and three
+> saturation-artifact test discoveries (ceiling-guard fixtures, the NO-DOUBLE-COUNT equality, the
+> sequential single-locus helpers only "worked" because the old scale saturated stage powers to ~1).
+>
+> **THE BLOCKER (the fourth stratum, why it is parked): the μ emissions themselves are calibrated to
+> the old absolute reading.** TTX: the chain saw 64% observed ctDNA clearance and emitted finalMss
+> 0.313 — sensible as "plausible true absolute RR ≈ 0.31 after shrinkage", but as a margin multiplier
+> μ = 0.63 means "clears the null by 6.3 points": an ~8× weaker claim. On the branch TTX lands at
+> pApproval 0.0004 / eNPV −$12M — confidently wrong in the OPPOSITE direction, so the validation step
+> (correctly) refused the re-pin. Completing 2.2 = re-pinning the effect-prior CHAIN's μ semantics to
+> the margin reading: prompts, the mss×2 legacy mapping, and the evidence-step anchors ("mu ≈ 1.30")
+> re-derived against margins — noting a 64%-vs-15%-null observation is a +50pt margin ≈ μ 5 on the
+> Δ=0.10 scale, so either μ ranges beyond [0,2] for rate-evidenced assets or Δ becomes
+> endpoint-derived. That is a domain-calibration decision (what "average evidence" means against WHICH
+> baseline, per endpoint family) — needs the human + a literature pass, THEN the branch's validation
+> re-run and the deliberate golden re-pin. Also on the branch: fixture (i-c) needs comparatorSigma2
+> 0.004 (0.0005 saturates even μ=1.5).
+
+### Original diagnosis (still accurate)
+
 **Symptom.** Stage success saturates: raw Phase 3 hit **100%** (8/5 run) and **93%** (8/6 run); the
 base-rate ceilings (80/90%) are capping an already-broken raw number. Worse, P(approval) is **unstable**:
 **61% on 8/5 vs 26% on 8/6 for the same asset**, driven only by LLM-emitted design descriptors (n=80 +
