@@ -138,18 +138,21 @@ above a broad one, so containment does not falsify them.
 **Shipped since (2026-08-06/07):** LOE resolver thread (`lib/loe-resolver.ts` — statutory FDA terms +
 PTE §156 computed deterministically, pProtective bands, weighted LOE cases, `E[revenuePV(LOE)]` over the
 distribution: f062bbf / 71f6571 / e883add — replaces the old 4.2 `+8` fallback item); designation
-propagation into the CPP band (f0afeb4); Option B critic deterministic core (740ecee — joint market
-intensity observables + flags; the LLM half deferred as an API-cost decision); 4.6
-deprioritized-indication flag (59cdf55 — stalled/discontinued row named with its % of headline,
-observe-and-flag, value not adjusted).
+propagation into the CPP band (f0afeb4); Option B critic COMPLETE — deterministic core (740ecee —
+joint market intensity observables + flags) + LLM half (3545a1e — `/api/option-critic`, one batched
+Sonnet call per valuation shape, gated by `lib/option-critic.ts` `validateCritiques` with a
+structurally numeric-free advisory type; verdicts persist with a posture fingerprint so reloads never
+re-pay for the call); 4.6 deprioritized-indication flag (59cdf55 — stalled/discontinued row named with
+its % of headline, observe-and-flag, value not adjusted).
 
 **Other open items:** `inferTherapeuticArea` has no respiratory/pulmonary-fibrosis TA so IPF falls
 to `general` (an INPULSIS/ASCEND-scale Phase 3 costed as a cheap general trial — needs a literature CPP
-band, calibration-blocked); 4.5 true per-indication dev plans; Tier 3 (Option B critic LLM half,
-calibration, ChEMBL/Open Targets translational layer); Tier 5 exotics. **External blockers:** calibration
+band, calibration-blocked); 4.5 true per-indication dev plans; Tier 3 (calibration, ChEMBL/Open Targets
+translational layer); Tier 5 exotics. **External blockers:** calibration
 historical outcome/trial-cost data; Evaluate Omnium access. **Live-verify on the user's next natural
 run:** honest-scale headline P, sourced-margin return via `expectedResponseRate`, intensity flags on
-biomarker options, LOE case distribution, the 4.6 flag on the stalled leg.
+biomarker options, LOE case distribution, the 4.6 flag on the stalled leg, critic verdicts on the
+intensity-flagged options. Gate counts: vitest 418, harness 54.
 
 ---
 
