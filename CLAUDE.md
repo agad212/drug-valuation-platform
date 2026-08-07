@@ -53,7 +53,8 @@ population containment; regression-guard *Guard 7* was re-pointed from central-r
 clamp-to-edge and came out stronger — 5 resolutions pinned instead of 1.)
 
 **1.7 Self-verification gates, per coherent unit of work.**
-`npx tsc --noEmit` = 0 · `npx vitest run` green (**currently 361**) · FROZEN harness 29/29 byte-identical
+`npx tsc --noEmit` = 0 · `npx vitest run` green (**currently 410**) · FROZEN harness byte-identical
+(`tests/harness` — currently 54 across the golden harness + regression guards)
 (or a documented re-pin) · `npm run build` = 0 · the relevant import-graph greps. A red gate = fix that
 item before proceeding.
 
@@ -134,16 +135,21 @@ biomarker options' remaining elevation is WAC ~2–2.3× broad × share ~3.3–3
 Each input is individually cited and in-band, and a precision label genuinely *can* price and penetrate
 above a broad one, so containment does not falsify them.
 
-**Other open items:** designation propagation (a confirmed FDA/EC orphan designation does **not** reach
-`stage.trialDesign.regulatoryContext`, so designated assets never reach the `rare_orphan` CPP band and are
-systematically under-costed); `inferTherapeuticArea` has no respiratory/pulmonary-fibrosis TA so IPF falls
-to `general` (an INPULSIS/ASCEND-scale Phase 3 costed as a cheap general trial); 4.2 LOE `+8` fallback
-(live: LOE 2031 while the same patent analysis cites method-of-use/formulation cover to ~2041–2045 —
-materially understates the window; **the selection rule is a domain judgment, ask the human**); 4.5 true
-per-indication dev plans; 4.6 deprioritized-indication flag (live: the stalled solid-tumours leg
-contributes ~27% of headline as if active); Tier 3 (Option B critic, calibration, ChEMBL/Open Targets
-translational layer); Tier 5 exotics. **External blockers:** calibration historical outcome/trial-cost
-data; Evaluate Omnium access.
+**Shipped since (2026-08-06/07):** LOE resolver thread (`lib/loe-resolver.ts` — statutory FDA terms +
+PTE §156 computed deterministically, pProtective bands, weighted LOE cases, `E[revenuePV(LOE)]` over the
+distribution: f062bbf / 71f6571 / e883add — replaces the old 4.2 `+8` fallback item); designation
+propagation into the CPP band (f0afeb4); Option B critic deterministic core (740ecee — joint market
+intensity observables + flags; the LLM half deferred as an API-cost decision); 4.6
+deprioritized-indication flag (59cdf55 — stalled/discontinued row named with its % of headline,
+observe-and-flag, value not adjusted).
+
+**Other open items:** `inferTherapeuticArea` has no respiratory/pulmonary-fibrosis TA so IPF falls
+to `general` (an INPULSIS/ASCEND-scale Phase 3 costed as a cheap general trial — needs a literature CPP
+band, calibration-blocked); 4.5 true per-indication dev plans; Tier 3 (Option B critic LLM half,
+calibration, ChEMBL/Open Targets translational layer); Tier 5 exotics. **External blockers:** calibration
+historical outcome/trial-cost data; Evaluate Omnium access. **Live-verify on the user's next natural
+run:** honest-scale headline P, sourced-margin return via `expectedResponseRate`, intensity flags on
+biomarker options, LOE case distribution, the 4.6 flag on the stalled leg.
 
 ---
 
