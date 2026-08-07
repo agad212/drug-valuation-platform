@@ -177,12 +177,18 @@ describe("Part-final — base-rate ceilings + stage-integral stability (general)
   });
 
   it("(i-c) THE 2.2 FIX ITSELF: an ordinary strong asset no longer saturates — the ceiling stays idle", () => {
-    // mss 0.75 (μ = 1.5, an above-average margin) on the SAME tight fixture used to produce the raw
-    // ~96% that the ceiling had to cap. On the anchored scale the raw integral is an honest
-    // probability well below the cap, so the ceiling never fires.
-    const st = saturatingPlan(0.75, "Phase 2").stages[0];
+    // mss 0.75 (μ = 1.5, an above-average margin) with the ORIGINAL benchmark width (0.004 — a
+    // near-point 0.0005 comparator saturates even μ=1.5). This is the exact configuration that used
+    // to produce the raw ~96% the ceiling had to cap; on the anchored scale the raw integral is an
+    // honest probability below the cap, so the ceiling never fires.
+    const stages: DevStageInput[] = [
+      { id: "s1", name: "cur", phase: "Phase 2", n: 600, cpp: 200000, trialDesign: tightDesign,
+        isCurrentTrial: true, enrollmentRatePerMonth: 10, treatmentObsMonths: 12, startupCushionMonths: 5,
+        isTimeToEvent: false, nullResponseRate: 0.20, comparatorSigma2: 0.004 },
+    ];
+    const st = computeDevPlan(mixtureFromMssVariance(0.75, 0.08), 0.1, { stages, regulatoryContext: "btd" }, 0).stages[0];
     expect(st.trialSuccessProbRaw).toBeLessThan(0.90);
-    expect(st.successCeilingBound).toBeUndefined();
+    expect(st.successCeilingBound ?? null).toBeNull(); // cap idle (dev-plan emits null when unbound)
   });
 
   it("(ii) a small prior perturbation produces only a small stage-probability change (no knife-edge)", () => {

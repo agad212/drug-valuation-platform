@@ -1137,8 +1137,15 @@ export function computeStageRR(
   //    stays where the evidence put it and a raised threshold moves up THROUGH it: active comparator
   //    lowers P, the TTE floor penalizes proxy stages, exactly as before the rescale. Both are
   //    input-only quantities — no circularity with the prior moments.
-  const anchorNull = Math.max(anchorNullRR ?? nullRR, MEANINGFUL_RR_FLOOR);
+  //    The anchor and the threshold share the SAME endpoint-family floor: for a TTE-proxy stage the
+  //    higher proxy floor RELOCATES the whole comparison (anchor and bar move together — the honest
+  //    proxy penalties are the translation-failure component and comparator uncertainty, not a hidden
+  //    margin handicap). If the anchor kept the lower proportion floor while the threshold took the
+  //    TTE floor, every TTE-proxy stage would carry a fixed ~15-point margin deficit that no μ < 1.5
+  //    could clear — that is exactly what collapsed TTX to pApproval 0.0004 mid-refactor. Anchor and
+  //    threshold therefore diverge ONLY when a caller explicitly raises the bar via `anchorNullRR`.
   const floor = isTimeToEvent ? TTE_PROXY_RR_FLOOR : MEANINGFUL_RR_FLOOR;
+  const anchorNull = Math.max(anchorNullRR ?? nullRR, floor);
   const flooredNull = Math.max(nullRR, floor);
   const effectiveNull = flooredNull;
 

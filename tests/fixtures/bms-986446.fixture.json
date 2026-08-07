@@ -4,9 +4,10 @@
     "capturedAt": "2026-07-21",
     "note": "CAPTURED from a live run via scripts/capture-fixture.ts (faithful inputs, not reconstructed). Base=http://localhost:3000. Expected values computed at the harness reference date 2026-07-01T00:00:00Z.",
     "expectedHeadline": {
+      "_bandNote": "RE-AUTHORED with the 2.2 anchored-scale re-pin. The old band [0.168, 0.368] was documented around the inflated absolute-scale headline (0.2675). Honest range for an anti-tau antibody: the class has ZERO approvals and a documented failure pattern (gosuranemab, tilavonemab, semorinemab — blended p_graveyard 0.872 in this fixture), the asset's evidence is below-average (mu ~0.70), and CNS Phase 2 base rates run ~5-15% (Wong/Siah/Lo 2019). Band = [0.01, 0.15].",
       "pApprovalBand": [
-        0.168,
-        0.368
+        0.01,
+        0.15
       ],
       "classStatus": "graveyard",
       "appliesModalityHaircut": true
@@ -160,22 +161,22 @@
   },
   "expected": {
     "finalMss": 0.34861,
-    "pApproval": 0.26751,
-    "pAllTrialsSuccess": 0.31472,
-    "s0_trialSuccessProb": 0.45114,
-    "s0_trialSuccessProbRaw": 0.51736,
+    "pApproval": 0.02519,
+    "pAllTrialsSuccess": 0.02963,
+    "s0_trialSuccessProb": 0.12770,
+    "s0_trialSuccessProbRaw": 0.14644,
     "s0_modalityHaircut": 0.872,
-    "s1_trialSuccessProb": 0.6976,
+    "s1_trialSuccessProb": 0.23203,
     "s1_modalityHaircut": 0.872,
     "totalDurationMonths": 81,
     "impliedLaunchYear": 2033,
     "s0_cpp": 110000,
     "s1_cpp": 170000,
-    "totalRiskAdjCostM": 37.59222,
+    "totalRiskAdjCostM": 15.31292,
     "peakSalesM": 3800,
     "loeYear": 2045,
     "revenuePVM": 6313.11604,
-    "eNPVM": 1651.2,
-    "eROI": 43.92
+    "eNPVM": 143.7,
+    "eROI": 9.38
   }
 }

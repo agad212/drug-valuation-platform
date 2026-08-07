@@ -39,6 +39,7 @@ import {
   gridToGaussianMixture,
   downsampleGrid,
   MEANINGFUL_RR_FLOOR,
+  TTE_PROXY_RR_FLOOR,
   type RRBands,
   type RRTrialDesign,
 } from "./bayesian-rr";
@@ -638,8 +639,10 @@ export function computeDevPlan(
     // concentration does NOT carry forward; identical to rrResult when the stage wasn't enriched.
     // Inverted with the SAME anchor the stage's prior was built on (the 2.2 anchored map's inverse) —
     // μ is the portable relative-effect quantity, so the earned margin re-expresses over the next
-    // stage's own comparator context.
-    const stageAnchor = Math.max(stageInput.anchorNullResponseRate ?? nullRR, MEANINGFUL_RR_FLOOR);
+    // stage's own comparator context. The anchor uses the stage's own family floor, mirroring
+    // computeStageRR exactly (a TTE-proxy stage anchors at the proxy floor).
+    const stageFloor = stageInput.isTimeToEvent === true ? TTE_PROXY_RR_FLOOR : MEANINGFUL_RR_FLOOR;
+    const stageAnchor = Math.max(stageInput.anchorNullResponseRate ?? nullRR, stageFloor);
     const mixtureIfSuccess = gridToGaussianMixture(
       propagationResult.posteriorGrid,
       currentMixture.length,
