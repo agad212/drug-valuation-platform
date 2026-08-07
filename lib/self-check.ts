@@ -464,6 +464,31 @@ function aggregateFlags(f: FlagInput): Flag[] {
     } else if (!np.share.inBand) {
       flags.push({ id: "flag-share-out-of-band", source: "#14 nicheProvenance", explain: "niche peak share cited but out-of-band → clamped to the heuristic band", read: { value: np.share.value, comp: np.share.comp, inBand: false } });
     }
+    // ── Option B critic (reads the engine's computed joint posture; judges nothing new) ──────────
+    const it = (np as { intensity?: { revenuePerEligibleRatio: number; wacMultiple: number; shareMultiple: number; wacBandPos: number; shareBandPos: number } }).intensity;
+    const countAtBound = !!np.eligible && (np.eligible.clamped ||
+      (np.eligible.bound != null && np.eligible.value != null && Math.abs(np.eligible.value - np.eligible.bound) < 1));
+    if (it) {
+      // Always-on transparency: name the driver. Individually-cited components can still be jointly
+      // implausible — the multiple is surfaced so a human (or the calibration layer) can judge it
+      // against real precision-launch analogs; no invented threshold gates it.
+      flags.push({
+        id: "flag-market-intensity", source: "Option B critic",
+        explain: `this option extracts ${it.revenuePerEligibleRatio.toFixed(1)}× the broad case's revenue per eligible patient (WAC ×${it.wacMultiple.toFixed(1)} · share ×${it.shareMultiple.toFixed(1)}) — verify the cited comps jointly support the multiple, not just each component`,
+        read: { revenuePerEligibleRatio: it.revenuePerEligibleRatio, wacMultiple: it.wacMultiple, shareMultiple: it.shareMultiple },
+      });
+      // Joint-band-top: EVERY market lever simultaneously near its ceiling. Each value is in-band by
+      // construction; the flag is about the JOINT posture (top third of the WAC band AND of the share
+      // band AND the patient count pinned at its containment bound) — the configuration a motivated
+      // narrative reaches for, and the one containment cannot catch.
+      if (it.wacBandPos >= 2 / 3 && it.shareBandPos >= 2 / 3 && countAtBound) {
+        flags.push({
+          id: "flag-joint-band-top", source: "Option B critic",
+          explain: "every market lever is simultaneously near its ceiling (WAC and share in the top third of their bands, patient count at its containment bound) — jointly aggressive even though each value is individually cited and in-band",
+          read: { wacBandPos: it.wacBandPos, shareBandPos: it.shareBandPos, countAtBound },
+        });
+      }
+    }
   }
   if (f.regUnconfirmed) {
     flags.push({ id: "flag-reg-unconfirmed", source: "reg acceptability", explain: "registration-endpoint acceptability UNCONFIRMED — held at base rate, not penalized (absence of evidence is a flag, not a verdict)" });

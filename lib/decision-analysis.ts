@@ -274,6 +274,19 @@ export type OptionResult = {
     // The eligible-COUNT containment resolution (clamped / unbounded / trusted) — structured so the critic
     // and calibration can query "was this count contained, against what?" as data, not prose.
     eligible?: NicheEligibleResolution;
+    // Option B critic (deterministic core) — the JOINT market posture, computed observables only:
+    // individually-cited, individually-in-band claims can still be jointly implausible, and containment
+    // cannot falsify them (a precision label CAN price and penetrate above broad). These numbers let the
+    // self-check NAME the driver instead of judging it: how much revenue this option extracts per
+    // eligible patient relative to the broad case, decomposed into its WAC and share multiples, plus
+    // where each cited value sits inside its plausibility band (0 = floor, 1 = ceiling).
+    intensity?: {
+      revenuePerEligibleRatio: number; // (WAC_niche × share) / (WAC_broad × broad penetration)
+      wacMultiple: number;             // WAC_niche / WAC_broad
+      shareMultiple: number;           // share_niche / broad penetration
+      wacBandPos: number;              // position of the USED WAC inside its (effective) band, 0–1
+      shareBandPos: number;            // position of the USED share inside its band, 0–1
+    };
   };
 
   // Layer 2 design-bridge provenance (present only when a design spec was applied): where it targeted,
@@ -756,7 +769,22 @@ export function computeOption(
           : NICHE_WAC_BAND_USD;
         const wac   = resolveNicheParam(option.nicheAnnualPriceUsd, option.nicheWacComp,   wacBand,              NICHE_PRICE_DEFAULT_USD);
         const share = resolveNicheParam(option.nichePeakSharePct,   option.nicheShareComp, NICHE_SHARE_BAND_PCT, NICHE_SHARE_DEFAULT_PCT);
-        nicheProvenance = { wac, share, eligible };
+        // Option B critic core: the JOINT market posture as computed observables (pure arithmetic on the
+        // already-resolved values — no judgment here; the self-check reads these and flags).
+        const broadRevPerEligible =
+          baseMarket.annualPriceUsd != null && baseMarket.annualPriceUsd > 0 && baseMarket.penetrationPct > 0
+            ? baseMarket.annualPriceUsd * (baseMarket.penetrationPct / 100)
+            : null;
+        const intensity = broadRevPerEligible != null
+          ? {
+              revenuePerEligibleRatio: (wac.value * (share.value / 100)) / broadRevPerEligible,
+              wacMultiple: wac.value / baseMarket.annualPriceUsd!,
+              shareMultiple: share.value / baseMarket.penetrationPct,
+              wacBandPos: Math.max(0, Math.min(1, (wac.value - wacBand.min) / Math.max(1, wacBand.max - wacBand.min))),
+              shareBandPos: Math.max(0, Math.min(1, (share.value - NICHE_SHARE_BAND_PCT.min) / Math.max(1e-9, NICHE_SHARE_BAND_PCT.max - NICHE_SHARE_BAND_PCT.min))),
+            }
+          : undefined;
+        nicheProvenance = { wac, share, eligible, intensity };
         const niche = deriveEnrichedNiche({ nicheEligiblePatients, nicheAnnualPriceUsd: wac.value, nichePeakSharePct: share.value });
         peakSalesM = niche.peakSalesM;
         const wacFloorNote = wacFloorRelaxed ? ` (floor set to the broad WAC $${Math.round((broadWac as number) / 1000)}k, not the $${NICHE_WAC_BAND_USD.min / 1000}k heuristic — a niche floor must not exceed the broad price)` : "";
@@ -784,6 +812,13 @@ export function computeOption(
         marketDrivers.push(niche.provenance +
           (option.nicheMarketBasis ? ` — ${option.nicheMarketBasis}` : "") +
           ` [${sourcing.join("; ")}]`);
+        // Option B critic — the JOINT posture, named AFTER the sourcing line (a second Market driver).
+        if (intensity) {
+          marketDrivers.push(
+            `Market intensity: ${intensity.revenuePerEligibleRatio.toFixed(1)}× the broad case's revenue per eligible patient ` +
+            `(WAC ×${intensity.wacMultiple.toFixed(1)}, share ×${intensity.shareMultiple.toFixed(1)}) — each component cited; verify the comps jointly support the multiple`,
+          );
+        }
       } else {
         // No base eligible count to anchor a niche — leave the market at base rather than
         // invent a multiplier. (Persist annual WAC at auto-value to enable re-derivation.)

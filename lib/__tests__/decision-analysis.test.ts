@@ -6,6 +6,7 @@ import { computeRevenuePV } from "../cashflow";
 import { buildBaseContext, computeOption, programBreadthMultiplier, isBiomarkerEnriched, type OptionInputs } from "../decision-analysis";
 import { deriveMarket, deriveEnrichedNiche, nicheIdentityHolds } from "../market-model";
 import { enrichEffectPrior, resolveEnrichmentLift, mixtureMoments, DEFAULT_ENRICHMENT_LIFT, MAX_ENRICHMENT_LIFT } from "../effect-prior";
+import { selfCheck, flagsFromOption } from "../self-check";
 import type { TrialDesignInputs } from "../ptrs-trial";
 import type { Valuation } from "../types";
 import type { FamilyFlag } from "../trial-design-interpreter";
@@ -294,6 +295,46 @@ describe("Strategy Advisor — bottom-up niche market re-derivation", () => {
     expect(over.nicheProvenance!.eligible).toMatchObject({ supersetEligible: 40000, bound: 14000, clamped: true });
     // The peak identity is UNTOUCHED (decoupling): Option A still reproduces the base peak exactly.
     expect(computeOption(base, A).peakSalesM).toBeCloseTo(base.peakSalesM, 6);
+  });
+
+  it("OPTION B CRITIC: joint market intensity is computed and the driver is named", () => {
+    // Broad: WAC $100k × 25% penetration → $25k revenue per eligible patient.
+    // Niche: $200k × 35% → $70k → 2.8× intensity (WAC ×2.0, share ×1.4). Pure observables, no judgment.
+    const { base } = mkMarketBase();
+    const o = computeOption(base, {
+      id: "b", name: "Niche",
+      nicheEligiblePatients: 10000,
+      nicheAnnualPriceUsd: 200000, nicheWacComp: "analog targeted agent ~$200k/yr",
+      nichePeakSharePct: 35,       nicheShareComp: "analog defined-responder ~35%",
+    }, undefined);
+    const it2 = o.nicheProvenance!.intensity!;
+    expect(it2.revenuePerEligibleRatio).toBeCloseTo(2.8, 3);
+    expect(it2.wacMultiple).toBeCloseTo(2.0, 3);
+    expect(it2.shareMultiple).toBeCloseTo(1.4, 3);
+    expect(o.keyDrivers.join(" ")).toMatch(/Market intensity: 2\.8×/);
+    // The transparency flag is ALWAYS on for a re-derived niche; the joint-band-top flag is NOT
+    // (mid-band values, count inside its bound).
+    const report = selfCheck({ flags: flagsFromOption(o) });
+    expect(report.flags.some((f) => f.id === "flag-market-intensity")).toBe(true);
+    expect(report.flags.some((f) => f.id === "flag-joint-band-top")).toBe(false);
+  });
+
+  it("OPTION B CRITIC: every lever at its ceiling simultaneously → the joint-band-top flag fires", () => {
+    // Each value individually cited and in-band; the count clamps at its containment bound. The JOINT
+    // posture — top third of the WAC band AND of the share band AND the count pinned — is the
+    // configuration containment cannot catch, and it is exactly what gets flagged.
+    const { base } = mkMarketBase();
+    const o = computeOption(base, {
+      id: "b", name: "Everything-at-the-top niche",
+      nicheEligiblePatients: 55000, // exceeds the 14,000 bound → clamps (countAtBound)
+      nicheAnnualPriceUsd: 280000, nicheWacComp: "ultra-premium precision comp ~$280k/yr",
+      nichePeakSharePct: 46,       nicheShareComp: "dominant post-superiority analog ~46%",
+    }, undefined);
+    const report = selfCheck({ flags: flagsFromOption(o) });
+    expect(report.flags.some((f) => f.id === "flag-joint-band-top")).toBe(true);
+    // …and the intensity read names the magnitude for the human.
+    const intensityFlag = report.flags.find((f) => f.id === "flag-market-intensity")!;
+    expect(intensityFlag.explain).toMatch(/revenue per eligible patient/);
   });
 
   it("WAC FLOOR (2.4): the niche floor is the BROAD WAC, not a heuristic $150k that exceeds it", () => {
