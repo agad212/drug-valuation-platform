@@ -651,11 +651,23 @@ export function computeDevPlan(
     const { mss: mssIfSuccess, variance: varianceIfSuccess } = mixtureMoments(mixtureIfSuccess);
 
     // ── Cost accounting (Fix #2: cost-per-patient pinned to phase × TA benchmark) ─
-    // The pinned central value GOVERNS so identical assets stop swinging on cost;
-    // this touches only dollar cost, never any probability.
+    // This touches only dollar cost, never any probability.
+    //
+    // Designation propagation (the CPP side of Fix B): the rare/orphan PRICING band keys on the
+    // CONFIRMED designation, not the LLM-emitted stage label. Confirmed → PROMOTED even when the stage
+    // was emitted "standard" (the live taladegib gap: FDA + EC orphan designations confirmed and
+    // displayed in the same run, stages emitted DESIGNATION "Standard" → priced on the general band,
+    // systematically under-costing a designated asset — rare-disease trials genuinely cost more per
+    // patient). Unconfirmed → an orphan-labeled stage is DOWNGRADED for pricing too (default-deny,
+    // symmetric with the P-side gate; previously the raw label passed through, so an UNEARNED orphan
+    // label collected the premium band). populationType rare_small still promotes independently.
+    const stageCtx = stageInput.trialDesign.regulatoryContext;
+    const pricingCtx: RegulatoryContext = orphanConfirmed
+      ? (stageCtx === "btd" || stageCtx === "btd_orphan" ? "btd_orphan" : "orphan")
+      : gateOrphanForEngine(stageCtx, false);
     const cppPin = pinCostPerPatient(stageInput.phase, inputs.therapeuticArea, {
       populationType:    stageInput.trialDesign.populationType,
-      regulatoryContext: stageInput.trialDesign.regulatoryContext,
+      regulatoryContext: pricingCtx,
       llmCpp:            stageInput.cpp,
     });
     const trialCostM   = (stageInput.n * cppPin.cpp) / 1e6;

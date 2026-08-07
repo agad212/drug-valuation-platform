@@ -270,6 +270,29 @@ describe("Guard 7 — financial inputs are pinned/anchored, not passed through r
     expect(rare.cpp).toBeGreaterThan(sane.cpp);
   });
 
+  it("CPP DESIGNATION PROPAGATION: the rare/orphan pricing band keys on the CONFIRMED designation, not the LLM stage label", () => {
+    // The live taladegib gap: FDA + EC orphan designations CONFIRMED in the same run, but stages
+    // emitted DESIGNATION "Standard" → priced on the general band (Ph2 $60–100k) instead of the
+    // rare_orphan band ($150–280k) — systematically under-costing a designated asset.
+    const stg = [stage({ n: 200, phase: "Phase 2", nullResponseRate: 0.15,
+      trialDesign: design({ regulatoryContext: "standard" }), cpp: 95_000 })];
+    const mk = (confirmed: boolean) =>
+      computeDevPlan(mixtureFromMssVariance(0.5, 0.15), 0.1,
+        { stages: stg, regulatoryContext: "standard", orphanConfirmedForIndication: confirmed }, 1000).stages[0];
+    const confirmedPlan = mk(true);
+    const unconfirmedPlan = mk(false);
+    // Confirmed → promoted to the rare band; the $95k citation is BELOW its $150k floor → clamps up.
+    expect(confirmedPlan.cpp).toBe(150_000);
+    // Unconfirmed + standard label → general band; $95k is in the $60–100k band → governs.
+    expect(unconfirmedPlan.cpp).toBe(95_000);
+    // …and an UNEARNED orphan label no longer collects the premium band (default-deny, symmetric).
+    const labeled = computeDevPlan(mixtureFromMssVariance(0.5, 0.15), 0.1,
+      { stages: [stage({ n: 200, phase: "Phase 2", nullResponseRate: 0.15,
+        trialDesign: design({ regulatoryContext: "orphan" }), cpp: 95_000 })],
+        regulatoryContext: "standard", orphanConfirmedForIndication: false }, 1000).stages[0];
+    expect(labeled.cpp).toBe(95_000); // downgraded to the general band for pricing
+  });
+
   it("PEAK SALES: base is anchored to the comp median, deterministic; a swinging LLM peak is ignored", () => {
     const comps = [
       { drug: "A", peakSalesM: 200 }, { drug: "B", peakSalesM: 400 },
