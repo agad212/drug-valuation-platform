@@ -149,6 +149,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // DETERMINISTIC validation gate — the LLM's raw output NEVER reaches the aggregation unvalidated.
     const result = validateIndicationStructure(parsed, indicationIds);
 
+    // Readability (8/8 live run): flag messages embed raw indication IDs ("wm8kv…: stated to SHARE
+    // the lead's mechanism…") — substitute the human NAME everywhere an id appears. IDs are random
+    // slugs, so a global replace is unambiguous; the relationships payload keeps raw ids (engine-facing).
+    const idToName = new Map<string, string>(
+      (indications as IndIn[]).map((i) => [String(i?.id ?? ""), String(i?.name ?? "").trim()]).filter(([, n]) => n.length > 0) as [string, string][]
+    );
+    for (const fl of result.flags) {
+      for (const [id, name] of idToName) {
+        if (id && fl.message.includes(id)) fl.message = fl.message.split(id).join(`"${name}"`);
+      }
+    }
+
     // ── Module 4: the facilitator checker — audits the dependency RATIONALES (never the labels' effect).
     // Shared transport/gate/health markers (lib/elicitation-checker). Findings are folded into the
     // existing structure-flags rail (rendered + persisted by the UI already); a checker "high" renders
@@ -157,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (result.relationships.length) {
       const digest = result.relationships.map((rel) => {
         const a = result.assumptions.find((x) => x.id === rel.id);
-        return `"${rel.id}": resolved ${rel.indicationRelationship}${a?.source === "default" ? " (DEMOTED by the validator)" : ""} — rationale: ${rel.rationale}`;
+        return `"${idToName.get(rel.id) ?? rel.id}": resolved ${rel.indicationRelationship}${a?.source === "default" ? " (DEMOTED by the validator)" : ""} — rationale: ${rel.rationale}`;
       }).join("\n");
       const demotions = result.flags.filter((f) => f.severity === "reject").map((f) => f.message).join("; ") || "none";
       const review = await runElicitationChecker({

@@ -1615,6 +1615,11 @@ export default function HomePage() {
       // (ACTUAL vs ESTIMATED) rides along so the pin's wording stays honest.
       const currentTrialRegistryN = currentTrial?.enrollmentCount;
       const currentTrialRegistryNType = currentTrial?.enrollmentType;
+      // Registry status + NCT of the trial actually pinned — lets the API disclose when the
+      // "current trial" being priced is already COMPLETED per the registry (8/8 live run: the
+      // brief gated on the completed Phase 2a while the live Phase 2b was absent from the list).
+      const currentTrialRegistryStatus = currentTrial?.status;
+      const currentTrialNctId = currentTrial?.nctId;
       const res = await fetch("/api/dev-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1629,6 +1634,8 @@ export default function HomePage() {
           currentTrialCompletionDate,
           currentTrialRegistryN,
           currentTrialRegistryNType,
+          currentTrialRegistryStatus,
+          currentTrialNctId,
         }),
       });
       if (!res.ok) {
@@ -3115,7 +3122,7 @@ export default function HomePage() {
                           )}
                           {statedEligible != null && (
                             <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
-                              Eligible patients (stated by the analysis): {statedEligible.toLocaleString("en-US")}{typeof wac === "number" && wac > 0 ? ` × ${fmtMoney(wac)}/yr ≈ ${fmtMoney(statedEligible * wac)} market` : ""} — the coherence checks below audit this against the TAM.
+                              Eligible patients (stated by the analysis): {statedEligible.toLocaleString("en-US")}{typeof wac === "number" && wac > 0 ? ` × ${fmtPrice(wac)}/yr ≈ ${fmtMoney(statedEligible * wac)} market` : ""} — the coherence checks below audit this against the TAM.
                             </div>
                           )}
                           {impliedEligible != null && (

@@ -127,6 +127,9 @@ type RequestBody = {
                                           //   stage's n (LLM n emissions are unstable run-to-run)
   currentTrialRegistryNType?: string;     // CT.gov enrollmentInfo.type: "ACTUAL" (final accrual)
                                           //   vs "ESTIMATED" (registered target) — honest wording
+  currentTrialRegistryStatus?: string;    // CT.gov overallStatus of the pinned trial — a COMPLETED
+                                          //   trial priced as the live gate is a fact worth flagging
+  currentTrialNctId?: string;             // the NCT actually pinned (for the disclosure message)
 };
 
 type StageOutput = {
@@ -172,7 +175,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     drug, indication, phase, mechanism, sponsor,
     currentTrialDesign, currentTrialName, currentTrialEnrollmentComplete, currentTrialCompletionDate,
-    currentTrialRegistryN, currentTrialRegistryNType,
+    currentTrialRegistryN, currentTrialRegistryNType, currentTrialRegistryStatus, currentTrialNctId,
   } = req.body as RequestBody;
 
   if (!drug || !currentTrialDesign) {
@@ -676,6 +679,21 @@ Reason about the full development path. Return the current trial as stage 1 (use
         (cur.elicitationFindings = cur.elicitationFindings ?? []).push({
           severity: "info",
           message: `registry enrollment n=${registryN} is outside the [10, 5000] sanity band (hand-set guard against registry data errors, labeled provisional) — NOT pinned; the LLM's n=${cur.n} governs`,
+        });
+      }
+    }
+
+    // ── Trial-identity disclosure (8/8 live run): the pinned "current trial" was already COMPLETED ──
+    // The brief gated on the finished Phase 2a (NCT04968574, n=41) while the actively-enrolling
+    // Phase 2b (WHISTLE-PF) never made the trial list — so the live stage was priced with a
+    // completed study's enrollment. The registry status is a FACT; when it says the modeled current
+    // trial is finished, the user must be told this stage may be riding the wrong trial's identity.
+    if (typeof currentTrialRegistryStatus === "string" && /^COMPLETED$/i.test(currentTrialRegistryStatus.trim())) {
+      const cur = cappedStages.find((s) => s.isCurrentTrial);
+      if (cur) {
+        (cur.elicitationFindings = cur.elicitationFindings ?? []).push({
+          severity: "medium",
+          message: `the registry lists the modeled current trial${currentTrialNctId ? ` (${currentTrialNctId})` : ""} as COMPLETED — its readout may already exist, and the n/duration here describe THAT finished study. If a later trial is the real value-driving gate (e.g. an actively-enrolling Phase 2b/3 absent from the trial list), this stage is priced against the wrong trial's identity — verify which study actually gates approval`,
         });
       }
     }
