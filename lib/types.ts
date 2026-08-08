@@ -46,6 +46,10 @@ export type RevenueMarketContext = {
   patientPopDesc?: string;
   pricingPerYear?: number;
   competitive?: string;
+  // Module 3 elicitation: the STRUCTURED eligible-patient count (drug-eligible, treated pool).
+  // Makes the TAM arithmetic verifiable: tamM ≈ eligiblePatients × pricingPerYear. The 8/8 live
+  // run's $3B-TAM-vs-$12B-patient-math contradiction was only catchable with this field.
+  eligiblePatients?: number;
 };
 
 export type RevenueComp = {
@@ -58,20 +62,25 @@ export type RevenueComp = {
 export type IndicationRevenueAnalysis = {
   indication: string;
   peakSalesM: number;
-  bullM: number;
-  bearM: number;
+  bullM: number;   // elicited p95 (extremes-first; NOT a ±% template)
+  bearM: number;   // elicited p05
   confidence: "high" | "medium" | "low";
   reasoning: string;
   analystEstimates: RevenueAnalystEstimate[];
   marketContext: RevenueMarketContext;
   comps: RevenueComp[];
   sources: Source[];
+  // Module 3: deterministic coherence findings (TAM vs patients×price; peak vs TAM×penetration;
+  // bear<base<bull ordering; suspiciously narrow p05–p95 spread). Display-only, engine-untouched.
+  coherenceFlags?: string[];
 };
 
 export type RevenueAnalysisResult = {
   drug: string;
   phase: string;
   indications: IndicationRevenueAnalysis[];
+  // Module 3: the facilitator checker's rationale audit (gated, display-only prose).
+  elicitationReview?: { findings: { severity: "high" | "medium" | "info"; message: string }[]; flags: string[] };
 };
 
 export type Valuation = {

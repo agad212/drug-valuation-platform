@@ -3066,6 +3066,18 @@ export default function HomePage() {
                               Coherence check: TAM {fmtMoney((tam as number) * 1e6)} ÷ {fmtMoney(wac as number)}/yr implies ~{impliedEligible.toLocaleString("en-US")} treatable patients — verify against the stated population before trusting the penetration math.
                             </div>
                           )}
+                          {/* Module 3: deterministic coherence findings from the API (per indication) */}
+                          {(active.coherenceFlags ?? []).map((cf, i) => (
+                            <div key={`cf${i}`} style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.35)", borderRadius: 8, padding: "8px 12px", marginBottom: 8, fontSize: 11.5, color: "#f59e0b", lineHeight: 1.5 }}>
+                              ⚠ {cf}
+                            </div>
+                          ))}
+                          {/* Module 3: the facilitator checker's rationale audit (batched, whole analysis) */}
+                          {revenueAnalysis?.elicitationReview?.findings?.map((fd, i) => (
+                            <div key={`rf${i}`} style={{ padding: "3px 0", fontSize: 11.5, lineHeight: 1.5, color: fd.severity === "high" ? "#ef4444" : fd.severity === "medium" ? "#f59e0b" : "var(--text-faint)" }}>
+                              {fd.severity === "high" ? "🔴" : fd.severity === "medium" ? "🟡" : "ℹ️"} {fd.message}
+                            </div>
+                          ))}
                         </>
                       );
                     })()}

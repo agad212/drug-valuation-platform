@@ -1,5 +1,43 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
+import { validateElicitationFindings } from "../../lib/elicitation";
+
+// ── Module 3: deterministic coherence checks on the elicited market arithmetic ─────────────────
+// Pure arithmetic on the emission's own numbers; incoherence is NAMED, never silently fixed
+// (§1.5). Tolerances ±33% (ratio outside [0.75, 1.33]) and the narrow-spread floor 40% are
+// hand-set provisional rails, labeled as such in the messages.
+function coherenceFlags(a: {
+  peakSalesM?: number; bearM?: number; bullM?: number;
+  marketContext?: { tamM?: number | null; penetrationPct?: number | null; pricingPerYear?: number | null; eligiblePatients?: number | null };
+}): string[] {
+  const f: string[] = [];
+  const mc = a.marketContext ?? {};
+  const { tamM, penetrationPct, pricingPerYear, eligiblePatients } = mc;
+  if (typeof eligiblePatients === "number" && eligiblePatients > 0 && typeof pricingPerYear === "number" && pricingPerYear > 0 && typeof tamM === "number" && tamM > 0) {
+    const impliedTamM = (eligiblePatients * pricingPerYear) / 1e6;
+    const r = impliedTamM / tamM;
+    if (r > 1.33 || r < 0.75) {
+      f.push(`TAM arithmetic incoherent: ${eligiblePatients.toLocaleString("en-US")} patients × $${Math.round(pricingPerYear / 1000)}k/yr implies ~$${Math.round(impliedTamM).toLocaleString("en-US")}M, but tamM says $${Math.round(tamM).toLocaleString("en-US")}M (${r.toFixed(1)}× apart) — at least one of the three numbers is wrong (±33% provisional tolerance)`);
+    }
+  } else if (typeof tamM === "number" && tamM > 0 && !(typeof eligiblePatients === "number" && eligiblePatients > 0)) {
+    f.push("eligiblePatients not emitted — the TAM arithmetic is unverifiable (the 8/8 live run's $3B-TAM-vs-$12B-patient-math contradiction was only catchable with a structured count)");
+  }
+  if (typeof tamM === "number" && tamM > 0 && typeof penetrationPct === "number" && penetrationPct > 0 && typeof a.peakSalesM === "number" && a.peakSalesM > 0) {
+    const impliedPeak = (tamM * penetrationPct) / 100;
+    const r = impliedPeak / a.peakSalesM;
+    if (r > 1.33 || r < 0.75) {
+      f.push(`peak arithmetic incoherent: TAM $${Math.round(tamM).toLocaleString("en-US")}M × ${penetrationPct}% implies ~$${Math.round(impliedPeak).toLocaleString("en-US")}M vs stated peak $${Math.round(a.peakSalesM).toLocaleString("en-US")}M (±33% provisional tolerance)`);
+    }
+  }
+  if (typeof a.bearM === "number" && a.bearM > 0 && typeof a.bullM === "number" && a.bullM > 0 && typeof a.peakSalesM === "number" && a.peakSalesM > 0) {
+    if (!(a.bearM < a.peakSalesM && a.peakSalesM < a.bullM)) {
+      f.push(`bear/base/bull ordering violated ($${a.bearM}M / $${a.peakSalesM}M / $${a.bullM}M) — the elicited range is unusable until reconciled`);
+    } else if ((a.bullM - a.bearM) / a.peakSalesM < 0.4) {
+      f.push(`p05–p95 spread is only ${Math.round(((a.bullM - a.bearM) / a.peakSalesM) * 100)}% of the base — suspiciously narrow for a pre-launch asset (experts under-cover ranges; 40% floor is a provisional rail)`);
+    }
+  }
+  return f;
+}
 
 // ─── Claude revenue analysis with native web search ───────────────────────────
 
@@ -39,9 +77,23 @@ Anchor estimates on real-world named comparables. Priority:
 3. Same mechanism, different indication (scale for prevalence)
 Always adjust for label breadth, launch timing, pricing era, and competitive dynamics.
 
-## BULL / BASE / BEAR LOGIC
-- Bull: +40–80% above base (best-case label, fast uptake, pricing strength, combo use, ex-US outperformance)
-- Bear: -40–60% below base (pricing pressure, competitive crowding, safety signal, narrow label, slow uptake)
+## ELICITATION PROTOCOL — you are the expert under a facilitated probability elicitation
+Work EXTREMES FIRST, center last (anchoring runs downhill from the first number you commit to):
+1. bearM = your p05: only a ~5% chance peak sales land BELOW this (a real scenario — narrow label,
+   pricing collapse, potent competitor — not a % template off the base).
+2. bullM = your p95: only a ~5% chance peak sales land ABOVE this.
+3. peakSalesM = your median, and it MUST lie between bearM and bullM.
+NEVER derive bear/bull as ±X% of the base — that is the anchoring failure this protocol replaces.
+Experts systematically under-cover the true range; when in doubt, widen. A reviewer will audit
+your rationale for anchoring on comp peaks, recency-driven recall, base-rate neglect on
+penetration, and motivated optimism — write reasoning that survives that audit.
+
+## STRUCTURED MARKET ARITHMETIC (verified deterministically — incoherence is flagged to the user)
+- marketContext.eligiblePatients = the drug-eligible treated pool (a COUNT, global basis consistent
+  with your peak). REQUIRED whenever tamM is given.
+- The identities MUST hold: tamM ≈ eligiblePatients × pricingPerYear / 1,000,000 and
+  peakSalesM ≈ tamM × penetrationPct / 100. If your narrative population and your TAM disagree,
+  FIX THE NUMBERS, not the prose.
 - Confidence = "high" if ≥2 named analyst estimates found; "medium" if 1 estimate or clear market-size data; "low" if pure model
 
 ## RULES
@@ -71,7 +123,7 @@ async function analyzeRevenueWithClaude(
       "confidence": "high" | "medium" | "low",
       "reasoning": string,
       "analystEstimates": [{ "source": string, "url": string|null, "estimateM": number, "year": number|null, "quote": string }],
-      "marketContext": { "tamM": number|null, "penetrationPct": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null, "competitive": string|null },
+      "marketContext": { "tamM": number|null, "penetrationPct": number|null, "eligiblePatients": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null, "competitive": string|null },
       "comps": [{ "drug": string, "indication": string, "peakSalesM": number, "rationale": string }],
       "sources": [{ "label": string, "url": string|null }]
     }
@@ -143,7 +195,67 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
     });
 
-    return res.status(200).json({ drug, phase, indications: aligned });
+    // Module 3: deterministic coherence checks on each indication's elicited arithmetic
+    for (const a of aligned) {
+      const flags = coherenceFlags(a);
+      if (flags.length) a.coherenceFlags = flags;
+    }
+
+    // Module 3: the facilitator checker — one batched call auditing the revenue RATIONALES
+    // (never proposing numbers). Gated by validateElicitationFindings; fail-open with a health
+    // marker so silence always means "did not run" is impossible.
+    let elicitationReview: { findings: { severity: string; message: string }[]; flags: string[] } = {
+      findings: [{ severity: "info", message: "AI checker unavailable this run (fail-open) — revenue rationales are UNREVIEWED" }],
+      flags: [],
+    };
+    try {
+      const key = process.env.ANTHROPIC_API_KEY!;
+      const digest = aligned.map((a: any) => {
+        const mc = a.marketContext || {};
+        return `"${a.indication}": peak $${a.peakSalesM}M (p05 $${a.bearM}M / p95 $${a.bullM}M, confidence ${a.confidence}); TAM $${mc.tamM ?? "?"}M = ${mc.eligiblePatients?.toLocaleString?.("en-US") ?? "?"} patients × $${mc.pricingPerYear ?? "?"}/yr; penetration ${mc.penetrationPct ?? "?"}%; comps: ${(a.comps || []).map((c: any) => `${c.drug} $${c.peakSalesM}M`).join(", ") || "none"}; reasoning: ${a.reasoning}`;
+      }).join("\n");
+      const checkRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1200,
+          messages: [{
+            role: "user",
+            content: `You are the FACILITATOR auditing a sell-side analyst's revenue elicitations for ${drug} (${phase}). Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
+
+${digest}
+
+Report ONLY genuine issues (max 5):
+1. Anchoring: peak suspiciously equal to a comp's peak, a round market-report number, or a template % of TAM.
+2. Motivated optimism / pessimism: every lever leaning the same direction; penetration borrowed from a comp's most favorable reading.
+3. Availability/recency: rationale dominated by the newest headline (an approval, one readout) rather than the full competitive picture.
+4. Base-rate neglect: penetration or price out of line with what comparable launches ACTUALLY achieved (cite the input's own comps).
+5. Internal consistency: reasoning that contradicts the numbers, comps that contradict the price/share claims, bear/bull that ignore named risks.
+
+Respond STRICT JSON only:
+{"findings":[{"quantity":"peakSales|bearBull|tam|penetration|wac|eligibleCount|comps|general","severity":"high|medium|info","message":"one or two sentences, name the indication"}]}
+Empty findings array if everything is defensible.`,
+          }],
+        }),
+      });
+      if (checkRes.ok) {
+        const cd = (await checkRes.json()) as { content?: { type: string; text?: string }[] };
+        const ctext = (cd.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
+        const cs = ctext.indexOf("{"); const ce = ctext.lastIndexOf("}");
+        let cparsed: unknown = null;
+        if (cs >= 0 && ce > cs) { try { cparsed = JSON.parse(ctext.slice(cs, ce + 1)); } catch { cparsed = null; } }
+        const gated = validateElicitationFindings(cparsed, ["peakSales", "bearBull", "tam", "penetration", "wac", "eligibleCount", "comps", "general"]);
+        elicitationReview = {
+          findings: gated.findings.length ? gated.findings : [{ severity: "info", message: "AI checker reviewed the revenue elicitations — no findings" }],
+          flags: gated.flags,
+        };
+      }
+    } catch (checkErr) {
+      console.error("[revenue] elicitation checker failed (fail-open):", (checkErr as Error)?.message);
+    }
+
+    return res.status(200).json({ drug, phase, indications: aligned, elicitationReview });
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || "Revenue analysis failed" });
   }
