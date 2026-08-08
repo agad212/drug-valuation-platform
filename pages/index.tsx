@@ -3035,6 +3035,10 @@ export default function HomePage() {
                             tamM: active.marketContext?.tamM ?? undefined,
                             penetrationPct: active.marketContext?.penetrationPct ?? undefined,
                             annualPriceUsd: active.marketContext?.pricingPerYear ?? undefined,
+                            // Elicited p05/p95 — the scenario branches read these as true
+                            // Pearson-Tukey outer values (module 3).
+                            bearPeakM: active.bearM > 0 ? active.bearM : undefined,
+                            bullPeakM: active.bullM > 0 ? active.bullM : undefined,
                           });
                           pushToast(`Applied ${fmtMoney(active.peakSalesM * 1e6)} to "${v.indications?.[revenueTab]?.name || active.indication}".`, "success");
                         }

@@ -22,6 +22,11 @@ export type Indication = {
   tamM?: number;            // addressable market $M (eligible patients × annual WAC)
   penetrationPct?: number;  // peak penetration % (peakSales ≈ tamM × penetrationPct/100)
   annualPriceUsd?: number;  // annual WAC $/patient/yr — the base eligible COUNT = tamM/price
+  // Module 3: the revenue module's ELICITED p05/p95 peak-sales bounds ($M), persisted when the
+  // estimate is applied — the scenario branches read these as true Pearson-Tukey outer values
+  // instead of the ×0.7/×1.3 placeholders.
+  bearPeakM?: number;
+  bullPeakM?: number;
   // 4.6 — development-activity status (LLM-emitted OBSERVABLE, citation-gated). A stalled or
   // discontinued program contributing to the headline is surfaced as a flag naming its share — the
   // value is NOT adjusted (a "reactivation probability" would be an invented constant; the flag lets

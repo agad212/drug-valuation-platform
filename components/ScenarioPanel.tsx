@@ -31,8 +31,27 @@ const DEFAULT_BRANCHES: Branch[] = [
   { id: "bull", label: "Bull (p95)", weight: 0.185, deltas: { peakMult: 1.3 } },
 ];
 
+// Module 3 wiring: when the lead indication carries the revenue module's ELICITED p05/p95
+// (persisted on apply), the outer branches initialize from those TRUE elicited values instead of
+// the ×0.7/×1.3 placeholders. Coherence-guarded (bear < base < bull) — incoherent → placeholders.
+// Mount-time initialization; the fields stay user-editable as before.
+function initialBranches(base: Valuation): Branch[] {
+  const lead = base.indications?.[0];
+  const peakM = (lead?.peakSales ?? base.peakSales ?? 0) / 1e6;
+  const bear = lead?.bearPeakM;
+  const bull = lead?.bullPeakM;
+  if (peakM > 0 && bear != null && bull != null && bear > 0 && bear < peakM && bull > peakM) {
+    return [
+      { id: "bear", label: "Bear (p05, elicited)", weight: 0.185, deltas: { peakMult: +(bear / peakM).toFixed(2) } },
+      { id: "base", label: "Base (p50)", weight: 0.63, deltas: {} },
+      { id: "bull", label: "Bull (p95, elicited)", weight: 0.185, deltas: { peakMult: +(bull / peakM).toFixed(2) } },
+    ];
+  }
+  return DEFAULT_BRANCHES;
+}
+
 export default function ScenarioPanel({ base, devPlan }: { base: Valuation; devPlan?: DevPlanResult | null }) {
-  const [branches, setBranches] = useState<Branch[]>(DEFAULT_BRANCHES);
+  const [branches, setBranches] = useState<Branch[]>(() => initialBranches(base));
 
   const setWeight = (id: string, w: number) => setBranches((bs) => bs.map((b) => (b.id === id ? { ...b, weight: w } : b)));
   const setDelta = (id: string, k: keyof ScenarioDeltas, v: number | null) =>
