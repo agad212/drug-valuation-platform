@@ -149,6 +149,8 @@ type StageOutput = {
   endpointEvidenceBasis?: "CONFIRMED" | "INFERRED";
   comparatorSigma2?: number;
   comparatorSource?: string;
+  comparatorRateLow?: number;   // elicited 15/85 range (rule 14a); cleared when a library pin governs
+  comparatorRateHigh?: number;
   // Base re-pin (G3): registration-endpoint reg-acceptance observables (resolve-or-flag).
   fdaGuidanceForEndpoint?: boolean;
   priorFullApprovalsOnEndpoint?: "none" | "one_or_two" | "many";
@@ -577,6 +579,10 @@ Reason about the full development path. Return the current trial as stage 1 (use
         st.nullResponseRate = cmpPin.nullResponseRate;
         st.comparatorSigma2 = cmpPin.comparatorSigma2;
         st.comparatorSource = cmpPin.source;
+        // A pinned benchmark BEATS an elicited range (facts before opinions): drop the range so
+        // the engine's derived-σ² path doesn't override the library's cited variance.
+        st.comparatorRateLow = undefined;
+        st.comparatorRateHigh = undefined;
       }
     }
 

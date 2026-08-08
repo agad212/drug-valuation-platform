@@ -30,6 +30,12 @@ export function isColorectalMRD(indication: string): boolean {
   return crc && mrd;
 }
 
+/** Idiopathic pulmonary fibrosis (and PPF/PF-ILD phrasing variants). */
+export function isIPF(indication: string): boolean {
+  const s = (indication || "").toLowerCase();
+  return /idiopathic pulmonary fibrosis|\bipf\b|progressive pulmonary fibrosis|\bppf\b|pf-ild|fibrosing interstitial lung/.test(s);
+}
+
 /** Early (MCI / mild) Alzheimer's disease — the CDR-SB-gated disease-modification setting. */
 export function isEarlyAlzheimers(indication: string): boolean {
   const s = (indication || "").toLowerCase();
@@ -54,6 +60,23 @@ export function isEarlyAlzheimers(indication: string): boolean {
  */
 export function pinComparator(indication: string, endpointIsRate: boolean): ComparatorPin | null {
   if (!endpointIsRate) return null;
+  if (isIPF(indication)) {
+    // IPF FVC responder comparator — pinned because the LLM's null DEFINITION swung across
+    // otherwise-identical live runs (0.15 → 0.45 "stability rate" → 0.16 on 8/7–8/8), silently
+    // re-scaling every margin. ONE definition, cited: response = event-free at 52 weeks
+    // (no ≥10% relative FVC decline and no death). ASCEND (King et al., NEJM 2014): 31.8% of
+    // placebo patients progressed/died → placebo event-free ≈ 68%; pirfenidone arm ≈ 83.5%
+    // (a +15.5-pt margin for an approved antifibrotic ≈ μ 1.55 on the Δ=0.10 scale — the scale
+    // reproduces an approved drug's observed performance, the same validation logic as 2.2).
+    // INPULSIS-1/2 placebo decline (−239/−207 mL/yr) is directionally consistent. σ² honest-wide
+    // for definition/trial heterogeneity — and for RCT stages it is EXCLUDED from power anyway
+    // (concurrent-control rule); it locates the null and prices single-arm designs only.
+    return {
+      nullResponseRate: 0.68,
+      comparatorSigma2: 0.008,
+      source: "IPF 52-wk event-free responder null (no ≥10% rel. FVC decline or death): ASCEND placebo 68.2% event-free (King, NEJM 2014); pirfenidone 83.5%; INPULSIS-1/2 consistent. Pinned — replaces per-run LLM null-definition swings (0.15→0.45→0.16 across 8/7–8/8 live runs).",
+    };
+  }
   if (isColorectalMRD(indication)) {
     return {
       nullResponseRate: 0.05,
