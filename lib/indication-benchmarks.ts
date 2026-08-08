@@ -36,6 +36,19 @@ export function isIPF(indication: string): boolean {
   return /idiopathic pulmonary fibrosis|\bipf\b|progressive pulmonary fibrosis|\bppf\b|pf-ild|fibrosing interstitial lung/.test(s);
 }
 
+// Endpoint family the IPF pin's null actually describes (52-wk event-free responder: no ≥10%
+// relative FVC decline, no death). A rate stage in an IPF program whose endpoint text names a
+// DIFFERENT quantity must NOT inherit the 0.68 null — stamping a null defined for one endpoint
+// onto another mis-states power by construction (8/8 code-review finding). Two-sided test:
+// the text must mention the decline/progression/event-free family AND must not be an
+// IMPROVEMENT-type responder (e.g. "≥5% absolute FVC improvement" contains "FVC" but its true
+// null is ~0.10, not 0.68). Text absent → pin applies (legacy behavior, fires at the call site).
+const IPF_FAMILY_POS = /fvc|vital capacity|event[- ]free|progression[- ]free|disease progression|decline|death|respiratory/i;
+const IPF_FAMILY_NEG = /improv|increase|gain|\borr\b|objective response|overall response|complete response/i;
+export function ipfEndpointFamilyMatch(endpointText: string): boolean {
+  return IPF_FAMILY_POS.test(endpointText) && !IPF_FAMILY_NEG.test(endpointText);
+}
+
 /** Early (MCI / mild) Alzheimer's disease — the CDR-SB-gated disease-modification setting. */
 export function isEarlyAlzheimers(indication: string): boolean {
   const s = (indication || "").toLowerCase();
@@ -57,10 +70,14 @@ export function isEarlyAlzheimers(indication: string): boolean {
  *
  * @param endpointIsRate true when the stage gates on a RATE surrogate (ctDNA clearance),
  *   not a time-to-event endpoint. The comparator applies only to the rate stage.
+ * @param endpointText the stage's endpoint description, when known — lets a pin whose null is
+ *   defined for one endpoint family refuse a stage measuring a different one (IPF only for now;
+ *   absent text keeps legacy behavior: the pin applies).
  */
-export function pinComparator(indication: string, endpointIsRate: boolean): ComparatorPin | null {
+export function pinComparator(indication: string, endpointIsRate: boolean, endpointText?: string): ComparatorPin | null {
   if (!endpointIsRate) return null;
   if (isIPF(indication)) {
+    if (endpointText && !ipfEndpointFamilyMatch(endpointText)) return null;
     // IPF FVC responder comparator — pinned because the LLM's null DEFINITION swung across
     // otherwise-identical live runs (0.15 → 0.45 "stability rate" → 0.16 on 8/7–8/8), silently
     // re-scaling every margin. ONE definition, cited: response = event-free at 52 weeks
@@ -74,7 +91,7 @@ export function pinComparator(indication: string, endpointIsRate: boolean): Comp
     return {
       nullResponseRate: 0.68,
       comparatorSigma2: 0.008,
-      source: "IPF 52-wk event-free responder null (no ≥10% rel. FVC decline or death): ASCEND placebo 68.2% event-free (King, NEJM 2014); pirfenidone 83.5%; INPULSIS-1/2 consistent. Pinned — replaces per-run LLM null-definition swings (0.15→0.45→0.16 across 8/7–8/8 live runs).",
+      source: "IPF 52-wk event-free responder null (no ≥10% rel. FVC decline or death): ASCEND placebo 68.2% event-free (King, NEJM 2014); pirfenidone 83.5%; INPULSIS-1/2 consistent. Pinned — replaces per-run LLM null-definition swings (0.15→0.45→0.16 across 8/7–8/8 live runs). σ² 0.008 is HAND-SET provisional (wide for definition/trial heterogeneity; prices single-arm designs only — excluded from RCT power), not a cited variance.",
     };
   }
   if (isColorectalMRD(indication)) {

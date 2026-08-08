@@ -52,3 +52,58 @@ describe("scenario — weightedRollup is Σ(wᵢ/Σw)·valueᵢ (trivial aggrega
     expect(weightedRollup([{ weight: 0, value: 100 }]).expected).toBe(0);
   });
 });
+
+describe("scenario - elicitedPeakMultipliers (module 3: reactive derivation, 8/8 review fixes)", () => {
+  const mk = (bear?: number, bull?: number, leadPeak = 800_000_000): Valuation => ({
+    ...base,
+    indications: [
+      { id: "lead", name: "Lead", peakSales: leadPeak, launchYear: 2030, bearPeakM: bear, bullPeakM: bull },
+      { id: "b", name: "B", peakSales: 400_000_000, launchYear: 2031 },
+    ],
+  });
+
+  it("derives full-precision multipliers from the lead's elicited p05/p95", async () => {
+    const { elicitedPeakMultipliers } = await import("../scenario");
+    const r = elicitedPeakMultipliers(mk(300, 1400)); // lead peak $800M
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.bearMult).toBeCloseTo(300 / 800, 4);
+      expect(r.bullMult).toBeCloseTo(1400 / 800, 4);
+    }
+  });
+
+  it("nothing elicited -> not ok with a NULL reason (the normal quiet case)", async () => {
+    const { elicitedPeakMultipliers } = await import("../scenario");
+    const r = elicitedPeakMultipliers(mk(undefined, undefined));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBeNull();
+  });
+
+  it("incoherent (stale) bounds -> not ok with a SURFACED reason (never a silent fallback)", async () => {
+    const { elicitedPeakMultipliers } = await import("../scenario");
+    const r = elicitedPeakMultipliers(mk(300, 700)); // bull $700M < lead peak $800M
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/incoherent|stale/i);
+  });
+
+  it("a legitimate elicited p05 of exactly $0M is honored (multiplier 0), not dropped", async () => {
+    const { elicitedPeakMultipliers } = await import("../scenario");
+    const r = elicitedPeakMultipliers(mk(0, 1400));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bearMult).toBe(0);
+  });
+
+  it("tiny bear ratios do NOT collapse to 0 (the .toFixed(2) bug zeroed the whole branch)", async () => {
+    const { elicitedPeakMultipliers } = await import("../scenario");
+    const r = elicitedPeakMultipliers(mk(0.02, 1400)); // $0.02M / $800M = 2.5e-5 -> rounds to 0 at 4dp
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bearMult).toBeGreaterThan(0);
+  });
+
+  it("near-1 ratios do NOT round to exactly 1 (applyScenarioDeltas treats mult===1 as no-op)", async () => {
+    const { elicitedPeakMultipliers } = await import("../scenario");
+    const r = elicitedPeakMultipliers(mk(300, 800.02)); // 800.02/800 rounds to 1.0000 at 4dp
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bullMult).toBeGreaterThan(1);
+  });
+});

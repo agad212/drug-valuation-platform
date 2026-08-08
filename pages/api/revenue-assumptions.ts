@@ -1,43 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
-import { validateElicitationFindings } from "../../lib/elicitation";
+import { revenueCoherenceFlags } from "../../lib/elicitation";
+import { runElicitationChecker } from "../../lib/elicitation-checker";
 
-// ── Module 3: deterministic coherence checks on the elicited market arithmetic ─────────────────
-// Pure arithmetic on the emission's own numbers; incoherence is NAMED, never silently fixed
-// (§1.5). Tolerances ±33% (ratio outside [0.75, 1.33]) and the narrow-spread floor 40% are
-// hand-set provisional rails, labeled as such in the messages.
-function coherenceFlags(a: {
-  peakSalesM?: number; bearM?: number; bullM?: number;
-  marketContext?: { tamM?: number | null; penetrationPct?: number | null; pricingPerYear?: number | null; eligiblePatients?: number | null };
-}): string[] {
-  const f: string[] = [];
-  const mc = a.marketContext ?? {};
-  const { tamM, penetrationPct, pricingPerYear, eligiblePatients } = mc;
-  if (typeof eligiblePatients === "number" && eligiblePatients > 0 && typeof pricingPerYear === "number" && pricingPerYear > 0 && typeof tamM === "number" && tamM > 0) {
-    const impliedTamM = (eligiblePatients * pricingPerYear) / 1e6;
-    const r = impliedTamM / tamM;
-    if (r > 1.33 || r < 0.75) {
-      f.push(`TAM arithmetic incoherent: ${eligiblePatients.toLocaleString("en-US")} patients × $${Math.round(pricingPerYear / 1000)}k/yr implies ~$${Math.round(impliedTamM).toLocaleString("en-US")}M, but tamM says $${Math.round(tamM).toLocaleString("en-US")}M (${r.toFixed(1)}× apart) — at least one of the three numbers is wrong (±33% provisional tolerance)`);
-    }
-  } else if (typeof tamM === "number" && tamM > 0 && !(typeof eligiblePatients === "number" && eligiblePatients > 0)) {
-    f.push("eligiblePatients not emitted — the TAM arithmetic is unverifiable (the 8/8 live run's $3B-TAM-vs-$12B-patient-math contradiction was only catchable with a structured count)");
-  }
-  if (typeof tamM === "number" && tamM > 0 && typeof penetrationPct === "number" && penetrationPct > 0 && typeof a.peakSalesM === "number" && a.peakSalesM > 0) {
-    const impliedPeak = (tamM * penetrationPct) / 100;
-    const r = impliedPeak / a.peakSalesM;
-    if (r > 1.33 || r < 0.75) {
-      f.push(`peak arithmetic incoherent: TAM $${Math.round(tamM).toLocaleString("en-US")}M × ${penetrationPct}% implies ~$${Math.round(impliedPeak).toLocaleString("en-US")}M vs stated peak $${Math.round(a.peakSalesM).toLocaleString("en-US")}M (±33% provisional tolerance)`);
-    }
-  }
-  if (typeof a.bearM === "number" && a.bearM > 0 && typeof a.bullM === "number" && a.bullM > 0 && typeof a.peakSalesM === "number" && a.peakSalesM > 0) {
-    if (!(a.bearM < a.peakSalesM && a.peakSalesM < a.bullM)) {
-      f.push(`bear/base/bull ordering violated ($${a.bearM}M / $${a.peakSalesM}M / $${a.bullM}M) — the elicited range is unusable until reconciled`);
-    } else if ((a.bullM - a.bearM) / a.peakSalesM < 0.4) {
-      f.push(`p05–p95 spread is only ${Math.round(((a.bullM - a.bearM) / a.peakSalesM) * 100)}% of the base — suspiciously narrow for a pre-launch asset (experts under-cover ranges; 40% floor is a provisional rail)`);
-    }
-  }
-  return f;
-}
+// Module 3 coherence rails live in lib/elicitation.ts (revenueCoherenceFlags) — named, tested
+// tolerances shared with the client instead of magic literals duplicated per surface.
 
 // ─── Claude revenue analysis with native web search ───────────────────────────
 
@@ -173,6 +140,7 @@ ${schema}`;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  const __t0 = Date.now(); // serverless budget clock — the checker skips itself near the kill line
 
   const { drug, phase, indications, sponsor } = req.body;
   if (!drug || !Array.isArray(indications) || indications.length === 0) {
@@ -184,45 +152,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Realign by index, fill gaps if Claude returns wrong count
     const rawInds: any[] = analysis.indications || [];
+    // Numeric normalization: the raw LLM object passes straight to the client, and an omitted or
+    // string-valued field ("3,000") otherwise renders as $NaN and can write NaN into the engine
+    // on Apply (8/8 code-review finding). Finite number → kept; anything else → fallback.
+    const fin = (x: unknown): number | undefined =>
+      typeof x === "number" && Number.isFinite(x) ? x : undefined;
     const aligned = indications.map((ind: string, i: number) => {
       const found = rawInds[i] || rawInds.find((r: any) =>
         r.indication?.toLowerCase().includes(ind.toLowerCase().split(" ")[0].toLowerCase())
       );
-      return found || {
+      if (!found) return {
         indication: ind, peakSalesM: 0, bullM: 0, bearM: 0,
         confidence: "low", reasoning: "Analysis unavailable for this indication.",
         analystEstimates: [], marketContext: {}, comps: [], sources: [],
+      };
+      const mc = found.marketContext || {};
+      return {
+        ...found,
+        peakSalesM: fin(found.peakSalesM) ?? 0,
+        bullM: fin(found.bullM) ?? 0,
+        bearM: fin(found.bearM) ?? 0,
+        marketContext: {
+          ...mc,
+          tamM: fin(mc.tamM) ?? null,
+          penetrationPct: fin(mc.penetrationPct) ?? null,
+          pricingPerYear: fin(mc.pricingPerYear) ?? null,
+          eligiblePatients: fin(mc.eligiblePatients) ?? null,
+        },
       };
     });
 
     // Module 3: deterministic coherence checks on each indication's elicited arithmetic
     for (const a of aligned) {
-      const flags = coherenceFlags(a);
+      const flags = revenueCoherenceFlags(a);
       if (flags.length) a.coherenceFlags = flags;
     }
 
     // Module 3: the facilitator checker — one batched call auditing the revenue RATIONALES
-    // (never proposing numbers). Gated by validateElicitationFindings; fail-open with a health
-    // marker so silence always means "did not run" is impossible.
-    let elicitationReview: { findings: { severity: string; message: string }[]; flags: string[] } = {
-      findings: [{ severity: "info", message: "AI checker unavailable this run (fail-open) — revenue rationales are UNREVIEWED" }],
-      flags: [],
-    };
-    try {
-      const key = process.env.ANTHROPIC_API_KEY!;
-      const digest = aligned.map((a: any) => {
-        const mc = a.marketContext || {};
-        return `"${a.indication}": peak $${a.peakSalesM}M (p05 $${a.bearM}M / p95 $${a.bullM}M, confidence ${a.confidence}); TAM $${mc.tamM ?? "?"}M = ${mc.eligiblePatients?.toLocaleString?.("en-US") ?? "?"} patients × $${mc.pricingPerYear ?? "?"}/yr; penetration ${mc.penetrationPct ?? "?"}%; comps: ${(a.comps || []).map((c: any) => `${c.drug} $${c.peakSalesM}M`).join(", ") || "none"}; reasoning: ${a.reasoning}`;
-      }).join("\n");
-      const checkRes = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1200,
-          messages: [{
-            role: "user",
-            content: `You are the FACILITATOR auditing a sell-side analyst's revenue elicitations for ${drug} (${phase}). Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
+    // (never proposing numbers). Transport, timeout, robust JSON parse, findings gate, and the
+    // health markers (clean / gate-failure / fail-open / deadline-skip) live in
+    // lib/elicitation-checker — shared with the dev-plan checker so the two cannot drift.
+    const digest = aligned.map((a: any) => {
+      const mc = a.marketContext || {};
+      return `"${a.indication}": peak $${a.peakSalesM}M (p05 $${a.bearM}M / p95 $${a.bullM}M, confidence ${a.confidence}); TAM $${mc.tamM ?? "?"}M = ${mc.eligiblePatients?.toLocaleString?.("en-US") ?? "?"} patients × $${mc.pricingPerYear ?? "?"}/yr; penetration ${mc.penetrationPct ?? "?"}%; comps: ${(a.comps || []).map((c: any) => `${c.drug} $${c.peakSalesM}M`).join(", ") || "none"}; reasoning: ${a.reasoning}`;
+    }).join("\n");
+    const elicitationReview = await runElicitationChecker({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      handlerStartMs: __t0,
+      subjectLabel: "the revenue rationales",
+      allowedQuantities: ["peakSales", "bearBull", "tam", "penetration", "wac", "eligibleCount", "comps", "general"],
+      prompt: `You are the FACILITATOR auditing a sell-side analyst's revenue elicitations for ${drug} (${phase}). Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
 
 ${digest}
 
@@ -236,24 +215,7 @@ Report ONLY genuine issues (max 5):
 Respond STRICT JSON only:
 {"findings":[{"quantity":"peakSales|bearBull|tam|penetration|wac|eligibleCount|comps|general","severity":"high|medium|info","message":"one or two sentences, name the indication"}]}
 Empty findings array if everything is defensible.`,
-          }],
-        }),
-      });
-      if (checkRes.ok) {
-        const cd = (await checkRes.json()) as { content?: { type: string; text?: string }[] };
-        const ctext = (cd.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
-        const cs = ctext.indexOf("{"); const ce = ctext.lastIndexOf("}");
-        let cparsed: unknown = null;
-        if (cs >= 0 && ce > cs) { try { cparsed = JSON.parse(ctext.slice(cs, ce + 1)); } catch { cparsed = null; } }
-        const gated = validateElicitationFindings(cparsed, ["peakSales", "bearBull", "tam", "penetration", "wac", "eligibleCount", "comps", "general"]);
-        elicitationReview = {
-          findings: gated.findings.length ? gated.findings : [{ severity: "info", message: "AI checker reviewed the revenue elicitations — no findings" }],
-          flags: gated.flags,
-        };
-      }
-    } catch (checkErr) {
-      console.error("[revenue] elicitation checker failed (fail-open):", (checkErr as Error)?.message);
-    }
+    });
 
     return res.status(200).json({ drug, phase, indications: aligned, elicitationReview });
   } catch (e: any) {

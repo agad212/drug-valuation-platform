@@ -22,6 +22,7 @@ import { validateValuationInputs, applyValidatedUpdates } from "../lib/valuation
 import { mixtureFromMssVariance, type EffectPrior } from "../lib/effect-prior";
 import { inferTherapeuticArea, inferModality, anchorPeakSales, classifyComps, computeLoeYear } from "../lib/financial-pins";
 import { patentsFromKeyPatents, publicStatementsFromMarketIntel } from "../lib/loe-resolver";
+import { rowDivergenceRatio } from "../lib/elicitation";
 import { classGraveyardProbability } from "../lib/class-risk";
 import type { RegulatoryContext } from "../lib/ptrs-trial";
 import type { ValuationBrief, ExpectationAuditResult } from "../lib/valuation-brief";
@@ -1475,10 +1476,18 @@ export default function HomePage() {
           // Persist the bottom-up market context (Build 1) so the Strategy Advisor can
           // RE-DERIVE the market per scenario instead of haircutting the peak.
           const mc = rev.marketContext ?? {};
+          // Elicited p05/p95: refresh from THIS run when coherent against the anchored peak,
+          // otherwise CLEAR — a re-run must never leave a previous elicitation's bear/bull
+          // paired with a new base (8/8 review: stale cross-run ratios looked "elicited").
+          const bearOk = typeof rev.bearM === "number" && Number.isFinite(rev.bearM) && rev.bearM >= 0 && rev.bearM < anchoredM;
+          const bullOk = typeof rev.bullM === "number" && Number.isFinite(rev.bullM) && rev.bullM > anchoredM;
           return anchoredM > 0
             ? { ...ind, peakSales: Math.round(anchoredM * 1e6),
                 tamM: mc.tamM ?? ind.tamM, penetrationPct: mc.penetrationPct ?? ind.penetrationPct,
-                annualPriceUsd: mc.pricingPerYear ?? ind.annualPriceUsd }
+                annualPriceUsd: mc.pricingPerYear ?? ind.annualPriceUsd,
+                eligiblePatients: mc.eligiblePatients ?? ind.eligiblePatients,
+                bearPeakM: bearOk && bullOk ? rev.bearM : undefined,
+                bullPeakM: bearOk && bullOk ? rev.bullM : undefined }
             : ind;
         });
         return { ...cur, indications: updated };
@@ -1583,20 +1592,29 @@ export default function HomePage() {
     try {
       // Whether the current trial is already fully enrolled — from CT.gov status.
       // A fully-enrolled trial's accrual is elapsed, so the dev-plan timeline should
-      // not project years of future enrollment for it. Read the ref (always current);
-      // match the same trial that fed layer2 (first at-or-above the drug's phase).
+      // not project years of future enrollment for it. Read the ref (always current).
+      // Trial selection order (8/8 review: the registry-n pin was reading a DIFFERENT trial
+      // than the one layer 2 actually modeled): (1) the brief's efficacy-gate trial — the same
+      // NCT that produced l2Result.trialInputs; (2) the search LLM's recommended NCT; (3) an
+      // EXACT phase match; (4) at-or-above phase (last resort — CT.gov sorts Phase 3 first,
+      // which could hand a Phase 2 asset a Phase 3 trial's enrollment).
       const phaseNum = (p: string) => p.includes("3") ? 3 : p.includes("2") ? 2 : p.includes("1") ? 1 : 0;
       const trials = trialResultsRef.current ?? [];
+      const briefNct = brief?.efficacy_gate_trial?.trial_id;
       const currentTrial =
+        trials.find((t) => briefNct && t.nctId === briefNct) ??
         trials.find((t) => t.nctId === recommendedNctId) ??
+        trials.find((t) => phaseNum(t.phase || "") === phaseNum(phase)) ??
         trials.find((t) => phaseNum(t.phase || "") >= phaseNum(phase));
       const currentTrialEnrollmentComplete = isEnrollmentComplete(currentTrial?.status);
       // Ground-truth readout date for a fully-enrolled current trial → drives remaining
       // duration (months-to-completion) instead of a projected enrollment window.
       const currentTrialCompletionDate = currentTrial?.primaryCompletionDate ?? currentTrial?.completionDate;
-      // Registry n — a FACT about the registered trial; the API pins the current stage's n to it
-      // (LLM n emissions bounced 120→180→100 across live runs for the same trial).
+      // Registry n — the registered trial's enrollment; the API pins the current stage's n to it
+      // (LLM n emissions bounced 120→180→100 across live runs for the same trial). The type
+      // (ACTUAL vs ESTIMATED) rides along so the pin's wording stays honest.
       const currentTrialRegistryN = currentTrial?.enrollmentCount;
+      const currentTrialRegistryNType = currentTrial?.enrollmentType;
       const res = await fetch("/api/dev-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1610,6 +1628,7 @@ export default function HomePage() {
           currentTrialEnrollmentComplete,
           currentTrialCompletionDate,
           currentTrialRegistryN,
+          currentTrialRegistryNType,
         }),
       });
       if (!res.ok) {
@@ -3026,21 +3045,27 @@ export default function HomePage() {
                         </div>
                       </div>
                       <button onClick={() => {
-                        const targetId = v.indications?.[revenueTab]?.id;
-                        if (targetId) {
+                        // Match the row by NAME first (8/8 review: a raw revenueTab index write
+                        // hits the wrong indication after a reorder/rename), index as fallback.
+                        const target = v.indications?.find((ind) => ind.name && active.indication &&
+                          ind.name.trim().toLowerCase() === active.indication.trim().toLowerCase())
+                          ?? v.indications?.[revenueTab];
+                        if (target?.id) {
                           // Persist the bottom-up market context (Build 1) alongside peak so
                           // the Strategy Advisor re-derives the market per scenario.
-                          updateIndication(targetId, {
+                          updateIndication(target.id, {
                             peakSales: Math.round(active.peakSalesM * 1e6),
                             tamM: active.marketContext?.tamM ?? undefined,
                             penetrationPct: active.marketContext?.penetrationPct ?? undefined,
                             annualPriceUsd: active.marketContext?.pricingPerYear ?? undefined,
+                            eligiblePatients: active.marketContext?.eligiblePatients ?? undefined,
                             // Elicited p05/p95 — the scenario branches read these as true
-                            // Pearson-Tukey outer values (module 3).
-                            bearPeakM: active.bearM > 0 ? active.bearM : undefined,
-                            bullPeakM: active.bullM > 0 ? active.bullM : undefined,
+                            // Pearson-Tukey outer values (module 3). bear may legitimately be 0
+                            // ("never really launches" p05) — ≥ 0, not > 0.
+                            bearPeakM: Number.isFinite(active.bearM) && active.bearM >= 0 ? active.bearM : undefined,
+                            bullPeakM: Number.isFinite(active.bullM) && active.bullM > 0 ? active.bullM : undefined,
                           });
-                          pushToast(`Applied ${fmtMoney(active.peakSalesM * 1e6)} to "${v.indications?.[revenueTab]?.name || active.indication}".`, "success");
+                          pushToast(`Applied ${fmtMoney(active.peakSalesM * 1e6)} to "${target.name || active.indication}".`, "success");
                         }
                       }} style={{ background: "rgba(255,255,255,0.9)", color: "#0f766e", fontWeight: 700, fontSize: 13, padding: "8px 14px", border: "none", borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap" }}>
                         Use {fmtMoney(active.peakSalesM * 1e6)} →
@@ -3052,22 +3077,38 @@ export default function HomePage() {
                         un-clicked button; and the TAM chip contradicted its own patient arithmetic.
                         Both checks are pure arithmetic on already-present values (§1.5: name it, don't fix it). */}
                     {(() => {
-                      const rowPeakM = (v.indications?.[revenueTab]?.peakSales ?? 0) / 1e6;
-                      const ratio = rowPeakM > 0 && active.peakSalesM > 0 ? rowPeakM / active.peakSalesM : null;
-                      const diverges = ratio != null && (ratio >= 2 || ratio <= 0.5);
+                      // Same name-first row resolution as the Apply button — a raw index compares
+                      // the deep-dive against the WRONG row after a reorder/rename.
+                      const row = v.indications?.find((ind) => ind.name && active.indication &&
+                        ind.name.trim().toLowerCase() === active.indication.trim().toLowerCase())
+                        ?? v.indications?.[revenueTab];
+                      const rowPeakM = (row?.peakSales ?? 0) / 1e6;
+                      const ratio = rowDivergenceRatio(rowPeakM, active.peakSalesM);
                       const tam = active.marketContext?.tamM;
                       const wac = active.marketContext?.pricingPerYear;
-                      const impliedEligible = tam != null && wac != null && wac > 0 ? Math.round((tam * 1e6) / wac) : null;
+                      const stated = active.marketContext?.eligiblePatients;
+                      const statedEligible = typeof stated === "number" && Number.isFinite(stated) && stated > 0 ? stated : null;
+                      // Back-solve is the FALLBACK only (it assumes the very identity the server
+                      // audits — rendering both invited two contradictory patient counts).
+                      const impliedEligible = statedEligible == null &&
+                        typeof tam === "number" && Number.isFinite(tam) && tam > 0 &&
+                        typeof wac === "number" && Number.isFinite(wac) && wac > 0
+                        ? Math.round((tam * 1e6) / wac) : null;
                       return (
                         <>
-                          {diverges && (
+                          {ratio != null && (
                             <div style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.35)", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#f87171", lineHeight: 1.5 }}>
-                              ⚠ The indication row currently carries <b>{fmtMoney(rowPeakM * 1e6)}</b> peak — {ratio! >= 2 ? `${ratio!.toFixed(1)}× ABOVE` : `${(1 / ratio!).toFixed(1)}× BELOW`} this deep-dive base case. Two AI passes disagree; at most one is right. Review the methodology below, then either apply this estimate or defend the row's number.
+                              ⚠ The indication row currently carries <b>{fmtMoney(rowPeakM * 1e6)}</b> peak — {ratio >= 2 ? `${ratio.toFixed(1)}× ABOVE` : `${(1 / ratio).toFixed(1)}× BELOW`} this deep-dive base case. Two AI passes disagree; at most one is right. Review the methodology below, then either apply this estimate or defend the row's number.
+                            </div>
+                          )}
+                          {statedEligible != null && (
+                            <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
+                              Eligible patients (stated by the analysis): {statedEligible.toLocaleString("en-US")}{typeof wac === "number" && wac > 0 ? ` × ${fmtMoney(wac)}/yr ≈ ${fmtMoney(statedEligible * wac)} market` : ""} — the coherence checks below audit this against the TAM.
                             </div>
                           )}
                           {impliedEligible != null && (
                             <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
-                              Coherence check: TAM {fmtMoney((tam as number) * 1e6)} ÷ {fmtMoney(wac as number)}/yr implies ~{impliedEligible.toLocaleString("en-US")} treatable patients — verify against the stated population before trusting the penetration math.
+                              Coherence check (no stated patient count): TAM {fmtMoney((tam as number) * 1e6)} ÷ {fmtMoney(wac as number)}/yr implies ~{impliedEligible.toLocaleString("en-US")} treatable patients — verify against the stated population before trusting the penetration math.
                             </div>
                           )}
                           {/* Module 3: deterministic coherence findings from the API (per indication) */}
@@ -3080,6 +3121,12 @@ export default function HomePage() {
                           {revenueAnalysis?.elicitationReview?.findings?.map((fd, i) => (
                             <div key={`rf${i}`} style={{ padding: "3px 0", fontSize: 11.5, lineHeight: 1.5, color: fd.severity === "high" ? "#ef4444" : fd.severity === "medium" ? "#f59e0b" : "var(--text-faint)" }}>
                               {fd.severity === "high" ? "🔴" : fd.severity === "medium" ? "🟡" : "ℹ️"} {fd.message}
+                            </div>
+                          ))}
+                          {/* Gate diagnostics: a checker response rejected at the gate must stay visible */}
+                          {revenueAnalysis?.elicitationReview?.flags?.map((gf, i) => (
+                            <div key={`gf${i}`} style={{ padding: "2px 0", fontSize: 10.5, lineHeight: 1.4, color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>
+                              gate: {gf}
                             </div>
                           ))}
                         </>

@@ -1,7 +1,8 @@
 export type CtgovTrial = {
   nctId: string;
   title?: string;
-  enrollmentCount?: number;     // registry enrollment (designModule.enrollmentInfo.count) — a FACT
+  enrollmentCount?: number;     // registry enrollment (designModule.enrollmentInfo.count)
+  enrollmentType?: string;      // "ACTUAL" (final accrual — a fact) vs "ESTIMATED" (registered target)
   phase?: string;               // App format: "Phase 1", "Phase 2", "Phase 3"
   phaseRaw?: string;            // Display: "Phase 2/Phase 3"
   status?: string;              // CT.gov raw status code
@@ -154,16 +155,20 @@ function parseStudy(s: any): CtgovTrial | null {
     ? estimateLaunchYear(phase, primaryCompletionDate, completionDate, status)
     : undefined;
 
-  // Registry enrollment — a FACT about a registered trial (used to pin the dev plan's
-  // current-trial n; the LLM's n emissions bounced 120→180→100 across live runs for the
-  // same trial before this).
+  // Registry enrollment (used to pin the dev plan's current-trial n; the LLM's n emissions
+  // bounced 120→180→100 across live runs for the same trial before this). The TYPE matters:
+  // "ACTUAL" is final accrual — a fact; "ESTIMATED" is the sponsor's registered target — firmer
+  // than a per-run guess, but it must not be labeled a fact (8/8 review).
   const enrollmentRaw = p.designModule?.enrollmentInfo?.count;
   const enrollmentCount = typeof enrollmentRaw === "number" && enrollmentRaw > 0 ? enrollmentRaw : undefined;
+  const enrollmentTypeRaw = p.designModule?.enrollmentInfo?.type;
+  const enrollmentType = typeof enrollmentTypeRaw === "string" && enrollmentTypeRaw.trim() ? enrollmentTypeRaw.trim() : undefined;
 
   return {
     nctId,
     title,
     enrollmentCount,
+    enrollmentType,
     phase: phase || undefined,
     phaseRaw: phaseRaw || phase || undefined,
     status,

@@ -1184,7 +1184,11 @@ export function buildBaseContext(
       // patients. cal.tamM is UNCHANGED for the penetration identity, so the decoupling invariant holds.
       const sourcedTamM = ind0?.tamM != null && ind0.tamM > 0 ? ind0.tamM : null;
       const countTamM = sourcedTamM ?? cal.tamM;
-      const eligiblePatients = annualPriceUsd ? (countTamM * 1e6) / annualPriceUsd : undefined;
+      // Module 3: a STATED elicited patient count beats ANY back-solve — the back-solve assumes
+      // the tamM≈patients×price identity, which is exactly what the coherence rails audit. When
+      // the revenue analysis emitted a structured count and it was applied, count with it.
+      const statedEligible = ind0?.eligiblePatients != null && Number.isFinite(ind0.eligiblePatients) && ind0.eligiblePatients > 0 ? ind0.eligiblePatients : null;
+      const eligiblePatients = statedEligible ?? (annualPriceUsd ? (countTamM * 1e6) / annualPriceUsd : undefined);
       return { ...cal, annualPriceUsd, eligiblePatients } as BaseMarket;
     })(),
     ptrs:         out.ptrs,

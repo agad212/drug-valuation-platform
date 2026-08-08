@@ -18,9 +18,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
 import { logStart, logEnd } from "../../lib/endpoint-timing";
-import { validateElicitationFindings } from "../../lib/elicitation";
+import { runElicitationChecker } from "../../lib/elicitation-checker";
 import { parseJsonLoose } from "../../lib/extractJson";
-import { pinComparator, pinPhase3Endpoint } from "../../lib/indication-benchmarks";
+import { pinComparator, pinPhase3Endpoint, isIPF, ipfEndpointFamilyMatch } from "../../lib/indication-benchmarks";
 import { resolveRegulatoryContext } from "../../lib/regulatory-pins";
 import type {
   EndpointType,
@@ -125,6 +125,8 @@ type RequestBody = {
                                           //   fully-enrolled trial, drives remaining duration
   currentTrialRegistryN?: number;         // CT.gov enrollment count — a FACT; pins the current
                                           //   stage's n (LLM n emissions are unstable run-to-run)
+  currentTrialRegistryNType?: string;     // CT.gov enrollmentInfo.type: "ACTUAL" (final accrual)
+                                          //   vs "ESTIMATED" (registered target) — honest wording
 };
 
 type StageOutput = {
@@ -151,6 +153,12 @@ type StageOutput = {
   comparatorSource?: string;
   comparatorRateLow?: number;   // elicited 15/85 range (rule 14a); cleared when a library pin governs
   comparatorRateHigh?: number;
+  // Display rail: stage-level elicitation findings (pins' disclosure footnotes + the checker's
+  // audit). lib/dev-plan.ts pushes these onto the stage's riskFlags — APPEND only, never assign.
+  elicitationFindings?: { severity: "high" | "medium" | "info"; message: string }[];
+  // Disclosure (§1.5): the elicited comparator range a library pin displaced, e.g. "0.10–0.25" —
+  // kept for the stage card and the checker digest even though the derived-σ² path must not see it.
+  comparatorRangeSuperseded?: string;
   // Base re-pin (G3): registration-endpoint reg-acceptance observables (resolve-or-flag).
   fdaGuidanceForEndpoint?: boolean;
   priorFullApprovalsOnEndpoint?: "none" | "one_or_two" | "many";
@@ -164,7 +172,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     drug, indication, phase, mechanism, sponsor,
     currentTrialDesign, currentTrialName, currentTrialEnrollmentComplete, currentTrialCompletionDate,
-    currentTrialRegistryN,
+    currentTrialRegistryN, currentTrialRegistryNType,
   } = req.body as RequestBody;
 
   if (!drug || !currentTrialDesign) {
@@ -573,16 +581,39 @@ Reason about the full development path. Return the current trial as stage 1 (use
         }
       }
       // (2) Comparator: pin the historical-control RATE (ctDNA clearance) + honest σ²
-      //     for rate-endpoint stages only.
-      const cmpPin = pinComparator(indication || "", st.isTimeToEvent !== true);
+      //     for rate-endpoint stages only. Endpoint-family gated: a null defined for one
+      //     endpoint definition must not be stamped onto a stage measuring a different one.
+      const cmpPin = pinComparator(indication || "", st.isTimeToEvent !== true, st.trialDesign?.endpointDescription);
       if (cmpPin) {
+        const findings = (st.elicitationFindings = st.elicitationFindings ?? []);
+        // §1.5 disclosure: a pinned benchmark BEATS an elicited range (facts before opinions),
+        // but the displaced elicitation must stay VISIBLE — stage card + checker digest — so
+        // "superseded" is never mistaken for "never elicited" (8/8 review finding).
+        if (st.comparatorRateLow != null || st.comparatorRateHigh != null) {
+          st.comparatorRangeSuperseded = `${st.comparatorRateLow ?? "?"}–${st.comparatorRateHigh ?? "?"}`;
+          findings.push({ severity: "info", message: `elicited comparator range ${st.comparatorRangeSuperseded} SUPERSEDED by the pinned benchmark null ${cmpPin.nullResponseRate} — a cited library value beats an elicited range (facts before opinions)` });
+        }
+        // The elicited expected rate was stated against the EMITTED null definition; if it sits
+        // at/below the pinned null, the two definitions almost certainly differ — the sourced
+        // margin will be rejected downstream and the prior scale governs. Say so loudly here
+        // instead of letting the rejection happen silently.
+        if (typeof st.expectedResponseRate === "number" && st.expectedResponseRate <= cmpPin.nullResponseRate) {
+          findings.push({ severity: "medium", message: `elicited expected rate ${st.expectedResponseRate} sits AT/BELOW the pinned null ${cmpPin.nullResponseRate} — likely elicited against a different null definition; the sourced margin is rejected and the prior effect scale governs this stage` });
+        }
         st.nullResponseRate = cmpPin.nullResponseRate;
         st.comparatorSigma2 = cmpPin.comparatorSigma2;
         st.comparatorSource = cmpPin.source;
-        // A pinned benchmark BEATS an elicited range (facts before opinions): drop the range so
-        // the engine's derived-σ² path doesn't override the library's cited variance.
+        // Clear the range so the engine's derived-σ² path doesn't override the library's cited
+        // variance (the range itself survives above as disclosure).
         st.comparatorRateLow = undefined;
         st.comparatorRateHigh = undefined;
+      } else if (st.isTimeToEvent !== true && isIPF(indication || "") && st.trialDesign?.endpointDescription && !ipfEndpointFamilyMatch(st.trialDesign.endpointDescription)) {
+        // The IPF pin exists but this stage's endpoint isn't the family the ASCEND null
+        // describes — resolve-or-flag the skip rather than silently pinning a wrong null.
+        (st.elicitationFindings = st.elicitationFindings ?? []).push({
+          severity: "info",
+          message: `IPF benchmark null NOT pinned to this stage: endpoint "${st.trialDesign.endpointDescription}" doesn't match the 52-week event-free responder family the ASCEND null describes — the AI's own comparator governs`,
+        });
       }
     }
 
@@ -618,51 +649,62 @@ Reason about the full development path. Return the current trial as stage 1 (use
           }
         : undefined;
 
-    // ── Registry-n pin: a registered trial's enrollment is a FACT, not an estimate ───────────────
+    // ── Registry-n pin: the registered trial's enrollment governs the current stage's n ──────────
     // The LLM's current-trial n bounced 120→180→100 across live runs for the SAME trial
     // (WHISTLE-PF), silently moving both power and cost. When CT.gov supplies the enrollment
     // count, it PINS the current stage's n; the emission becomes a footnote on the stage card.
-    if (typeof currentTrialRegistryN === "number" && Number.isFinite(currentTrialRegistryN) &&
-        currentTrialRegistryN >= 10 && currentTrialRegistryN <= 5000) {
-      const cur = cappedStages.find((s) => (s as { isCurrentTrial?: boolean }).isCurrentTrial) as Record<string, unknown> | undefined;
-      if (cur && cur.n !== currentTrialRegistryN) {
-        const emitted = cur.n;
-        cur.n = currentTrialRegistryN;
-        if (cur.trialDesign && typeof cur.trialDesign === "object") (cur.trialDesign as Record<string, unknown>).n = currentTrialRegistryN;
-        cur.elicitationFindings = [
-          ...((cur.elicitationFindings as unknown[]) ?? []),
-          { severity: "info", message: `sample size PINNED to the registry: n=${currentTrialRegistryN} (ClinicalTrials.gov enrollment) — the LLM emitted n=${emitted}; a registered trial's enrollment is a fact, not an estimate` },
-        ];
+    // Honest wording (8/8 review): an ACTUAL count is a fact; an ESTIMATED count is the sponsor's
+    // registered design target — still firmer than a per-run guess, but not final accrual.
+    if (typeof currentTrialRegistryN === "number" && Number.isFinite(currentTrialRegistryN)) {
+      const registryN = Math.round(currentTrialRegistryN);
+      const cur = cappedStages.find((s) => s.isCurrentTrial);
+      if (cur && registryN >= 10 && registryN <= 5000) {
+        if (cur.n !== registryN) {
+          const emitted = cur.n;
+          cur.n = registryN;
+          if (cur.trialDesign) cur.trialDesign.n = registryN;
+          const isActual = (currentTrialRegistryNType || "").toUpperCase() === "ACTUAL";
+          (cur.elicitationFindings = cur.elicitationFindings ?? []).push({
+            severity: "info",
+            message: isActual
+              ? `sample size PINNED to the registry: n=${registryN} (ClinicalTrials.gov ACTUAL enrollment — a fact) — the LLM emitted n=${emitted}`
+              : `sample size PINNED to the registry: n=${registryN} (ClinicalTrials.gov registered target enrollment — the sponsor's design intent, firmer than a per-run guess but not final accrual) — the LLM emitted n=${emitted}`,
+          });
+        }
+      } else if (cur) {
+        // §1.5: an out-of-band registry value is REJECTED with a flag, never silently ignored.
+        (cur.elicitationFindings = cur.elicitationFindings ?? []).push({
+          severity: "info",
+          message: `registry enrollment n=${registryN} is outside the [10, 5000] sanity band (hand-set guard against registry data errors, labeled provisional) — NOT pinned; the LLM's n=${cur.n} governs`,
+        });
       }
     }
 
     // ── Elicitation checker (module 1) — the facilitator's audit of the SME's RATIONALES ─────────
     // One cheap batched call reviewing every probability-bearing elicitation for the classic
     // failures: anchoring, availability/recency, base-rate neglect on small n, motivated optimism,
-    // and rationale↔number arithmetic (a stated tally must imply the stated pFail). Findings are
-    // gated deterministically (lib/elicitation.ts) and attached to stage 0 as display flags — they
-    // ride the existing riskFlags rail, move no number, and a checker failure is fail-open.
-    try {
+    // and rationale↔number arithmetic (a stated tally must imply the stated pFail). Transport,
+    // timeout, robust JSON parse, gate, and health markers live in lib/elicitation-checker (shared
+    // with module 3). Findings are APPENDED to stage 0's existing findings — the pins' disclosure
+    // footnotes must survive (8/8 review: plain assignment was destroying the registry-n note).
+    {
       const digestParts: string[] = [];
       if (replicationRisk) {
         digestParts.push(`replicationRisk: pFail ${replicationRisk.pFail}${replicationRisk.pFailLow != null ? ` (range ${replicationRisk.pFailLow}–${replicationRisk.pFailHigh})` : ""}${replicationRisk.crossCheckOutOf10 != null ? `, cross-check "${replicationRisk.crossCheckOutOf10} of 10 fail"` : ""} — basis: ${replicationRisk.basis}`);
       }
-      for (const st of cappedStages as Array<Record<string, unknown>>) {
+      for (const st of cappedStages) {
         const bits: string[] = [];
-        if (st.nullResponseRate != null) bits.push(`null ${st.nullResponseRate}${st.comparatorRateLow != null ? ` (elicited range ${st.comparatorRateLow}–${st.comparatorRateHigh})` : ""}${st.comparatorSource ? ` — ${st.comparatorSource}` : ""}`);
+        if (st.nullResponseRate != null) bits.push(`null ${st.nullResponseRate}${st.comparatorRateLow != null ? ` (elicited range ${st.comparatorRateLow}–${st.comparatorRateHigh})` : ""}${st.comparatorRangeSuperseded ? ` (elicited range ${st.comparatorRangeSuperseded} was SUPERSEDED by this pinned null — audit the conflict)` : ""}${st.comparatorSource ? ` — ${st.comparatorSource}` : ""}`);
         if (st.expectedResponseRate != null) bits.push(`expectedResponseRate ${st.expectedResponseRate} — basis: ${st.expectedResponseRateBasis ?? "(none)"}`);
         if (bits.length) digestParts.push(`stage "${st.phase}": ${bits.join(" | ")}`);
       }
       if (digestParts.length) {
-        const checkRes = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-6",
-            max_tokens: 1200,
-            messages: [{
-              role: "user",
-              content: `You are the FACILITATOR auditing an expert's probability elicitations for ${drug || "a drug asset"}${indication ? ` (${indication})` : ""}. Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
+        const review = await runElicitationChecker({
+          apiKey,
+          handlerStartMs: __t0,
+          subjectLabel: "the elicited quantities",
+          allowedQuantities: ["replicationRisk", "comparatorRange", "expectedResponseRate", "nullResponseRate", "general"],
+          prompt: `You are the FACILITATOR auditing an expert's probability elicitations for ${drug || "a drug asset"}${indication ? ` (${indication})` : ""}. Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
 
 Elicited quantities:
 ${digestParts.map((d) => `- ${d}`).join("\n")}
@@ -673,38 +715,17 @@ Check for, and report ONLY genuine issues (max 5):
 3. Base-rate neglect / overconfidence: small-n evidence treated as definitive; ranges too narrow for the cited evidence.
 4. Availability: rationale leaning on the most recent/most publicized event rather than the full record.
 5. Motivated optimism: every judgment leaning the favorable direction simultaneously.
-6. Unit/definition coherence: rates vs improvements, mismatched denominators, comparator range not containing the null.
+6. Unit/definition coherence: rates vs improvements, mismatched denominators, comparator range not containing the null (including a SUPERSEDED elicited range that conflicts with the pinned null).
 
 Respond with STRICT JSON only:
 {"findings":[{"quantity":"replicationRisk|comparatorRange|expectedResponseRate|nullResponseRate|general","severity":"high|medium|info","message":"one or two sentences"}]}
 Empty findings array if everything is defensible.`,
-            }],
-          }),
         });
-        if (checkRes.ok) {
-          const cd = (await checkRes.json()) as { content?: { type: string; text?: string }[] };
-          const ctext = (cd.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
-          const cs = ctext.indexOf("{"); const ce = ctext.lastIndexOf("}");
-          let cparsed: unknown = null;
-          if (cs >= 0 && ce > cs) { try { cparsed = JSON.parse(ctext.slice(cs, ce + 1)); } catch { cparsed = null; } }
-          const gated = validateElicitationFindings(cparsed, ["replicationRisk", "comparatorRange", "expectedResponseRate", "nullResponseRate", "general"]);
-          // HEALTH MARKER (8/7 live gap: a silent checker is indistinguishable from a failed one) —
-          // a clean review says so out loud; silence now always means "did not run".
-          const attach = gated.findings.length
-            ? gated.findings
-            : [{ severity: "info" as const, message: "AI checker reviewed the elicited quantities — no findings" }];
-          if (cappedStages[0]) (cappedStages[0] as Record<string, unknown>).elicitationFindings = attach;
-          logEnd("dev-plan-checker", __t0, "ok", { findings: gated.findings.length, gateFlags: gated.flags.length });
-        } else if (cappedStages[0]) {
-          (cappedStages[0] as Record<string, unknown>).elicitationFindings =
-            [{ severity: "info", message: "AI checker unavailable this run (fail-open) — elicited quantities are UNREVIEWED" }];
+        if (cappedStages[0]) {
+          cappedStages[0].elicitationFindings = [...(cappedStages[0].elicitationFindings ?? []), ...review.findings];
         }
-      }
-    } catch (checkErr) {
-      console.error("[dev-plan] elicitation checker failed (fail-open):", (checkErr as Error)?.message);
-      if (cappedStages[0]) {
-        (cappedStages[0] as Record<string, unknown>).elicitationFindings =
-          [{ severity: "info", message: "AI checker unavailable this run (fail-open) — elicited quantities are UNREVIEWED" }];
+        if (review.flags.length) console.warn("[dev-plan] checker gate flags:", review.flags.join(" | "));
+        logEnd("dev-plan-checker", __t0, "ok", { findings: review.findings.length, gateFlags: review.flags.length });
       }
     }
 

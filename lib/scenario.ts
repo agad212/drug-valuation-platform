@@ -39,6 +39,39 @@ export function applyScenarioDeltas(base: Valuation, d: ScenarioDeltas): Valuati
   return v;
 }
 
+// ── Module 3: elicited Pearson-Tukey outer multipliers ──────────────────────────────────────────
+// Derives the bear/bull peak multipliers from the LEAD indication's persisted elicited p05/p95
+// (bearPeakM/bullPeakM, $M) against the lead peak. Pure and REACTIVE-safe: the component derives
+// this per render (the old mount-time useState initializer meant the elicited values never took
+// effect until a page reload — 8/8 code-review finding). Full precision: an early .toFixed(2)
+// collapsed small ratios to a peak-zeroing 0 and near-1 ratios to a silent no-op.
+// Returns the multipliers, or the REASON they don't apply (surfaced in the panel — a silent
+// placeholder fallback violated §1.5). reason:null = nothing was elicited (the normal quiet case).
+export function elicitedPeakMultipliers(base: Valuation):
+  | { ok: true; bearMult: number; bullMult: number }
+  | { ok: false; reason: string | null } {
+  const lead = base.indications?.[0];
+  const bear = lead?.bearPeakM;
+  const bull = lead?.bullPeakM;
+  if (bear == null || bull == null) return { ok: false, reason: null };
+  const peakM = (lead?.peakSales ?? base.peakSales ?? 0) / 1e6;
+  if (!(peakM > 0)) return { ok: false, reason: "elicited p05/p95 present but the lead peak is unset — placeholder multipliers govern" };
+  // bear may legitimately be 0 (an honest "never really launches" p05) — ≥ 0, not > 0.
+  if (!(bear >= 0 && bear < peakM && bull > peakM)) {
+    return { ok: false, reason: `elicited p05/p95 ($${Math.round(bear)}M / $${Math.round(bull)}M) is incoherent against the lead peak $${Math.round(peakM)}M (likely a stale elicitation from before the peak changed) — placeholder multipliers govern until re-applied` };
+  }
+  // 4-dp display rounding, guarded: never round a real elicited value to a degenerate 0
+  // (zeroes the whole peak) or exactly 1 (applyScenarioDeltas treats mult===1 as "no delta").
+  const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
+  const safeRound = (raw: number, allowZero: boolean) => {
+    const r = round4(raw);
+    if (r === 1 && raw !== 1) return raw;
+    if (r === 0 && raw > 0 && !allowZero) return raw;
+    return r;
+  };
+  return { ok: true, bearMult: safeRound(bear / peakM, bear === 0), bullMult: safeRound(bull / peakM, false) };
+}
+
 export type WeightedBranch = { weight: number; value: number };
 
 // Probability-weighted rollup: Σ (wᵢ / Σw) · valueᵢ. Negative weights floored to 0; weights normalized

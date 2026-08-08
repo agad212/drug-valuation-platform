@@ -22,6 +22,10 @@ export type Indication = {
   tamM?: number;            // addressable market $M (eligible patients × annual WAC)
   penetrationPct?: number;  // peak penetration % (peakSales ≈ tamM × penetrationPct/100)
   annualPriceUsd?: number;  // annual WAC $/patient/yr — the base eligible COUNT = tamM/price
+  // Module 3: the STATED eligible-patient count from the revenue elicitation. When present it
+  // BEATS the tamM/price back-solve as the eligible pool (the back-solve assumes the very
+  // identity the coherence check audits); back-solve remains the fallback.
+  eligiblePatients?: number;
   // Module 3: the revenue module's ELICITED p05/p95 peak-sales bounds ($M), persisted when the
   // estimate is applied — the scenario branches read these as true Pearson-Tukey outer values
   // instead of the ×0.7/×1.3 placeholders.
@@ -84,7 +88,9 @@ export type RevenueAnalysisResult = {
   drug: string;
   phase: string;
   indications: IndicationRevenueAnalysis[];
-  // Module 3: the facilitator checker's rationale audit (gated, display-only prose).
+  // Module 3: the facilitator checker's rationale audit (gated, display-only prose). flags =
+  // the gate's drop/truncate diagnostics — rendered faintly so a rejected response is never
+  // indistinguishable from a clean one.
   elicitationReview?: { findings: { severity: "high" | "medium" | "info"; message: string }[]; flags: string[] };
 };
 

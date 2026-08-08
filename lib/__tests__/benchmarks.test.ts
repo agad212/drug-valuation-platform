@@ -58,3 +58,41 @@ describe("Part 3 — label-breadth difficulty multiplier", () => {
     expect(mult).toBeCloseTo(0.80, 6);
   });
 });
+
+import { ipfEndpointFamilyMatch } from "../indication-benchmarks";
+import { inferTherapeuticArea } from "../financial-pins";
+
+describe("IPF comparator pin - endpoint-family gate (8/8 review)", () => {
+  it("pins 0.68 for a rate stage with no endpoint text (legacy behavior preserved)", () => {
+    const pin = pinComparator("idiopathic pulmonary fibrosis", true);
+    expect(pin?.nullResponseRate).toBe(0.68);
+  });
+
+  it("pins for the event-free/decline family the ASCEND null actually describes", () => {
+    const pin = pinComparator("IPF", true, "proportion event-free at 52 weeks (no >=10% relative FVC decline or death)");
+    expect(pin?.nullResponseRate).toBe(0.68);
+  });
+
+  it("refuses an IMPROVEMENT-type responder endpoint (contains FVC but true null ~0.10, not 0.68)", () => {
+    expect(pinComparator("IPF", true, "proportion with >=5% absolute FVC improvement at 24 weeks")).toBeNull();
+    expect(ipfEndpointFamilyMatch(">=5% absolute FVC improvement")).toBe(false);
+  });
+
+  it("refuses an unrelated rate endpoint outright", () => {
+    expect(pinComparator("IPF", true, "objective response rate (ORR)")).toBeNull();
+  });
+
+  it("still never pins non-rate stages", () => {
+    expect(pinComparator("idiopathic pulmonary fibrosis", false)).toBeNull();
+  });
+});
+
+describe("inferTherapeuticArea routes IPF to the orphan cost band (was general)", () => {
+  it("IPF phrasings -> rare_orphan", () => {
+    expect(inferTherapeuticArea("Idiopathic Pulmonary Fibrosis")).toBe("rare_orphan");
+    expect(inferTherapeuticArea("progressive pulmonary fibrosis (PPF)")).toBe("rare_orphan");
+  });
+  it("oncology strings are untouched", () => {
+    expect(inferTherapeuticArea("metastatic colorectal cancer")).toBe("oncology");
+  });
+});

@@ -143,3 +143,54 @@ describe("computeDevPlan — checker findings ride the stage riskFlags rail", ()
     expect(plan.stages[0].riskFlags.some((f) => f.severity === "medium" && /AI checker — replicationRisk/.test(f.message))).toBe(true);
   });
 });
+
+import { revenueCoherenceFlags, rowDivergenceRatio } from "../elicitation";
+
+describe("revenueCoherenceFlags (module 3 rails, moved to lib per 8/8 review)", () => {
+  const coherent = {
+    peakSalesM: 600, bearM: 200, bullM: 1500,
+    marketContext: { tamM: 3000, penetrationPct: 20, pricingPerYear: 150000, eligiblePatients: 20000 },
+  };
+
+  it("a fully coherent emission produces zero flags", () => {
+    expect(revenueCoherenceFlags(coherent)).toEqual([]);
+  });
+
+  it("TAM vs patients x price contradiction is named (the 8/8 live finding)", () => {
+    const f = revenueCoherenceFlags({ ...coherent, marketContext: { ...coherent.marketContext, eligiblePatients: 80000 } });
+    expect(f.some((x) => x.includes("TAM arithmetic incoherent"))).toBe(true);
+  });
+
+  it("tamM without a patient count -> unverifiable flag", () => {
+    const f = revenueCoherenceFlags({ ...coherent, marketContext: { ...coherent.marketContext, eligiblePatients: null } });
+    expect(f.some((x) => x.includes("eligiblePatients not emitted"))).toBe(true);
+  });
+
+  it("bearM of exactly 0 still runs the ordering check (old > 0 guard skipped it)", () => {
+    const f = revenueCoherenceFlags({ ...coherent, bearM: 0, bullM: 500 }); // bull < base: violated
+    expect(f.some((x) => x.includes("ordering violated"))).toBe(true);
+  });
+
+  it("bearM of exactly 0 with coherent ordering is accepted without flags", () => {
+    expect(revenueCoherenceFlags({ ...coherent, bearM: 0 })).toEqual([]);
+  });
+
+  it("suspiciously narrow p05-p95 spread is flagged (provisional 40% floor)", () => {
+    const f = revenueCoherenceFlags({ ...coherent, bearM: 550, bullM: 700 });
+    expect(f.some((x) => x.includes("suspiciously narrow"))).toBe(true);
+  });
+
+  it("non-numeric / NaN inputs never crash and never fake a verdict", () => {
+    const f = revenueCoherenceFlags({ peakSalesM: NaN, bearM: undefined, bullM: 1500,
+      marketContext: { tamM: "3,000" as unknown as number, pricingPerYear: 150000, eligiblePatients: 20000 } });
+    expect(Array.isArray(f)).toBe(true);
+    expect(f.some((x) => x.includes("NaN"))).toBe(false);
+  });
+
+  it("rowDivergenceRatio fires at >=2x / <=0.5x and stays silent inside", () => {
+    expect(rowDivergenceRatio(2450, 650)).not.toBeNull();  // the 8/8 4x disagreement
+    expect(rowDivergenceRatio(800, 650)).toBeNull();
+    expect(rowDivergenceRatio(0, 650)).toBeNull();          // no row peak -> no verdict
+    expect(rowDivergenceRatio(NaN, 650)).toBeNull();
+  });
+});

@@ -45,6 +45,66 @@ export function crossCheckDisagreement(p: number, outOf10: unknown): string | nu
   return `two framings of the same belief disagree: stated probability ${(p * 100).toFixed(0)}% vs frequency framing "${outOf10} of 10 comparable programs" (${(pFromFreq * 100).toFixed(0)}%) — reconcile before trusting either (±${CROSS_CHECK_TOLERANCE * 100}% provisional tolerance)`;
 }
 
+// ── Module 3: revenue-elicitation coherence rails (pure arithmetic, display-only) ───────────────
+// Moved here from the API route so the tolerances are NAMED constants (calibratable in one place),
+// the checks are unit-testable, and the client imports the same rails instead of re-implementing
+// them with different hardcoded numbers (8/8 code-review finding).
+
+/** Finite positive number guard (NaN/strings/zero excluded). */
+export const pos = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x > 0;
+/** Finite non-negative number guard — a legitimate elicited p05 of exactly 0 must NOT be dropped. */
+export const nonNeg = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x >= 0;
+
+// All three are HAND-SET provisional rails (labeled in the messages) pending calibration.
+export const TAM_RATIO_TOL = 0.33;          // TAM-vs-patients×price and peak-vs-TAM×pen: ratio outside [1-tol, 1+tol]
+export const NARROW_SPREAD_FLOOR = 0.4;     // (p95−p05)/base below this → overconfidence rail
+export const ROW_DIVERGENCE_RATIO = 2;      // row peak vs deep-dive peak ≥2× or ≤0.5× → two AI passes disagree
+
+const ratioIncoherent = (r: number) => r > 1 + TAM_RATIO_TOL || r < 1 - TAM_RATIO_TOL;
+
+/** Row-vs-deep-dive peak divergence (the 8/8 $2.45B-vs-$650M finding). Null = no divergence. */
+export function rowDivergenceRatio(rowPeakM: unknown, deepDivePeakM: unknown): number | null {
+  if (!pos(rowPeakM) || !pos(deepDivePeakM)) return null;
+  const r = rowPeakM / deepDivePeakM;
+  return r >= ROW_DIVERGENCE_RATIO || r <= 1 / ROW_DIVERGENCE_RATIO ? r : null;
+}
+
+/** Deterministic coherence checks on one indication's elicited market arithmetic. §1.5: incoherence is NAMED, never silently fixed. */
+export function revenueCoherenceFlags(a: {
+  peakSalesM?: number; bearM?: number; bullM?: number;
+  marketContext?: { tamM?: number | null; penetrationPct?: number | null; pricingPerYear?: number | null; eligiblePatients?: number | null };
+}): string[] {
+  const f: string[] = [];
+  const mc = a.marketContext ?? {};
+  const { tamM, penetrationPct, pricingPerYear, eligiblePatients } = mc;
+  if (pos(eligiblePatients) && pos(pricingPerYear) && pos(tamM)) {
+    const impliedTamM = (eligiblePatients * pricingPerYear) / 1e6;
+    const r = impliedTamM / tamM;
+    if (ratioIncoherent(r)) {
+      f.push(`TAM arithmetic incoherent: ${eligiblePatients.toLocaleString("en-US")} patients × $${Math.round(pricingPerYear / 1000)}k/yr implies ~$${Math.round(impliedTamM).toLocaleString("en-US")}M, but tamM says $${Math.round(tamM).toLocaleString("en-US")}M (${r.toFixed(1)}× apart) — at least one of the three numbers is wrong (±${Math.round(TAM_RATIO_TOL * 100)}% provisional tolerance)`);
+    }
+  } else if (pos(tamM) && !pos(eligiblePatients)) {
+    f.push("eligiblePatients not emitted — the TAM arithmetic is unverifiable (the 8/8 live run's $3B-TAM-vs-$12B-patient-math contradiction was only catchable with a structured count)");
+  }
+  if (pos(tamM) && pos(penetrationPct) && pos(a.peakSalesM)) {
+    const impliedPeak = (tamM * penetrationPct) / 100;
+    const r = impliedPeak / a.peakSalesM;
+    if (ratioIncoherent(r)) {
+      f.push(`peak arithmetic incoherent: TAM $${Math.round(tamM).toLocaleString("en-US")}M × ${penetrationPct}% implies ~$${Math.round(impliedPeak).toLocaleString("en-US")}M vs stated peak $${Math.round(a.peakSalesM).toLocaleString("en-US")}M (±${Math.round(TAM_RATIO_TOL * 100)}% provisional tolerance)`);
+    }
+  }
+  // bearM may legitimately be 0 ("~5% chance it never really launches") — nonNeg, not pos
+  // (the old `> 0` guard silently skipped ordering AND spread checks on exactly that case).
+  if (nonNeg(a.bearM) && pos(a.bullM) && pos(a.peakSalesM)) {
+    if (!(a.bearM < a.peakSalesM && a.peakSalesM < a.bullM)) {
+      f.push(`bear/base/bull ordering violated ($${a.bearM}M / $${a.peakSalesM}M / $${a.bullM}M) — the elicited range is unusable until reconciled`);
+    } else if ((a.bullM - a.bearM) / a.peakSalesM < NARROW_SPREAD_FLOOR) {
+      f.push(`p05–p95 spread is only ${Math.round(((a.bullM - a.bearM) / a.peakSalesM) * 100)}% of the base — suspiciously narrow for a pre-launch asset (experts under-cover ranges; ${Math.round(NARROW_SPREAD_FLOOR * 100)}% floor is a provisional rail)`);
+    }
+  }
+  return f;
+}
+
 // ── Checker-response gate (same structural no-leak contract as the Option B critic) ─────────────
 // The checker audits RATIONALES for the classic elicitation failures (anchoring, availability,
 // base-rate neglect, motivated narrative, rationale↔number arithmetic). Its findings are

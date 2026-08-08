@@ -9,11 +9,11 @@
 //
 // USER-set weights this pass (default 25/50/25). Evidence-grounded / reasoned weighting is DEFERRED.
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import type { Valuation } from "../lib/types";
 import type { DevPlanResult } from "../lib/dev-plan";
 import { computeOutputs } from "../lib/cashflow";
-import { applyScenarioDeltas, weightedRollup, type ScenarioDeltas } from "../lib/scenario";
+import { applyScenarioDeltas, weightedRollup, elicitedPeakMultipliers, type ScenarioDeltas } from "../lib/scenario";
 import DevPathSpine from "./DevPathSpine";
 
 const fmtM = (n: number) => (Math.abs(n) >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : `$${Math.round(n / 1e6)}M`);
@@ -31,34 +31,44 @@ const DEFAULT_BRANCHES: Branch[] = [
   { id: "bull", label: "Bull (p95)", weight: 0.185, deltas: { peakMult: 1.3 } },
 ];
 
-// Module 3 wiring: when the lead indication carries the revenue module's ELICITED p05/p95
-// (persisted on apply), the outer branches initialize from those TRUE elicited values instead of
-// the ×0.7/×1.3 placeholders. Coherence-guarded (bear < base < bull) — incoherent → placeholders.
-// Mount-time initialization; the fields stay user-editable as before.
-function initialBranches(base: Valuation): Branch[] {
-  const lead = base.indications?.[0];
-  const peakM = (lead?.peakSales ?? base.peakSales ?? 0) / 1e6;
-  const bear = lead?.bearPeakM;
-  const bull = lead?.bullPeakM;
-  if (peakM > 0 && bear != null && bull != null && bear > 0 && bear < peakM && bull > peakM) {
-    return [
-      { id: "bear", label: "Bear (p05, elicited)", weight: 0.185, deltas: { peakMult: +(bear / peakM).toFixed(2) } },
-      { id: "base", label: "Base (p50)", weight: 0.63, deltas: {} },
-      { id: "bull", label: "Bull (p95, elicited)", weight: 0.185, deltas: { peakMult: +(bull / peakM).toFixed(2) } },
-    ];
-  }
-  return DEFAULT_BRANCHES;
-}
-
 export default function ScenarioPanel({ base, devPlan }: { base: Valuation; devPlan?: DevPlanResult | null }) {
-  const [branches, setBranches] = useState<Branch[]>(() => initialBranches(base));
+  // Module 3 wiring — DERIVED per render, not mount-time state. The old useState lazy initializer
+  // ran when the panel first mounted (as soon as the asset existed), i.e. BEFORE the user ever
+  // clicked "Use $X →" in the revenue panel — so the elicited p05/p95 never took effect until a
+  // full page reload (8/8 code-review finding). Now the elicited multipliers re-derive whenever
+  // base changes (lib/scenario.elicitedPeakMultipliers, coherence-guarded with a SURFACED reason),
+  // and user EDITS are kept as overrides layered on top.
+  const elicited = useMemo(() => elicitedPeakMultipliers(base), [base]);
+  const defaultBranches = useMemo<Branch[]>(
+    () =>
+      elicited.ok
+        ? DEFAULT_BRANCHES.map((b) =>
+            b.id === "bear" ? { ...b, label: "Bear (p05, elicited)", deltas: { peakMult: elicited.bearMult } }
+            : b.id === "bull" ? { ...b, label: "Bull (p95, elicited)", deltas: { peakMult: elicited.bullMult } }
+            : b)
+        : DEFAULT_BRANCHES,
+    [elicited]
+  );
+  const [overrides, setOverrides] = useState<Record<string, { weight?: number; deltas?: Partial<ScenarioDeltas> }>>({});
+  const branches = useMemo<Branch[]>(
+    () =>
+      defaultBranches.map((b) => {
+        const o = overrides[b.id];
+        return o ? { ...b, weight: o.weight ?? b.weight, deltas: { ...b.deltas, ...(o.deltas ?? {}) } } : b;
+      }),
+    [defaultBranches, overrides]
+  );
 
-  const setWeight = (id: string, w: number) => setBranches((bs) => bs.map((b) => (b.id === id ? { ...b, weight: w } : b)));
+  const setWeight = (id: string, w: number) => setOverrides((os) => ({ ...os, [id]: { ...os[id], weight: w } }));
   const setDelta = (id: string, k: keyof ScenarioDeltas, v: number | null) =>
-    setBranches((bs) => bs.map((b) => (b.id === id ? { ...b, deltas: { ...b.deltas, [k]: v } } : b)));
+    setOverrides((os) => ({ ...os, [id]: { ...os[id], deltas: { ...os[id]?.deltas, [k]: v } } }));
 
-  // Each branch drives the EXISTING computeOutputs over its input vector.
-  const computed = branches.map((b) => ({ branch: b, out: computeOutputs(applyScenarioDeltas(base, b.deltas)) }));
+  // Each branch drives the EXISTING computeOutputs over its input vector. Memoized on exactly its
+  // inputs — this ran three full engine passes on every unrelated HomePage render before.
+  const computed = useMemo(
+    () => branches.map((b) => ({ branch: b, out: computeOutputs(applyScenarioDeltas(base, b.deltas)) })),
+    [base, branches]
+  );
   const roll = weightedRollup(computed.map((c) => ({ weight: c.branch.weight, value: c.out.rnpv })));
 
   const num = (v: number | null | undefined, ph: string, on: (n: number | null) => void) => (
@@ -72,6 +82,18 @@ export default function ScenarioPanel({ base, devPlan }: { base: Valuation; devP
         Each branch = the base inputs + its deltas, run through the same engine. Set the probability weights; the expected
         eNPV is Σ&nbsp;(weight × branch&nbsp;eNPV). Clinical dev-path is shared (below); branches vary peak sales, launch, and the P override.
       </div>
+
+      {/* §1.5: the elicited-vs-placeholder state is SURFACED, never silent */}
+      {elicited.ok && (
+        <div style={{ fontSize: 11, color: "var(--accent)", marginBottom: 12, fontFamily: "var(--font-mono)" }}>
+          Outer branches carry the revenue module&apos;s ELICITED p05/p95 for the lead indication (applied portfolio-wide via the peak multiplier). Editable as always.
+        </div>
+      )}
+      {!elicited.ok && elicited.reason && (
+        <div style={{ fontSize: 11, color: "#f59e0b", marginBottom: 12, fontFamily: "var(--font-mono)", lineHeight: 1.5 }}>
+          ⚠ {elicited.reason}
+        </div>
+      )}
 
       {/* shared dev-path spine (the clinical structure is invariant to financial scenarios unless P is overridden) */}
       {devPlan && <DevPathSpine devPlan={devPlan} />}

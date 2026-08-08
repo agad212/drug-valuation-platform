@@ -55,7 +55,10 @@ export function inferTherapeuticArea(indication?: string): TherapeuticArea {
   if (/(cardio|heart|athero|cholesterol|diabet|obesity|metabolic|\bnash\b|hypertens|dyslipid)/.test(s)) return "cardiometabolic";
   if (/(lupus|rheumat|psoria|crohn|colitis|autoimmun|immunolog|asthma|atopic|dermatitis)/.test(s)) return "immunology";
   if (/(infect|viral|bacteri|\bhiv\b|hepatitis|sepsis|influenza|vaccine|antibiotic)/.test(s)) return "infectious";
-  if (/(rare|orphan|duchenne|cystic fibrosis|hemophilia|gaucher|pompe|\bsma\b)/.test(s)) return "rare_orphan";
+  // IPF/PPF: orphan-designated specialty respiratory (no dedicated respiratory band) — was
+  // falling to "general" and pricing INPULSIS/ASCEND-scale trials off the general CPP band
+  // while the benchmarks module recognized the same string as IPF (8/8 review).
+  if (/(rare|orphan|duchenne|cystic fibrosis|hemophilia|gaucher|pompe|\bsma\b|idiopathic pulmonary fibrosis|\bipf\b|progressive pulmonary fibrosis|\bppf\b|pf-ild|fibrosing interstitial lung)/.test(s)) return "rare_orphan";
   return "general";
 }
 
