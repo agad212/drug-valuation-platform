@@ -1594,6 +1594,9 @@ export default function HomePage() {
       // Ground-truth readout date for a fully-enrolled current trial → drives remaining
       // duration (months-to-completion) instead of a projected enrollment window.
       const currentTrialCompletionDate = currentTrial?.primaryCompletionDate ?? currentTrial?.completionDate;
+      // Registry n — a FACT about the registered trial; the API pins the current stage's n to it
+      // (LLM n emissions bounced 120→180→100 across live runs for the same trial).
+      const currentTrialRegistryN = currentTrial?.enrollmentCount;
       const res = await fetch("/api/dev-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1606,6 +1609,7 @@ export default function HomePage() {
           currentTrialName: drug,
           currentTrialEnrollmentComplete,
           currentTrialCompletionDate,
+          currentTrialRegistryN,
         }),
       });
       if (!res.ok) {
@@ -3038,6 +3042,33 @@ export default function HomePage() {
                         Use {fmtMoney(active.peakSalesM * 1e6)} →
                       </button>
                     </div>
+
+                    {/* DETERMINISTIC CROSS-CHECKS (8/8 live finding): the row carried $2.45B while this
+                        deep-dive said $650M — a 4× disagreement between two AI passes hiding behind an
+                        un-clicked button; and the TAM chip contradicted its own patient arithmetic.
+                        Both checks are pure arithmetic on already-present values (§1.5: name it, don't fix it). */}
+                    {(() => {
+                      const rowPeakM = (v.indications?.[revenueTab]?.peakSales ?? 0) / 1e6;
+                      const ratio = rowPeakM > 0 && active.peakSalesM > 0 ? rowPeakM / active.peakSalesM : null;
+                      const diverges = ratio != null && (ratio >= 2 || ratio <= 0.5);
+                      const tam = active.marketContext?.tamM;
+                      const wac = active.marketContext?.pricingPerYear;
+                      const impliedEligible = tam != null && wac != null && wac > 0 ? Math.round((tam * 1e6) / wac) : null;
+                      return (
+                        <>
+                          {diverges && (
+                            <div style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.35)", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#f87171", lineHeight: 1.5 }}>
+                              ⚠ The indication row currently carries <b>{fmtMoney(rowPeakM * 1e6)}</b> peak — {ratio! >= 2 ? `${ratio!.toFixed(1)}× ABOVE` : `${(1 / ratio!).toFixed(1)}× BELOW`} this deep-dive base case. Two AI passes disagree; at most one is right. Review the methodology below, then either apply this estimate or defend the row's number.
+                            </div>
+                          )}
+                          {impliedEligible != null && (
+                            <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
+                              Coherence check: TAM {fmtMoney((tam as number) * 1e6)} ÷ {fmtMoney(wac as number)}/yr implies ~{impliedEligible.toLocaleString("en-US")} treatable patients — verify against the stated population before trusting the penetration math.
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {/* Methodology — how the estimate was built — always shown */}
                     <div style={{ marginBottom: 20 }}>

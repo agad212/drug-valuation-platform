@@ -1,6 +1,7 @@
 export type CtgovTrial = {
   nctId: string;
   title?: string;
+  enrollmentCount?: number;     // registry enrollment (designModule.enrollmentInfo.count) — a FACT
   phase?: string;               // App format: "Phase 1", "Phase 2", "Phase 3"
   phaseRaw?: string;            // Display: "Phase 2/Phase 3"
   status?: string;              // CT.gov raw status code
@@ -153,9 +154,16 @@ function parseStudy(s: any): CtgovTrial | null {
     ? estimateLaunchYear(phase, primaryCompletionDate, completionDate, status)
     : undefined;
 
+  // Registry enrollment — a FACT about a registered trial (used to pin the dev plan's
+  // current-trial n; the LLM's n emissions bounced 120→180→100 across live runs for the
+  // same trial before this).
+  const enrollmentRaw = p.designModule?.enrollmentInfo?.count;
+  const enrollmentCount = typeof enrollmentRaw === "number" && enrollmentRaw > 0 ? enrollmentRaw : undefined;
+
   return {
     nctId,
     title,
+    enrollmentCount,
     phase: phase || undefined,
     phaseRaw: phaseRaw || phase || undefined,
     status,

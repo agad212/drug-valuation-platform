@@ -123,6 +123,8 @@ type RequestBody = {
                                           //   fully enrolled → 0 remaining accrual time
   currentTrialCompletionDate?: string;    // CT.gov primary-completion date (ISO) — for a
                                           //   fully-enrolled trial, drives remaining duration
+  currentTrialRegistryN?: number;         // CT.gov enrollment count — a FACT; pins the current
+                                          //   stage's n (LLM n emissions are unstable run-to-run)
 };
 
 type StageOutput = {
@@ -160,6 +162,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const {
     drug, indication, phase, mechanism, sponsor,
     currentTrialDesign, currentTrialName, currentTrialEnrollmentComplete, currentTrialCompletionDate,
+    currentTrialRegistryN,
   } = req.body as RequestBody;
 
   if (!drug || !currentTrialDesign) {
@@ -608,6 +611,24 @@ Reason about the full development path. Return the current trial as stage 1 (use
             crossCheckOutOf10: rrNum(rrRaw.crossCheckOutOf10, 0, 10),
           }
         : undefined;
+
+    // ── Registry-n pin: a registered trial's enrollment is a FACT, not an estimate ───────────────
+    // The LLM's current-trial n bounced 120→180→100 across live runs for the SAME trial
+    // (WHISTLE-PF), silently moving both power and cost. When CT.gov supplies the enrollment
+    // count, it PINS the current stage's n; the emission becomes a footnote on the stage card.
+    if (typeof currentTrialRegistryN === "number" && Number.isFinite(currentTrialRegistryN) &&
+        currentTrialRegistryN >= 10 && currentTrialRegistryN <= 5000) {
+      const cur = cappedStages.find((s) => (s as { isCurrentTrial?: boolean }).isCurrentTrial) as Record<string, unknown> | undefined;
+      if (cur && cur.n !== currentTrialRegistryN) {
+        const emitted = cur.n;
+        cur.n = currentTrialRegistryN;
+        if (cur.trialDesign && typeof cur.trialDesign === "object") (cur.trialDesign as Record<string, unknown>).n = currentTrialRegistryN;
+        cur.elicitationFindings = [
+          ...((cur.elicitationFindings as unknown[]) ?? []),
+          { severity: "info", message: `sample size PINNED to the registry: n=${currentTrialRegistryN} (ClinicalTrials.gov enrollment) — the LLM emitted n=${emitted}; a registered trial's enrollment is a fact, not an estimate` },
+        ];
+      }
+    }
 
     // ── Elicitation checker (module 1) — the facilitator's audit of the SME's RATIONALES ─────────
     // One cheap batched call reviewing every probability-bearing elicitation for the classic
