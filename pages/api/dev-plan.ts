@@ -661,14 +661,24 @@ Empty findings array if everything is defensible.`,
           let cparsed: unknown = null;
           if (cs >= 0 && ce > cs) { try { cparsed = JSON.parse(ctext.slice(cs, ce + 1)); } catch { cparsed = null; } }
           const gated = validateElicitationFindings(cparsed, ["replicationRisk", "comparatorRange", "expectedResponseRate", "nullResponseRate", "general"]);
-          if (gated.findings.length && cappedStages[0]) {
-            (cappedStages[0] as Record<string, unknown>).elicitationFindings = gated.findings;
-          }
+          // HEALTH MARKER (8/7 live gap: a silent checker is indistinguishable from a failed one) —
+          // a clean review says so out loud; silence now always means "did not run".
+          const attach = gated.findings.length
+            ? gated.findings
+            : [{ severity: "info" as const, message: "AI checker reviewed the elicited quantities — no findings" }];
+          if (cappedStages[0]) (cappedStages[0] as Record<string, unknown>).elicitationFindings = attach;
           logEnd("dev-plan-checker", __t0, "ok", { findings: gated.findings.length, gateFlags: gated.flags.length });
+        } else if (cappedStages[0]) {
+          (cappedStages[0] as Record<string, unknown>).elicitationFindings =
+            [{ severity: "info", message: "AI checker unavailable this run (fail-open) — elicited quantities are UNREVIEWED" }];
         }
       }
     } catch (checkErr) {
       console.error("[dev-plan] elicitation checker failed (fail-open):", (checkErr as Error)?.message);
+      if (cappedStages[0]) {
+        (cappedStages[0] as Record<string, unknown>).elicitationFindings =
+          [{ severity: "info", message: "AI checker unavailable this run (fail-open) — elicited quantities are UNREVIEWED" }];
+      }
     }
 
     logEnd("dev-plan", __t0, "ok", { stages: cappedStages.length, replicationRisk: replicationRisk?.pFail ?? null });

@@ -16,9 +16,11 @@ than an unfinished honest one.
 ## 1. Governing invariants — non-negotiable
 
 **1.1 FROZEN (regression tripwire).** Reference assets: **TTX-MC138 pApproval = 0.02844308071545876**
-(`0.02844`), **tau / bms-986446 = 0.025185030829508463** (`0.02519`) — re-pinned 2026-08-07 by the 2.2
-anchored-scale fix (lineage + literature validation documented in the FROZEN_PAPPROVAL block of
-`tests/harness/valuation-harness.test.ts`). `tests/harness` must pass **29/29 byte-identical** on every
+(`0.02844`), **tau / bms-986446 = 0.11418097492800683** (`0.11418`) — TTX pinned 2026-08-07 by the 2.2
+anchored-scale fix; tau RE-PINNED #3 2026-08-07 night by the concurrent-control rule (benchmark
+variance excluded from RCT power — the fixture carried designType rct + comparatorSigma2 0.01, a
+documented-convention contradiction; new value inside the authored band [0.01, 0.15]; lineage in the
+fixture `_repinNote` + the FROZEN_PAPPROVAL block of `tests/harness/valuation-harness.test.ts`). `tests/harness` must pass **29/29 byte-identical** on every
 commit. FROZEN protects against *accidental* movement. A **deliberate re-pin**
 is allowed when a change legitimately touches the reference path: recompute, confirm the movement is
 intended and correct, update the fixture `expected` block, and document why in the commit. **Forbidden:**

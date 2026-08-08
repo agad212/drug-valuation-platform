@@ -120,7 +120,8 @@ export function resolveNicheEligible(p: {
 }): NicheEligibleResolution {
   const prevalence = p.prevalence;
   const superset = p.supersetEligible != null && p.supersetEligible > 0 ? p.supersetEligible : null;
-  const bound = superset != null ? superset * prevalence : null;
+  // Rounded: an eligible-patient bound is a COUNT (the 8/7 live critic quoted "19,615.385 patients")
+  const bound = superset != null ? Math.round(superset * prevalence) : null;
   const cited = p.cited != null && p.cited > 0 ? p.cited : null;
   const nil = { cited, supersetEligible: superset, prevalence, bound, derived: false, clamped: false, exceededSuperset: false, unbounded: false };
 
