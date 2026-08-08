@@ -34,6 +34,7 @@ import type {
 import { mixtureMoments, enrichEffectPrior, resolveEnrichmentLift, type EffectPriorMixture, type ClassStatus } from "./effect-prior";
 import { pinCostPerPatient, type TherapeuticArea } from "./financial-pins";
 import { graveyardHaircut } from "./class-risk";
+import { sigma2FromBounds, rangeIncoherence, crossCheckDisagreement } from "./elicitation";
 import {
   computeStageRR,
   gridToGaussianMixture,
@@ -252,6 +253,15 @@ export type DevStageInput = {
                                   //   0 for RCTs (control measured in-trial)
                                   //   >0 for single-arm vs uncertain historical benchmark
   comparatorSource?: string;      // where the comparator rate comes from (for display)
+  // ELICITATION (module 1): the comparator's plausible range, stated as 15/85 bounds — the natural
+  // unit an SME can actually give. When valid, deterministic code derives σ² from it (elicitation.ts)
+  // and it SUPERSEDES a raw comparatorSigma2 emission (an LLM cannot calibrate a raw variance; it can
+  // state a range). Absent → legacy raw σ² path, bit-for-bit.
+  comparatorRateLow?: number;
+  comparatorRateHigh?: number;
+  // Checker findings for this stage (validated display prose from the elicitation checker — the API
+  // attaches them; they ride the existing riskFlags rail; never numeric, never computed with).
+  elicitationFindings?: TrialRiskFlag[];
 
   // Endpoint transparency
   endpointRationale?: string;            // plain-language: why this endpoint for this stage
@@ -436,7 +446,13 @@ export type DevPlanInputs = {
   // of the other two here. Bayes shrinks the component after each observed stage success (it sits
   // in the mixture during propagation), so it self-retires as real evidence accumulates.
   // Citation-gated (§1.5): no basis → ignored + flagged. Band-clamped with the clamp shown.
-  replicationRisk?: { pFail: number; basis: string };
+  replicationRisk?: {
+    pFail: number; basis: string;
+    // Elicitation additions: extremes-first bounds (15/85) + the consistency cross-check in a second
+    // framing ("of 10 comparable positive Phase 2 signals in this indication, how many fail to
+    // reproduce?"). Display + coherence checks only in v1 — the engine still consumes pFail.
+    pFailLow?: number; pFailHigh?: number; crossCheckOutOf10?: number;
+  };
 };
 
 // Replication-risk weight band. 0.80 lets the worst documented indication records (~4 failures per
@@ -522,6 +538,7 @@ export function computeDevPlan(
   // Capability-gated: absent → the mixture is untouched → bit-for-bit legacy (FROZEN-safe).
   let replicationWeightApplied: number | null = null;
   let replicationFlag: TrialRiskFlag | null = null;
+  const replicationExtraFlags: TrialRiskFlag[] = [];
   {
     const rr = inputs.replicationRisk;
     if (rr != null && typeof rr.pFail === "number" && Number.isFinite(rr.pFail) && rr.pFail > 0) {
@@ -543,9 +560,21 @@ export function computeDevPlan(
           { w, mu: 0, sigma2: 0.05 },
         ];
         replicationWeightApplied = w;
+        // Elicitation additions (module 1): show the extremes-first range; check its coherence; and
+        // compare the probability framing against the "N of 10" frequency framing — two framings of
+        // one belief that SHOULD agree, and whose disagreement is signal (§1.5: surfaced, not hidden).
+        const rangeIncoherent = (rr.pFailLow != null || rr.pFailHigh != null)
+          ? rangeIncoherence(rr.pFailLow, rr.pFail, rr.pFailHigh, "replicationRisk")
+          : null;
+        if (rangeIncoherent) replicationExtraFlags.push({ severity: "info", message: rangeIncoherent });
+        const rangeTxt = !rangeIncoherent && rr.pFailLow != null && rr.pFailHigh != null
+          ? ` [elicited 15/85 range ${(rr.pFailLow * 100).toFixed(0)}–${(rr.pFailHigh * 100).toFixed(0)}%]`
+          : "";
+        const xc = crossCheckDisagreement(rr.pFail, rr.crossCheckOutOf10);
+        if (xc) replicationExtraFlags.push({ severity: "medium", message: `replication risk ${xc}` });
         replicationFlag = {
           severity: "medium",
-          message: `indication replication risk: ${(w * 100).toFixed(0)}% prior weight that the positive early-phase signal does not reproduce in later trials` +
+          message: `indication replication risk: ${(w * 100).toFixed(0)}% prior weight that the positive early-phase signal does not reproduce in later trials${rangeTxt}` +
             (w !== rr.pFail ? ` (requested ${(rr.pFail * 100).toFixed(0)}%, CLAMPED to the ${REPLICATION_PFAIL_MAX * 100}% cap)` : "") +
             ` — ${basis}. This weight shrinks after each observed trial success (Bayes), and is distinct from the mechanism-class haircut.`,
         };
@@ -654,8 +683,27 @@ export function computeDevPlan(
 
     // Replication-risk component surfaces on the FIRST stage's card (it re-shaped the initial prior
     // that this stage consumes; later stages inherit it through propagation).
-    if (replicationFlag && stages.length === 0) {
-      l2.riskFlags.unshift(replicationFlag);
+    if (stages.length === 0) {
+      if (replicationExtraFlags.length) l2.riskFlags.unshift(...replicationExtraFlags);
+      if (replicationFlag) l2.riskFlags.unshift(replicationFlag);
+    }
+    // Checker findings (validated display prose attached by the API) ride the same flags rail.
+    if (stageInput.elicitationFindings?.length) {
+      l2.riskFlags.push(...stageInput.elicitationFindings);
+    }
+
+    // ── Comparator σ²: elicited 15/85 range SUPERSEDES a raw variance emission ──────────────────
+    // An SME (human or AI) can state "the placebo/control rate plausibly runs 10–20%"; nobody can
+    // calibrate a raw σ²=0.004 by feel. When a valid range was elicited, σ² derives from it
+    // deterministically (elicitation.ts, 15/85 convention); the raw emission becomes a footnote.
+    const elicitedComparatorSig2 = sigma2FromBounds(stageInput.comparatorRateLow, stageInput.comparatorRateHigh);
+    const comparatorSig2 = elicitedComparatorSig2 ?? stageInput.comparatorSigma2 ?? 0;
+    if (elicitedComparatorSig2 != null) {
+      l2.riskFlags.push({
+        severity: "info",
+        message: `comparator σ² ${elicitedComparatorSig2.toFixed(4)} DERIVED from the elicited 15/85 range [${((stageInput.comparatorRateLow as number) * 100).toFixed(0)}–${((stageInput.comparatorRateHigh as number) * 100).toFixed(0)}%] (σ = width/2.073)` +
+          (stageInput.comparatorSigma2 != null ? ` — supersedes the raw emitted σ² ${stageInput.comparatorSigma2}` : ""),
+      });
     }
 
     // Sourced expected rate — citation-gated AND unit-gated (resolve-or-flag):
@@ -694,7 +742,7 @@ export function computeDevPlan(
       stageInput.isTimeToEvent === true,
       stageInput.observedResponseRate,
       stageInput.observedN,
-      stageInput.comparatorSigma2 ?? 0,
+      comparatorSig2,
       stageInput.anchorNullResponseRate,
       sourcedExpectedRR,
     );
@@ -705,7 +753,7 @@ export function computeDevPlan(
       ? computeStageRR(
           currentMixture, stageInput.n, nullRR, rrDesign,
           stageInput.isTimeToEvent === true, stageInput.observedResponseRate, stageInput.observedN,
-          stageInput.comparatorSigma2 ?? 0,
+          comparatorSig2,
           stageInput.anchorNullResponseRate,
           sourcedExpectedRR,
         )
