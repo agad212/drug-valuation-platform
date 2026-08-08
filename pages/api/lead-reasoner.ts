@@ -288,6 +288,17 @@ WHAT YOU MUST REASON ABOUT
    - Expanded access / compassionate use
    List each excluded trial with its ID and the reason it's excluded.
 
+   THE GATE IS A FUTURE READOUT, NEVER A FINISHED ONE (8/8 live-run failure: the brief gated a
+   Phase 2b program on the already-completed Phase 2a, so the engine priced the live trial with the
+   finished study's enrollment). A COMPLETED trial with a known result is EVIDENCE — it belongs in
+   the prior, not at the gate. efficacy_gate_trial MUST be the study whose FUTURE readout gates the
+   next investment/registration decision (typically the actively-enrolling or about-to-read-out
+   trial of the most advanced phase — e.g. an ongoing Phase 2b/3 supersedes its completed Phase 2a
+   predecessor). If your own narrative names an ongoing later trial as "the current value-driving
+   program", THAT trial's NCT is the gate — a mismatch between your prose and your structured pick
+   is an error. Only if NO ongoing/planned trial exists may a completed study stand as the gate
+   (and say so explicitly in reason).
+
 2. COMPANY'S ACTUAL DEVELOPMENT STRATEGY
    Synthesize the company's INTENT from public signals. What indication are they leading with? What's the pivotal path? What regulatory strategy (BTD, orphan, accelerated)?
    Separate CONFIRMED (company publicly stated) from INFERRED (deduced from signals).

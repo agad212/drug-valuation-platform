@@ -1626,6 +1626,13 @@ export default function HomePage() {
       // brief gated on the completed Phase 2a while the live Phase 2b was absent from the list).
       const currentTrialRegistryStatus = currentTrial?.status;
       const currentTrialNctId = currentTrial?.nctId;
+      // A LIVE same-or-higher-phase alternative in the list makes the completed-gate disclosure
+      // CONCRETE (8/8: completed Phase 2a pinned while an enrolling Phase 2b was the real gate).
+      const isLiveStatus = (s?: string) => !!s && !/COMPLETED|TERMINATED|WITHDRAWN/i.test(s);
+      const liveAlt = trials.find((t) => t.nctId !== currentTrial?.nctId && isLiveStatus(t.status) && phaseNum(t.phase || "") >= phaseNum(phase));
+      const currentTrialLiveAlternative = liveAlt
+        ? `${liveAlt.nctId} (${liveAlt.phaseRaw || liveAlt.phase || "?"}, ${liveAlt.statusLabel || liveAlt.status}${liveAlt.enrollmentCount ? `, registry n=${liveAlt.enrollmentCount}` : ""})`
+        : undefined;
       const res = await fetch("/api/dev-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1642,6 +1649,7 @@ export default function HomePage() {
           currentTrialRegistryNType,
           currentTrialRegistryStatus,
           currentTrialNctId,
+          currentTrialLiveAlternative,
         }),
       });
       if (!res.ok) {

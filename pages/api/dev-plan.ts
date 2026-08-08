@@ -130,6 +130,8 @@ type RequestBody = {
   currentTrialRegistryStatus?: string;    // CT.gov overallStatus of the pinned trial — a COMPLETED
                                           //   trial priced as the live gate is a fact worth flagging
   currentTrialNctId?: string;             // the NCT actually pinned (for the disclosure message)
+  currentTrialLiveAlternative?: string;   // a LIVE same/higher-phase trial found in the list —
+                                          //   makes the completed-gate disclosure name the real candidate
 };
 
 type StageOutput = {
@@ -176,6 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     drug, indication, phase, mechanism, sponsor,
     currentTrialDesign, currentTrialName, currentTrialEnrollmentComplete, currentTrialCompletionDate,
     currentTrialRegistryN, currentTrialRegistryNType, currentTrialRegistryStatus, currentTrialNctId,
+    currentTrialLiveAlternative,
   } = req.body as RequestBody;
 
   if (!drug || !currentTrialDesign) {
@@ -693,7 +696,7 @@ Reason about the full development path. Return the current trial as stage 1 (use
       if (cur) {
         (cur.elicitationFindings = cur.elicitationFindings ?? []).push({
           severity: "medium",
-          message: `the registry lists the modeled current trial${currentTrialNctId ? ` (${currentTrialNctId})` : ""} as COMPLETED — its readout may already exist, and the n/duration here describe THAT finished study. If a later trial is the real value-driving gate (e.g. an actively-enrolling Phase 2b/3 absent from the trial list), this stage is priced against the wrong trial's identity — verify which study actually gates approval`,
+          message: `the registry lists the modeled current trial${currentTrialNctId ? ` (${currentTrialNctId})` : ""} as COMPLETED — its readout may already exist, and the n/duration here describe THAT finished study.${currentTrialLiveAlternative ? ` A LIVE alternative exists in the trial list: ${currentTrialLiveAlternative} — that study may be the real gate; re-run the strategic assessment to re-anchor.` : ` If a later trial is the real value-driving gate (e.g. an actively-enrolling Phase 2b/3 absent from the trial list), this stage is priced against the wrong trial's identity — verify which study actually gates approval.`}`,
         });
       }
     }
@@ -721,7 +724,11 @@ Reason about the full development path. Return the current trial as stage 1 (use
           apiKey,
           handlerStartMs: __t0,
           subjectLabel: "the elicited quantities",
-          allowedQuantities: ["replicationRisk", "comparatorRange", "expectedResponseRate", "nullResponseRate", "general"],
+          // External-facts grounding: the dev-plan rationales cite named trial outcomes
+          // (replication tallies, comparator results) — 3 searches let the checker VERIFY them
+          // instead of only auditing internal coherence (the "ZEPHYRUS-2 positive" gap).
+          maxSearches: 3,
+          allowedQuantities: ["replicationRisk", "comparatorRange", "expectedResponseRate", "nullResponseRate", "factCheck", "general"],
           prompt: `You are the FACILITATOR auditing an expert's probability elicitations for ${drug || "a drug asset"}${indication ? ` (${indication})` : ""}. Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
 
 Elicited quantities:
@@ -734,9 +741,10 @@ Check for, and report ONLY genuine issues (max 5):
 4. Availability: rationale leaning on the most recent/most publicized event rather than the full record.
 5. Motivated optimism: every judgment leaning the favorable direction simultaneously.
 6. Unit/definition coherence: rates vs improvements, mismatched denominators, comparator range not containing the null (including a SUPERSEDED elicited range that conflicts with the pinned null).
+7. FACT CHECK (you have web search — use up to 3 searches): verify the NAMED trial outcomes the rationales rest on (e.g. "pamrevlumab failed ZEPHYRUS-1", "nintedanib replicated in INPULSIS"). A rationale resting on a factually WRONG claim (calling a failed trial positive, a positive trial failed, or citing a trial that does not exist) is a HIGH finding — state the correct fact with its source. Do not search for anything beyond verifying the claims in the input.
 
 Respond with STRICT JSON only:
-{"findings":[{"quantity":"replicationRisk|comparatorRange|expectedResponseRate|nullResponseRate|general","severity":"high|medium|info","message":"one or two sentences"}]}
+{"findings":[{"quantity":"replicationRisk|comparatorRange|expectedResponseRate|nullResponseRate|factCheck|general","severity":"high|medium|info","message":"one or two sentences"}]}
 Empty findings array if everything is defensible.`,
         });
         if (cappedStages[0]) {

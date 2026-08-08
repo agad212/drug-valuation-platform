@@ -214,10 +214,17 @@ calibration historical outcome/trial-cost data; Evaluate Omnium access.
   penetration rationale); checker criteria 6–8 audit conditionality, at-launch blindness, and
   funnel honesty. NOTE: the comps-anchored ROW remains a crude historical anchor BY DESIGN — the
   bottom-up deep-dive is the defended number; the divergence warning arbitrates.
-  REMAINING ON THE AXIS:
-  checker external-facts grounding (the "ZEPHYRUS-2 positive" gap; includes the 8/8 v2
-  trial-identity finding — brief gated on the completed Phase 2a while WHISTLE-PF was absent from
-  the trial list; disclosure flag shipped in a1077e5, root fix pending). Original placement:
+  **EXTERNAL-FACTS ROUND SHIPPED: grounded checker + trial-identity root fix.** (1) The dev-plan
+  checker now runs GROUNDED (runElicitationChecker maxSearches:3 via callClaudeWithSearch, 60s hard
+  race + deadline skip; other checkers stay cheap): criterion 7 verifies NAMED trial outcomes in
+  the rationales against the record — a factually wrong claim ("failed trial called positive") is
+  a HIGH finding with the correct fact cited (quantity "factCheck"). (2) Trial-identity root fix,
+  three layers: lead-reasoner rule "THE GATE IS A FUTURE READOUT, NEVER A FINISHED ONE" (a
+  completed trial is EVIDENCE, not a gate; prose-vs-structured-pick mismatch is an error);
+  trials/search DETERMINISTIC coverage guarantee (a live trial at/above the asset's phase can
+  never be dropped by selection — force-kept with a labeled claudeReason, cap grows past 8);
+  dev-plan completed-gate disclosure now NAMES the live alternative found in the list
+  (currentTrialLiveAlternative). Original placement:
   (1) **Interview protocol** replaces one-shot emissions — extremes first, then bounds, then center,
   then a consistency cross-check via a second framing; ONE batched call per module (API frugality).
   Dev-plan module first (replicationRisk, expectedResponseRate, comparatorSigma2, nullRR), then LOE

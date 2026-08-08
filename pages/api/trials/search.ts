@@ -30,6 +30,8 @@ Select the 5-8 most relevant trials for a drug valuation analyst. Prioritize:
 1. Pivotal/registration trials (Phase 3 completed or active)
 2. Key Phase 2 trials in major indications
 3. For approved drugs: label-expansion studies
+NEVER drop an actively-enrolling (recruiting/active) trial at or above the current development
+stage — it is usually the value-driving gate the whole valuation hangs on.
 
 Respond ONLY with valid JSON — no markdown, no extra text:
 {
@@ -77,9 +79,22 @@ Respond ONLY with valid JSON — no markdown, no extra text:
       ? candidates[recommendedIdx].nctId : (selected[0]?.nctId ?? "");
 
     const selectedIds = new Set(selected.map((t) => t.nctId));
+    // DETERMINISTIC coverage guarantee (8/8 live run: the enrolling Phase 2b WHISTLE-PF — the real
+    // value gate — was dropped by selection, so the completed Phase 2a's n pinned the live stage):
+    // any LIVE trial at or above the asset's phase survives selection no matter what the LLM picked.
+    const pnum = (p?: string) => (p || "").includes("3") ? 3 : (p || "").includes("2") ? 2 : (p || "").includes("1") ? 1 : 0;
+    const isLive = (s?: string) => !!s && !/COMPLETED|TERMINATED|WITHDRAWN|UNKNOWN/i.test(s);
+    for (const t of trials) {
+      if (isLive(t.status) && pnum(t.phase) >= pnum(currentPhase) && !selectedIds.has(t.nctId)) {
+        selected.push({ ...t, claudeReason: "kept by coverage guarantee: actively-enrolling at/above the asset's phase — likely the value-driving gate" });
+        selectedIds.add(t.nctId);
+      }
+    }
     const remainder = trials.slice(0, 8).filter((t) => !selectedIds.has(t.nctId));
 
-    return { ranked: [...selected, ...remainder].slice(0, 8), summary, recommendedNctId };
+    // The cap can never evict a force-kept live trial: allow the list to grow past 8 when the
+    // coverage guarantee added entries (selected is bounded by the raw match count anyway).
+    return { ranked: [...selected, ...remainder].slice(0, Math.max(8, selected.length)), summary, recommendedNctId };
   } catch {
     return { ranked: trials.slice(0, 8), summary: "", recommendedNctId: trials[0]?.nctId ?? "" };
   }
