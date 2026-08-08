@@ -18,6 +18,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
 import { logStart, logEnd } from "../../lib/endpoint-timing";
+import { validateElicitationFindings } from "../../lib/elicitation";
 import { parseJsonLoose } from "../../lib/extractJson";
 import { pinComparator, pinPhase3Endpoint } from "../../lib/indication-benchmarks";
 import { resolveRegulatoryContext } from "../../lib/regulatory-pins";
@@ -280,6 +281,25 @@ INDICATION REPLICATION RISK — the graveyard check (top-level field, not per-st
    entirely. Range 0.05-0.8. This drives a real probability component — a lazy default here corrupts
    the valuation; a well-researched one is among the most valuable numbers in the plan.
 
+ELICITATION PROTOCOL (rule 14) — you are the expert under a facilitated probability elicitation.
+For every probability-bearing quantity, work EXTREMES FIRST, center last, and answer the
+cross-check honestly (disagreement between framings is surfaced to the user, not hidden):
+14a. COMPARATOR RANGE (per stage): before choosing nullResponseRate, state the plausible range of
+   the control/comparator rate as "comparatorRateLow" and "comparatorRateHigh" — the values with
+   roughly a 15% chance of being undershot/exceeded (NOT absolute best/worst; experts who give
+   "absolute" bounds cover ~70% of the truth). Deterministic code derives the comparator variance
+   from this range — do NOT tune comparatorSigma2 to match; emit it only as a legacy fallback.
+   nullResponseRate must lie inside the range.
+14b. REPLICATION RISK (13c): first "pFailLow" and "pFailHigh" (15/85 bounds of your belief), THEN
+   "pFail" (must lie inside), THEN the cross-check in a different framing: "crossCheckOutOf10" = of
+   10 comparable positive early-phase signals in this indication, how many fail to reproduce in
+   confirmatory trials? Answer from the named record, not by converting your pFail back.
+14c. EXPECTED RESPONSE RATE (13b): when you emit it, also state "expectedResponseRateLow"/"High"
+   (15/85 bounds). If your bounds would cross the null, say so in the basis — that is information.
+   Every rationale must cite evidence a skeptic could check; a reviewer will audit the RATIONALE
+   (anchoring on design assumptions, recency-driven recall, base-rate neglect on small n, motivated
+   optimism, arithmetic that does not match the stated tally) — write rationales that survive that.
+
 14. COMPARATOR UNCERTAINTY — REQUIRED for each stage:
    Set "comparatorSigma2": the variance of the historical control / SOC response rate estimate.
    This reflects how well-established the comparator rate is, NOT the drug's uncertainty.
@@ -392,10 +412,15 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown:
   "regulatoryContext": "btd_orphan",
   "reasoning": "2-3 sentence explanation of the development path rationale.",
   "replicationRisk": {
+    "pFailLow": 0.45,
+    "pFailHigh": 0.7,
     "pFail": 0.55,
+    "crossCheckOutOf10": 6,
     "basis": "IPF Phase 2→3 replication record: nintedanib (TOMORROW→INPULSIS) replicated; pamrevlumab (PRAISE→ZEPHYRUS-1/2), zinpentraxin/PRM-151, ziritaxestat (ISABELA), and interferon-γ (INSPIRE) all failed confirmatory trials after positive earlier signals — ~1-2 of 6-7 named attempts replicated."
   }
-}`;
+}
+(Stages may also carry "comparatorRateLow"/"comparatorRateHigh" per rule 14a and
+"expectedResponseRateLow"/"expectedResponseRateHigh" per rule 14c.)`;
 
   const userMessage = `Drug: ${drug}
 Indication: ${indication || "unknown"}
@@ -503,6 +528,12 @@ Reason about the full development path. Return the current trial as stage 1 (use
         comparatorSigma2: (typeof s.comparatorSigma2 === "number" && s.comparatorSigma2 >= 0 && s.comparatorSigma2 < 0.5)
           ? Math.round(s.comparatorSigma2 * 10000) / 10000  // 4 decimal places
           : 0,
+        // Elicited comparator range (rule 14a) — deterministic code derives σ² from it in
+        // lib/dev-plan.ts and it supersedes the raw σ² above. Malformed → dropped (legacy path).
+        comparatorRateLow: (typeof s.comparatorRateLow === "number" && s.comparatorRateLow > 0 && s.comparatorRateLow < 1)
+          ? Math.round(s.comparatorRateLow * 1000) / 1000 : undefined,
+        comparatorRateHigh: (typeof s.comparatorRateHigh === "number" && s.comparatorRateHigh > 0 && s.comparatorRateHigh < 1)
+          ? Math.round(s.comparatorRateHigh * 1000) / 1000 : undefined,
         comparatorSource: typeof s.comparatorSource === "string" ? s.comparatorSource : undefined,
         // Base re-pin (G3): registration-endpoint reg-acceptance observables (resolve-or-FLAG).
         // Kept only when the generator resolves them; absent → the engine HOLDS the reg gate at
@@ -562,12 +593,83 @@ Reason about the full development path. Return the current trial as stage 1 (use
     // Replication risk (13c) — validated pass-through only; the citation gate + band clamp live
     // deterministically in lib/dev-plan.ts. Malformed → omitted (no claim, no component).
     const rrRaw = parsed.replicationRisk;
+    const rrNum = (x: unknown, lo: number, hi: number) =>
+      typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi ? Math.round((x as number) * 1000) / 1000 : undefined;
     const replicationRisk =
       rrRaw && typeof rrRaw.pFail === "number" && Number.isFinite(rrRaw.pFail) &&
       rrRaw.pFail > 0 && rrRaw.pFail < 1 &&
       typeof rrRaw.basis === "string" && rrRaw.basis.trim()
-        ? { pFail: Math.round(rrRaw.pFail * 1000) / 1000, basis: rrRaw.basis.trim() }
+        ? {
+            pFail: Math.round(rrRaw.pFail * 1000) / 1000,
+            basis: rrRaw.basis.trim(),
+            // Elicitation extras (rule 14b) — coherence-gated deterministically in lib/dev-plan.ts
+            pFailLow: rrNum(rrRaw.pFailLow, 0, 1),
+            pFailHigh: rrNum(rrRaw.pFailHigh, 0, 1),
+            crossCheckOutOf10: rrNum(rrRaw.crossCheckOutOf10, 0, 10),
+          }
         : undefined;
+
+    // ── Elicitation checker (module 1) — the facilitator's audit of the SME's RATIONALES ─────────
+    // One cheap batched call reviewing every probability-bearing elicitation for the classic
+    // failures: anchoring, availability/recency, base-rate neglect on small n, motivated optimism,
+    // and rationale↔number arithmetic (a stated tally must imply the stated pFail). Findings are
+    // gated deterministically (lib/elicitation.ts) and attached to stage 0 as display flags — they
+    // ride the existing riskFlags rail, move no number, and a checker failure is fail-open.
+    try {
+      const digestParts: string[] = [];
+      if (replicationRisk) {
+        digestParts.push(`replicationRisk: pFail ${replicationRisk.pFail}${replicationRisk.pFailLow != null ? ` (range ${replicationRisk.pFailLow}–${replicationRisk.pFailHigh})` : ""}${replicationRisk.crossCheckOutOf10 != null ? `, cross-check "${replicationRisk.crossCheckOutOf10} of 10 fail"` : ""} — basis: ${replicationRisk.basis}`);
+      }
+      for (const st of cappedStages as Array<Record<string, unknown>>) {
+        const bits: string[] = [];
+        if (st.nullResponseRate != null) bits.push(`null ${st.nullResponseRate}${st.comparatorRateLow != null ? ` (elicited range ${st.comparatorRateLow}–${st.comparatorRateHigh})` : ""}${st.comparatorSource ? ` — ${st.comparatorSource}` : ""}`);
+        if (st.expectedResponseRate != null) bits.push(`expectedResponseRate ${st.expectedResponseRate} — basis: ${st.expectedResponseRateBasis ?? "(none)"}`);
+        if (bits.length) digestParts.push(`stage "${st.phase}": ${bits.join(" | ")}`);
+      }
+      if (digestParts.length) {
+        const checkRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-6",
+            max_tokens: 1200,
+            messages: [{
+              role: "user",
+              content: `You are the FACILITATOR auditing an expert's probability elicitations for ${drug || "a drug asset"}${indication ? ` (${indication})` : ""}. Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
+
+Elicited quantities:
+${digestParts.map((d) => `- ${d}`).join("\n")}
+
+Check for, and report ONLY genuine issues (max 5):
+1. Rationale↔number arithmetic: does a stated tally/record actually imply the stated probability? (e.g. "2 of 6 replicated" implies ~0.67 failure, not 0.4)
+2. Anchoring: value suspiciously equal to a salient nearby number (a design assumption, a round base rate, the null itself).
+3. Base-rate neglect / overconfidence: small-n evidence treated as definitive; ranges too narrow for the cited evidence.
+4. Availability: rationale leaning on the most recent/most publicized event rather than the full record.
+5. Motivated optimism: every judgment leaning the favorable direction simultaneously.
+6. Unit/definition coherence: rates vs improvements, mismatched denominators, comparator range not containing the null.
+
+Respond with STRICT JSON only:
+{"findings":[{"quantity":"replicationRisk|comparatorRange|expectedResponseRate|nullResponseRate|general","severity":"high|medium|info","message":"one or two sentences"}]}
+Empty findings array if everything is defensible.`,
+            }],
+          }),
+        });
+        if (checkRes.ok) {
+          const cd = (await checkRes.json()) as { content?: { type: string; text?: string }[] };
+          const ctext = (cd.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("").trim();
+          const cs = ctext.indexOf("{"); const ce = ctext.lastIndexOf("}");
+          let cparsed: unknown = null;
+          if (cs >= 0 && ce > cs) { try { cparsed = JSON.parse(ctext.slice(cs, ce + 1)); } catch { cparsed = null; } }
+          const gated = validateElicitationFindings(cparsed, ["replicationRisk", "comparatorRange", "expectedResponseRate", "nullResponseRate", "general"]);
+          if (gated.findings.length && cappedStages[0]) {
+            (cappedStages[0] as Record<string, unknown>).elicitationFindings = gated.findings;
+          }
+          logEnd("dev-plan-checker", __t0, "ok", { findings: gated.findings.length, gateFlags: gated.flags.length });
+        }
+      }
+    } catch (checkErr) {
+      console.error("[dev-plan] elicitation checker failed (fail-open):", (checkErr as Error)?.message);
+    }
 
     logEnd("dev-plan", __t0, "ok", { stages: cappedStages.length, replicationRisk: replicationRisk?.pFail ?? null });
     return res.status(200).json({
