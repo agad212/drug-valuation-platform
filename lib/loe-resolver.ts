@@ -53,6 +53,11 @@
 // case and a (1−p)-weighted exclusivity-floor case, so revenue can be run over both instead of asserting
 // one date. Resolve-or-flag (§1.5) throughout: every clamp, default and divergence is surfaced.
 
+// Module 2 (elicitation): pProtective is interviewed like any other probability — 15/85 bounds
+// before the central, plus a frequency-framing cross-check. The pure coherence helpers come from
+// lib/elicitation (no compute there; this module stays the only place LOE dates are computed).
+import { rangeIncoherence, crossCheckDisagreement } from "./elicitation";
+
 export type PatentType = "compound" | "formulation" | "method-of-use" | "other";
 
 export type PatentInput = {
@@ -62,6 +67,12 @@ export type PatentInput = {
   coversValuedIndication?: boolean; // false → cannot protect THIS indication's revenue
   pProtective?: number;             // 0–1, cited override of the type default (requires a rationale)
   pProtectiveRationale?: string;    // required for an override to be trusted (resolve-or-flag)
+  // Module 2 (elicitation): audit rails on the cited pProtective — display-only, the banded
+  // central still governs the LOE math. Bounds are the 15/85 convention; the cross-check is the
+  // same belief in a frequency framing ("of 10 comparable challenged patents, how many hold?").
+  pProtectiveLow?: number;
+  pProtectiveHigh?: number;
+  crossCheckOutOf10?: number;
   pteEligible?: boolean;            // claimed §156 eligibility (still gated on in-force-at-approval below)
 };
 
@@ -180,8 +191,17 @@ export function patentsFromKeyPatents(keyPatents: unknown): { patents: PatentInp
     // A REASONED protective probability is accepted only with a rationale, and is banded by type upstream.
     const pProtective = typeof k.pProtective === "number" && Number.isFinite(k.pProtective) ? k.pProtective : undefined;
     const pProtectiveRationale = typeof k.pProtectiveRationale === "string" && k.pProtectiveRationale.trim() ? k.pProtectiveRationale.trim() : undefined;
+    // Module 2 elicitation extras — validated pass-through only; coherence is judged downstream.
+    const prob = (x: unknown): number | undefined =>
+      typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= 1 ? x : undefined;
+    const pProtectiveLow = prob(k.pProtectiveLow);
+    const pProtectiveHigh = prob(k.pProtectiveHigh);
+    const crossCheckOutOf10 =
+      typeof k.crossCheckOutOf10 === "number" && Number.isFinite(k.crossCheckOutOf10) &&
+      k.crossCheckOutOf10 >= 0 && k.crossCheckOutOf10 <= 10 ? k.crossCheckOutOf10 : undefined;
     patents.push({
       id, type, expiryYear, coversValuedIndication, pProtective, pProtectiveRationale,
+      pProtectiveLow, pProtectiveHigh, crossCheckOutOf10,
       pteEligible: base != null, // §156 is applied deterministically below, only from a base expiry
     });
   }
@@ -262,6 +282,17 @@ function resolvePatentCeiling(approvalYear: number, patents: PatentInput[], pedi
       } else {
         flags.push(`${p.id} pProtective ${p.pProtective} UNSOURCED (no rationale) → held at the ${p.type} default ${P_PROTECTIVE_DEFAULT[p.type]}`);
       }
+      // Module 2 (elicitation) audit rails — display-only; the banded central above governs.
+      // Range incoherence and cross-check disagreement are SIGNAL (the same belief through two
+      // framings should agree; the literature's warning is that it often doesn't).
+      const inc = rangeIncoherence(p.pProtectiveLow, p.pProtective, p.pProtectiveHigh, `${p.id} pProtective`);
+      if (inc) {
+        flags.push(inc);
+      } else if (p.pProtectiveLow != null && p.pProtectiveHigh != null) {
+        flags.push(`${p.id} pProtective ${p.pProtective} elicited with 15/85 range ${p.pProtectiveLow}–${p.pProtectiveHigh} (the width is the expert's stated uncertainty)`);
+      }
+      const cc = crossCheckDisagreement(clamp01(p.pProtective), p.crossCheckOutOf10);
+      if (cc) flags.push(`${p.id}: ${cc}`);
     }
     eligible.push({ p, effective, pProt });
   }

@@ -2544,6 +2544,18 @@ export default function HomePage() {
                     ))}
                   </div>
                 )}
+                {/* Module 2: the facilitator checker's audit of the pProtective rationales
+                    (gated, display-only; health markers make silence impossible) */}
+                {patentResult.patents?.elicitationReview?.findings?.map((fd: any, i: number) => (
+                  <div key={`pf${i}`} style={{ padding: "3px 0", fontSize: 11.5, lineHeight: 1.5, color: fd.severity === "high" ? "#ef4444" : fd.severity === "medium" ? "#f59e0b" : "var(--text-faint)" }}>
+                    {fd.severity === "high" ? "🔴" : fd.severity === "medium" ? "🟡" : "ℹ️"} {fd.message}
+                  </div>
+                ))}
+                {patentResult.patents?.elicitationReview?.flags?.map((gf: string, i: number) => (
+                  <div key={`pg${i}`} style={{ padding: "2px 0", fontSize: 10.5, lineHeight: 1.4, color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>
+                    gate: {gf}
+                  </div>
+                ))}
               </div>
 
               {/* ── Section 3: Market Intelligence ── always shown ── */}

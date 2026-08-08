@@ -175,7 +175,22 @@ calibration historical outcome/trial-cost data; Evaluate Omnium access.
   (dcbb411 + cc0eb16): registry-n pin (CT.gov enrollment is a FACT), row-vs-deep-dive >2×
   divergence warning + TAM implied-patients line, IPF comparator pinned (event-free responder null
   0.68, ASCEND-cited — kills the 0.15→0.45→0.16 null swings; library pin beats elicited range).
-  REMAINING MODULES: LOE pProtective interview (module 2); dependency statements (module 4);
+  **MODULE 2 SHIPPED: LOE pProtective interview + checker.** loeFullPipeline prompt elicits
+  pProtectiveLow/High (15/85, extremes first) + crossCheckOutOf10 ("of 10 comparable challenged
+  patents of this type, how many hold?"); patentsFromKeyPatents validates the pass-through;
+  loe-resolver flags range incoherence + framing disagreement (display-only — the band-clamped
+  central still governs the case weights); checker via the SHARED lib/elicitation-checker.ts
+  transport (built in the 8/8 self-review round: parseJsonLoose, 25s timeout, deadline skip,
+  gate-failure honesty), findings rendered under Patent Analysis. SELF-REVIEW ROUND (cac9963):
+  10-angle code review over dcbb411..eddecd3 found 15 real defects, all fixed — headline two:
+  the dev-plan checker was ASSIGNING stage findings (destroying the registry-n pin disclosure —
+  now append-only), and ScenarioPanel read elicited p05/p95 only at MOUNT (dead until reload —
+  now derived per render via lib/scenario.elicitedPeakMultipliers with surfaced fallback reasons).
+  Also: ESTIMATED-vs-ACTUAL registry wording, out-of-band n rejected WITH flag, comparator-pin
+  supersession disclosed + digest-visible, IPF pin endpoint-family-gated (ipfEndpointFamilyMatch),
+  bear=$0M honored end-to-end, NaN coercion, Apply-by-name, stale bear/bull cleared on re-run,
+  eligiblePatients persisted + preferred over back-solve, IPF→rare_orphan CPP band.
+  REMAINING MODULES: dependency statements (module 4);
   checker external-facts grounding (the "ZEPHYRUS-2 positive" gap). Original placement:
   (1) **Interview protocol** replaces one-shot emissions — extremes first, then bounds, then center,
   then a consistency cross-check via a second framing; ONE batched call per module (API frugality).

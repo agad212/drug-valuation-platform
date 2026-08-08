@@ -365,3 +365,64 @@ describe("LOE resolver — case distribution integrity", () => {
     }
   });
 });
+
+describe("LOE resolver - module 2 elicitation rails on pProtective (display-only; central governs)", () => {
+  const basePatent = {
+    id: "US9999999", type: "compound" as const, expiryYear: 2040, coversValuedIndication: true,
+    pteEligible: false, pProtective: 0.85, pProtectiveRationale: "composition-of-matter; no viable design-around",
+  };
+
+  it("coherent 15/85 range is disclosed as a flag; the banded central still governs", () => {
+    const r = resolveLoe({
+      approvalYear: 2031, exclusivity: { isNCE: true },
+      patents: [{ ...basePatent, pProtectiveLow: 0.7, pProtectiveHigh: 0.95 }],
+    });
+    expect(r.flags.join(" ")).toMatch(/elicited with 15\/85 range 0.7/);
+    const patentCase = r.cases.find((c) => c.basis === "patent");
+    expect(patentCase?.weight).toBeCloseTo(0.85, 2);
+  });
+
+  it("incoherent range (central above high) is flagged as incoherent, value still band-governed", () => {
+    const r = resolveLoe({
+      approvalYear: 2031, exclusivity: { isNCE: true },
+      patents: [{ ...basePatent, pProtectiveLow: 0.3, pProtectiveHigh: 0.6 }],
+    });
+    expect(r.flags.join(" ")).toMatch(/incoherent elicitation/);
+    const patentCase = r.cases.find((c) => c.basis === "patent");
+    expect(patentCase?.weight).toBeCloseTo(0.85, 2);
+  });
+
+  it("cross-check disagreement between framings is flagged as signal", () => {
+    // stated 0.85 vs "5 of 10 comparable patents hold" (0.5) -> disagreement > 0.15 tolerance
+    const r = resolveLoe({
+      approvalYear: 2031, exclusivity: { isNCE: true },
+      patents: [{ ...basePatent, crossCheckOutOf10: 5 }],
+    });
+    expect(r.flags.join(" ")).toMatch(/two framings of the same belief disagree/);
+  });
+
+  it("agreeing cross-check stays silent", () => {
+    const r = resolveLoe({
+      approvalYear: 2031, exclusivity: { isNCE: true },
+      patents: [{ ...basePatent, crossCheckOutOf10: 8 }],
+    });
+    expect(r.flags.join(" ")).not.toMatch(/two framings/);
+  });
+});
+
+describe("patentsFromKeyPatents - module 2 pass-through validation", () => {
+  it("valid elicitation extras pass through; junk is dropped", () => {
+    const { patents } = patentsFromKeyPatents([
+      { number: "US1", type: "compound", baseExpiry: 2040, coversValuedIndication: true,
+        pProtective: 0.85, pProtectiveRationale: "r", pProtectiveLow: 0.7, pProtectiveHigh: 0.95, crossCheckOutOf10: 8 },
+      { number: "US2", type: "method-of-use", baseExpiry: 2038, coversValuedIndication: true,
+        pProtective: 0.3, pProtectiveRationale: "r", pProtectiveLow: 1.7, pProtectiveHigh: "wide", crossCheckOutOf10: 99 },
+    ]);
+    expect(patents[0].pProtectiveLow).toBe(0.7);
+    expect(patents[0].pProtectiveHigh).toBe(0.95);
+    expect(patents[0].crossCheckOutOf10).toBe(8);
+    expect(patents[1].pProtectiveLow).toBeUndefined();
+    expect(patents[1].pProtectiveHigh).toBeUndefined();
+    expect(patents[1].crossCheckOutOf10).toBeUndefined();
+  });
+});

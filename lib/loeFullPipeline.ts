@@ -1,5 +1,6 @@
 import { inferLOE } from "./loeAdapter";
 import { callClaudeWithSearch } from "./claudeSearch";
+import { runElicitationChecker } from "./elicitation-checker";
 
 // ─── Claude patent + LOE analysis with native web search ──────────────────────
 
@@ -64,6 +65,19 @@ HOW LIKELY IS EACH PATENT TO ACTUALLY BLOCK GENERIC ENTRY (pProtective, 0-1)? Re
 - ALWAYS pair pProtective with pProtectiveRationale. Without a rationale the engine discards the number and
   uses its own default, so an unexplained figure is wasted effort.
 
+ELICITATION PROTOCOL for pProtective — you are the expert under a facilitated probability elicitation.
+Work EXTREMES FIRST, center last (anchoring runs downhill from the first number you commit to):
+1. pProtectiveLow / pProtectiveHigh: your 15/85 bounds FIRST — a ~15% chance the true protective strength
+   is below the low / above the high. Think how litigation, IPR, or a design-around could surprise you in
+   each direction. Experts systematically under-cover the true range; when in doubt, widen.
+2. pProtective: your central value, and it MUST lie inside the bounds.
+3. crossCheckOutOf10: the SAME belief in a second framing — of 10 comparable patents of this type facing
+   generic challenge (Paragraph IV litigation, IPR, design-around attempts), how many actually hold and
+   protect the revenue? Answer from your knowledge of litigation outcomes for this patent type — do NOT
+   just convert your pProtective. Disagreement between framings is expected signal (flagged, not punished).
+A reviewer will audit your rationale for anchoring, availability (the one famous case), and base-rate
+neglect (compound patents mostly hold; MOU patents mostly get carved out) — write reasoning that survives it.
+
 Respond ONLY with valid JSON:
 {
   "loeMin": <integer year or null>,
@@ -71,7 +85,7 @@ Respond ONLY with valid JSON:
   "bestEstimate": <integer year or null>,
   "confidence": "high" | "medium" | "low",
   "keyPatents": [
-    { "number": "<e.g. US9073994B2>", "title": "<title>", "url": "<url>", "type": "compound" | "formulation" | "method-of-use" | "process" | "other", "filingYear": <integer or null>, "baseExpiry": <filing+20, RAW, no PTE, or null>, "estimatedExpiry": <documented granted adjustment only, else null>, "coversValuedIndication": <true | false | null>, "scopeRationale": "<what the claims actually cover>", "pProtective": <0-1 or null>, "pProtectiveRationale": "<design-around reasoning; REQUIRED for pProtective to be used>", "relevance": "high" | "medium" | "low", "reason": "<one sentence>" }
+    { "number": "<e.g. US9073994B2>", "title": "<title>", "url": "<url>", "type": "compound" | "formulation" | "method-of-use" | "process" | "other", "filingYear": <integer or null>, "baseExpiry": <filing+20, RAW, no PTE, or null>, "estimatedExpiry": <documented granted adjustment only, else null>, "coversValuedIndication": <true | false | null>, "scopeRationale": "<what the claims actually cover>", "pProtective": <0-1 or null>, "pProtectiveLow": <0-1, your 15th-percentile bound (state BEFORE the central), or null>, "pProtectiveHigh": <0-1, your 85th-percentile bound, or null>, "crossCheckOutOf10": <0-10: of 10 comparable challenged patents of this type, how many hold? or null>, "pProtectiveRationale": "<design-around reasoning; REQUIRED for pProtective to be used>", "relevance": "high" | "medium" | "low", "reason": "<one sentence>" }
   ],
   "marketIntelligence": [
     { "source": "<publisher>", "url": "<url>", "loeYearMentioned": <integer or null>, "snippet": "<key quote, max 120 chars>" }
@@ -148,6 +162,9 @@ export type LoePipelineResult = {
     patentContext: string;
     caveats: string[];
     marketIntelligence: any[];
+    // Module 2: the facilitator checker's audit of the pProtective rationales (gated,
+    // display-only prose with fail-open health markers — silence always means did-not-run).
+    elicitationReview?: { findings: { severity: "high" | "medium" | "info"; message: string }[]; flags: string[] };
   } | null;
 };
 
@@ -179,6 +196,38 @@ export async function runLoePipeline(
       hints?.indication
     );
   } catch { /* proceed without */ }
+
+  // Module 2: the facilitator checker — one batched call auditing the pProtective RATIONALES
+  // (never proposing numbers). Shared transport/gate/health markers (lib/elicitation-checker);
+  // display-only prose attached to the patents block and rendered under Patent Analysis.
+  let elicitationReview: { findings: { severity: "high" | "medium" | "info"; message: string }[]; flags: string[] } | undefined;
+  const elicitedPats = (patentAnalysis?.keyPatents ?? []).filter((k: any) => k?.pProtective != null);
+  if (elicitedPats.length) {
+    const digest = elicitedPats.map((k: any) =>
+      `${k.number} (${k.type}${k.coversValuedIndication === false ? ", does NOT cover the valued indication" : ""}): pProtective ${k.pProtective}${k.pProtectiveLow != null ? ` (15/85 range ${k.pProtectiveLow}–${k.pProtectiveHigh ?? "?"})` : ""}${k.crossCheckOutOf10 != null ? `, cross-check "${k.crossCheckOutOf10} of 10 hold"` : ""} — rationale: ${k.pProtectiveRationale ?? "(none — the engine will discard this number)"}`
+    ).join("\n");
+    elicitationReview = await runElicitationChecker({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      subjectLabel: "the patent-strength elicitations",
+      allowedQuantities: ["pProtective", "loeRange", "general"],
+      prompt: `You are the FACILITATOR auditing a patent analyst's protective-probability elicitations for ${drugName}${hints?.indication ? ` (valued indication: ${hints.indication})` : ""}. Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
+
+${digest}
+
+Overall LOE range stated: ${patentAnalysis?.loeMin ?? "?"}–${patentAnalysis?.loeMax ?? "?"} (best ${patentAnalysis?.bestEstimate ?? "?"}).
+
+Report ONLY genuine issues (max 5):
+1. Base-rate neglect: compound patents mostly survive challenge; method-of-use patents mostly get carved out (§viii) — a value fighting those base rates needs case-specific evidence.
+2. Anchoring: pProtective suspiciously equal to a round default or another patent's value.
+3. Availability: rationale leaning on one famous case (e.g. GSK v. Teva alone) rather than the litigation record for this patent type.
+4. Rationale↔number arithmetic: a cross-check tally of "N of 10 hold" must roughly imply the stated probability; a hedge-filled rationale must not carry a confident number.
+5. Scope coherence: a patent said NOT to cover the valued indication cannot justify a late LOE; ranges too narrow given admitted uncertainty.
+
+Respond with STRICT JSON only:
+{"findings":[{"quantity":"pProtective|loeRange|general","severity":"high|medium|info","message":"one or two sentences, name the patent number"}]}
+Empty findings array if everything is defensible.`,
+    });
+  }
 
   const fdaFallbackYear = drugFoundInFDA && obResult?.loeDate ? Number(obResult.loeDate.slice(0, 4)) : null;
 
@@ -235,6 +284,7 @@ export async function runLoePipeline(
       patentContext: patentAnalysis.patentContext,
       caveats: patentAnalysis.caveats || [],
       marketIntelligence: patentAnalysis.marketIntelligence || [],
+      ...(elicitationReview ? { elicitationReview } : {}),
     } : null,
     // Structured, indication-scoped orphan designation from the retriever that actually reads the orphan
     // registries/trade press. A SECOND independent confirmation path alongside /api/ptrs-layer2: the two
