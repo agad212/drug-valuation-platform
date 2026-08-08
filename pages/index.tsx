@@ -415,9 +415,9 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isP
     loeYear: ind.loeYear ?? valuation.loeYear,
   }), [ind.peakSales, ind.launchYear, ind.loeYear, valuation]);
 
-  const cellInput = (type: "text" | "number", val: string | number | undefined, placeholder: string, onChange: (v: string) => void) => (
+  const cellInput = (type: "text" | "number", val: string | number | undefined, placeholder: string, onChange: (v: string) => void, title?: string) => (
     <input type={type} className="input-base" style={{ fontSize: 12, padding: "4px 8px", minWidth: 0 }}
-      value={val ?? ""} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      value={val ?? ""} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} title={title} />
   );
 
   // Dev plan is the single source of truth for the primary indication's dev cost
@@ -437,9 +437,15 @@ function IndicationRow({ ind, globalPtrs, valuation, numIndications, halted, isP
     <div style={{ display: "grid", gridTemplateColumns: "minmax(130px, 2fr) 90px 68px 68px 64px 80px 80px 80px 24px", gap: 6, alignItems: "center", marginBottom: 6 }}>
       {cellInput("text", ind.name, "Indication name", (v) => onUpdate(ind.id, { name: v }))}
       {cellInput("number", ind.peakSales != null ? ind.peakSales / 1e6 : "", String((valuation.peakSales ?? 0) / 1e6), (v) => onUpdate(ind.id, { peakSales: Number(v) * 1e6 }))}
-      {cellInput("number", ind.launchYear ?? "", String(valuation.launchYear ?? ""), (v) => onUpdate(ind.id, { launchYear: v ? Number(v) : undefined }))}
+      {/* 4.5 display binding (8/7 live gap): the engine may FLOOR/SHIFT this row's launch and DERIVE
+          its P — the cells must show the values the engine actually used, not just the raw inputs. */}
+      {cellInput("number", ind.launchYear ?? "", String((useStructural && structural!.effLaunch != null ? structural!.effLaunch : valuation.launchYear) ?? ""), (v) => onUpdate(ind.id, { launchYear: v ? Number(v) : undefined }),
+        useStructural && structural!.effLaunch != null && ind.launchYear != null && structural!.effLaunch !== ind.launchYear
+          ? `Engine uses ${structural!.effLaunch} (launch floored to the remaining development path / shifted by relationship) — this cell is your raw input`
+          : undefined)}
       {cellInput("number", ind.loeYear ?? "", String(valuation.loeYear ?? ""), (v) => onUpdate(ind.id, { loeYear: v ? Number(v) : undefined }))}
-      {cellInput("number", ind.ptrs != null ? +(ind.ptrs * 100).toFixed(1) : "", halted ? "—" : +(effectivePtrs * 100).toFixed(1) + "%", (v) => onUpdate(ind.id, { ptrs: v ? Number(v) / 100 : undefined }))}
+      {cellInput("number", ind.ptrs != null ? +(ind.ptrs * 100).toFixed(1) : "", halted ? "—" : +((useStructural ? structural!.ptrs : effectivePtrs) * 100).toFixed(1) + "%", (v) => onUpdate(ind.id, { ptrs: v ? Number(v) / 100 : undefined }),
+        useStructural && structural!.ptrsBasis ? `Derived for this row: ${structural!.ptrsBasis}` : undefined)}
       {useStructural
         ? <div style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-mono)", textAlign: "right" }} title="Risk-adjusted dev cost — this indication's share of the development plan">{Math.round(structural!.devCostPV / 1e6)}</div>
         : governed
