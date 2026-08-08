@@ -181,10 +181,18 @@ describe("Part-final — base-rate ceilings + stage-integral stability (general)
     // near-point 0.0005 comparator saturates even μ=1.5). This is the exact configuration that used
     // to produce the raw ~96% the ceiling had to cap; on the anchored scale the raw integral is an
     // honest probability below the cap, so the ceiling never fires.
+    // RECONCILED (§1.6, concurrent-control rule): benchmark σ² now only applies to designs judged
+    // against an EXTERNAL benchmark — the scenario this test always described ("benchmark width").
+    // The stage is therefore SINGLE-ARM at n=300, the like-for-like exposure of the original
+    // 600-patient RCT (300/arm); on an RCT the same σ² is rightly excluded (its own test lives in
+    // elicitation.test.ts) and a μ=1.5 RCT saturating honestly at that n is not a pathology.
     const stages: DevStageInput[] = [
-      { id: "s1", name: "cur", phase: "Phase 2", n: 600, cpp: 200000, trialDesign: tightDesign,
+      { id: "s1", name: "cur", phase: "Phase 2", n: 300, cpp: 200000,
+        trialDesign: { ...tightDesign, designType: "single_arm" },
         isCurrentTrial: true, enrollmentRatePerMonth: 10, treatmentObsMonths: 12, startupCushionMonths: 5,
-        isTimeToEvent: false, nullResponseRate: 0.20, comparatorSigma2: 0.004 },
+        // 0.008 = the TTX fixture's own captured single-arm benchmark width (a real emission,
+        // not an invented width; the old 0.004 was calibrated to the RCT split-arm geometry).
+        isTimeToEvent: false, nullResponseRate: 0.20, comparatorSigma2: 0.008 },
     ];
     const st = computeDevPlan(mixtureFromMssVariance(0.75, 0.08), 0.1, { stages, regulatoryContext: "btd" }, 0).stages[0];
     expect(st.trialSuccessProbRaw).toBeLessThan(0.90);

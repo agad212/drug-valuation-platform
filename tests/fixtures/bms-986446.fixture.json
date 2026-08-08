@@ -160,23 +160,24 @@
     "ownerType": "Owner"
   },
   "expected": {
+    "_repinNote": "DELIBERATE RE-PIN #3 (2026-08-07 night, concurrent-control rule). Both of this fixture's stages are designType rct AND carried comparatorSigma2 0.01 — a combination that contradicts the engine's own documented convention ('comparatorSigma2: 0 for RCTs; benchmark variance is for single-arm vs historical control'), captured from live LLM emissions that habitually violated it. The 8/7 8:48pm live run showed elicited comparator ranges pouring benchmark variance into RCT power denominators (Phase 3 crushed to 22% vs ~50% under the convention). Fix: dev-plan excludes benchmark variance from concurrent-control power (flagged, visible). Effect here: raw s0 0.14644→0.22200, s1 0.23203→0.69393, pApproval 0.02519→0.11418 — INSIDE the authored band [0.01, 0.15]; eROI 9.38→35.22 (below the ~50x B1 WARN). TTX fixture unaffected (its variance sits on a single-arm stage — correct semantics). Per §1.2 the input was wrong independent of the output.",
     "finalMss": 0.34861,
-    "pApproval": 0.02519,
-    "pAllTrialsSuccess": 0.02963,
-    "s0_trialSuccessProb": 0.12770,
-    "s0_trialSuccessProbRaw": 0.14644,
+    "pApproval": 0.11418,
+    "pAllTrialsSuccess": 0.13433,
+    "s0_trialSuccessProb": 0.19358,
+    "s0_trialSuccessProbRaw": 0.22200,
     "s0_modalityHaircut": 0.872,
-    "s1_trialSuccessProb": 0.23203,
+    "s1_trialSuccessProb": 0.69393,
     "s1_modalityHaircut": 0.872,
-    "totalDurationMonths": 81,
+    "totalDurationMonths": 80,
     "impliedLaunchYear": 2033,
     "s0_cpp": 110000,
     "s1_cpp": 170000,
-    "totalRiskAdjCostM": 15.31292,
+    "totalRiskAdjCostM": 19.89782,
     "peakSalesM": 3800,
     "loeYear": 2045,
     "revenuePVM": 6313.11604,
-    "eNPVM": 143.7,
-    "eROI": 9.38
+    "eNPVM": 700.9,
+    "eROI": 35.22
   }
 }

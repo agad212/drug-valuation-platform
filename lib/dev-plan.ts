@@ -696,13 +696,31 @@ export function computeDevPlan(
     // An SME (human or AI) can state "the placebo/control rate plausibly runs 10–20%"; nobody can
     // calibrate a raw σ²=0.004 by feel. When a valid range was elicited, σ² derives from it
     // deterministically (elicitation.ts, 15/85 convention); the raw emission becomes a footnote.
+    //
+    // CONCURRENT-CONTROL RULE (the 8/7 8:48pm live finding): benchmark variance applies ONLY to
+    // designs judged against an EXTERNAL benchmark (single-arm vs historical control). An RCT
+    // measures its control arm IN-TRIAL, and the drug prior is expressed as a MARGIN over the
+    // anchor — uncertainty in the null's absolute location largely cancels for a concurrent test
+    // of the difference. This has always been the engine's documented convention
+    // ("comparatorSigma2: 0 for RCTs"); the LLM violated it in every live run (0.003–0.01), and
+    // the elicited ranges made the violation dominant (live: σ²=0.0093 crushed Phase 3 to 22%
+    // when the convention gives ~50%). §1.2: an input contradicting the engine's own stated
+    // semantics — corrected at the seam, visibly, for RCTs regardless of emission path.
     const elicitedComparatorSig2 = sigma2FromBounds(stageInput.comparatorRateLow, stageInput.comparatorRateHigh);
-    const comparatorSig2 = elicitedComparatorSig2 ?? stageInput.comparatorSigma2 ?? 0;
-    if (elicitedComparatorSig2 != null) {
+    const requestedComparatorSig2 = elicitedComparatorSig2 ?? stageInput.comparatorSigma2 ?? 0;
+    const isConcurrentControl = stageInput.trialDesign.designType === "rct";
+    const comparatorSig2 = isConcurrentControl ? 0 : requestedComparatorSig2;
+    if (elicitedComparatorSig2 != null && !isConcurrentControl) {
       l2.riskFlags.push({
         severity: "info",
         message: `comparator σ² ${elicitedComparatorSig2.toFixed(4)} DERIVED from the elicited 15/85 range [${((stageInput.comparatorRateLow as number) * 100).toFixed(0)}–${((stageInput.comparatorRateHigh as number) * 100).toFixed(0)}%] (σ = width/2.073)` +
           (stageInput.comparatorSigma2 != null ? ` — supersedes the raw emitted σ² ${stageInput.comparatorSigma2}` : ""),
+      });
+    }
+    if (isConcurrentControl && requestedComparatorSig2 > 0) {
+      l2.riskFlags.push({
+        severity: "info",
+        message: `comparator σ² ${requestedComparatorSig2.toFixed(4)}${elicitedComparatorSig2 != null ? ` (from the elicited range [${((stageInput.comparatorRateLow as number) * 100).toFixed(0)}–${((stageInput.comparatorRateHigh as number) * 100).toFixed(0)}%])` : ""} EXCLUDED from the power computation — a concurrent-control RCT measures its control arm in-trial, so historical-benchmark uncertainty does not degrade its power (documented engine convention; benchmark variance applies to single-arm designs). The range still informs where the null sits.`,
       });
     }
 

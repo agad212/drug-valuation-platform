@@ -159,9 +159,18 @@ describe.each(FIXTURES)("Deterministic harness — %s", (file) => {
 // (μ ≈ 0.70) at 2.5% is defensible against the class record; the old 26.75% would have made
 // it a near-best-in-industry CNS bet. The fixture's documented pApprovalBand was re-authored
 // [0.168,0.368] → [0.01,0.15] with the rationale recorded in the fixture meta.
+// RE-PIN #3 (2026-08-07 night, concurrent-control rule): tau 0.02519 → 0.11418. Both tau stages
+// are designType rct AND carried comparatorSigma2 0.01 — contradicting the engine's own documented
+// convention (benchmark variance is for single-arm vs historical control; an RCT measures its
+// control in-trial, and the margin-anchored prior cancels null-location uncertainty for a
+// concurrent difference test). Live-verified 8/7 8:48pm: elicited comparator ranges poured σ²=0.0093
+// into RCT power denominators, crushing Phase 3 to 22% (convention gives ~50%). dev-plan now
+// excludes benchmark variance for RCTs (flagged). New tau value sits INSIDE the authored
+// pApprovalBand [0.01, 0.15]; full lineage in the fixture's _repinNote. TTX unaffected (variance on
+// a single-arm stage — correct semantics, byte-identical).
 const FROZEN_PAPPROVAL: Record<string, number> = {
   "ttx-mc138.fixture.json": 0.02844,
-  "bms-986446.fixture.json": 0.02519,
+  "bms-986446.fixture.json": 0.11418,
 };
 
 describe.each(FIXTURES)("Fix #2 financial pins — %s", (file) => {
