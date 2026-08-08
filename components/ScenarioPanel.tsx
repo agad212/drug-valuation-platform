@@ -21,9 +21,14 @@ const fmtM = (n: number) => (Math.abs(n) >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : 
 type Branch = { id: string; label: string; weight: number; deltas: ScenarioDeltas };
 
 const DEFAULT_BRANCHES: Branch[] = [
-  { id: "bear", label: "Bear", weight: 0.25, deltas: { peakMult: 0.7 } },
-  { id: "base", label: "Base", weight: 0.5, deltas: {} },
-  { id: "bull", label: "Bull", weight: 0.25, deltas: { peakMult: 1.3 } },
+  // Extended Pearson-Tukey three-point discretization (Keefer & Bodily 1983): weights
+  // 0.185 / 0.63 / 0.185 with the outer branches read as the p05/p95 values of the elicited
+  // distribution. Replaces the hand-set 25/50/25 — a cited discretization, not a chosen one.
+  // The ×0.7/×1.3 peak multipliers remain PLACEHOLDERS for p05/p95 until the revenue module's
+  // elicited bear/bull land here (elicitation module 3); user-editable as before.
+  { id: "bear", label: "Bear (p05)", weight: 0.185, deltas: { peakMult: 0.7 } },
+  { id: "base", label: "Base (p50)", weight: 0.63, deltas: {} },
+  { id: "bull", label: "Bull (p95)", weight: 0.185, deltas: { peakMult: 1.3 } },
 ];
 
 export default function ScenarioPanel({ base, devPlan }: { base: Valuation; devPlan?: DevPlanResult | null }) {
