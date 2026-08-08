@@ -158,8 +158,13 @@ calibration historical outcome/trial-cost data; Evaluate Omnium access.
   (a row still needing Phase 3 cannot launch in 2 years). Zero API; capability-gated in effect (lead
   and single-indication paths byte-identical). Emissions stay interview-ready (structured fields +
   basis strings). v2 later: mechanism read-through, per-indication cost paths, class haircut.
-- **AI-ELICITATION AXIS (next major axis, after 4.5):** recast the LLM layer as an SME under a
-  facilitated elicitation (per the user's BMS SOA training docs, in repo lore 8/7). Where it goes:
+- **AI-ELICITATION AXIS — MODULE 1 SHIPPED (6f522df + c4d8d9e): dev-plan interview + checker.**
+  `lib/elicitation.ts` (sigma2FromBounds 15/85 convention, range coherence, N-of-10 cross-check,
+  checker gate); prompt RULE 14; comparator σ² now DERIVES from an elicited range and supersedes raw
+  emissions; checker = one batched Sonnet call auditing rationales (arithmetic/anchoring/base-rate
+  neglect/availability/motivated optimism), findings ride the stage riskFlags rail, fail-open.
+  REMAINING MODULES (design below): LOE pProtective interview (module 2); revenue WAC/share/count +
+  Pearson-Tukey scenario weights (module 3); dependency statements (module 4). Original placement:
   (1) **Interview protocol** replaces one-shot emissions — extremes first, then bounds, then center,
   then a consistency cross-check via a second framing; ONE batched call per module (API frugality).
   Dev-plan module first (replicationRisk, expectedResponseRate, comparatorSigma2, nullRR), then LOE
