@@ -13,6 +13,7 @@
 
 import type { NextApiRequest, NextApiResponse } from "next";
 import { validateIndicationStructure } from "../../lib/indication-structure-interpreter";
+import { runElicitationChecker } from "../../lib/elicitation-checker";
 import { logStart, logEnd } from "../../lib/endpoint-timing";
 
 const SYSTEM_PROMPT = `You classify how the NON-LEAD indications of a single drug asset relate to the lead
@@ -24,7 +25,13 @@ number. There is no numeric field. If you write one it is discarded — the engi
 from your structure, not you. You choose ONLY a relationship label + a prerequisite reference + a reason.
 
 Emit ONE JSON object inside <structure_json>...</structure_json>:
-  { "relationships": [ { "id": <indication id>, "relationship": "independent" | "conditional-on" | "sequential-after", "ref": <prerequisite indication id> | null, "rationale": <one short line> } ] }
+  { "relationships": [ { "id": <indication id>, "relationship": "independent" | "conditional-on" | "sequential-after", "ref": <prerequisite indication id> | null, "rationale": <one short line>, "mechanismSharedWithLead": true | false | null } ] }
+
+mechanismSharedWithLead is an OBSERVABLE FACT, not a dependency: does this indication rely on the SAME
+molecular target/mechanism as the LEAD indication? It NEVER justifies conditional-on or sequential-after
+on its own (the stated-dependency rule below stands unchanged). The engine uses it only to DISCLOSE that
+independent same-mechanism probabilities are treated as uncorrelated — an honesty flag, not a value change.
+Emit it truthfully: understating a shared mechanism hides real correlation from the user.
 
 SPLIT FIELDS — emit "relationship" and "ref" SEPARATELY. NEVER write a packed string like
 "conditional-on:ind_2". Put the label in "relationship" and the prerequisite's id in "ref". The engine
@@ -142,11 +149,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // DETERMINISTIC validation gate — the LLM's raw output NEVER reaches the aggregation unvalidated.
     const result = validateIndicationStructure(parsed, indicationIds);
 
+    // ── Module 4: the facilitator checker — audits the dependency RATIONALES (never the labels' effect).
+    // Shared transport/gate/health markers (lib/elicitation-checker). Findings are folded into the
+    // existing structure-flags rail (rendered + persisted by the UI already); a checker "high" renders
+    // with the reject styling. Display-only — the validated relationships above are untouched.
+    let checkerFlags: { code: string; severity: "reject" | "info"; message: string }[] = [];
+    if (result.relationships.length) {
+      const digest = result.relationships.map((rel) => {
+        const a = result.assumptions.find((x) => x.id === rel.id);
+        return `"${rel.id}": resolved ${rel.indicationRelationship}${a?.source === "default" ? " (DEMOTED by the validator)" : ""} — rationale: ${rel.rationale}`;
+      }).join("\n");
+      const demotions = result.flags.filter((f) => f.severity === "reject").map((f) => f.message).join("; ") || "none";
+      const review = await runElicitationChecker({
+        apiKey: anthropicKey,
+        handlerStartMs: __t0,
+        subjectLabel: "the dependency calls",
+        allowedQuantities: ["relationship", "mechanism", "general"],
+        prompt: `You are the FACILITATOR auditing an expert's indication-dependency calls for ${String(drug ?? "a drug asset")}${mechanism ? ` (mechanism: ${String(mechanism)})` : ""}. Audit each RATIONALE — never propose a different relationship; deterministic code already validated the structure.
+
+Development context provided to the expert: ${String(summary ?? "(none)")}
+
+The expert's resolved calls:
+${digest}
+
+Validator demotions already applied: ${demotions}
+
+Report ONLY genuine issues (max 5):
+1. INFERRED-not-STATED: a conditional/sequential rationale that cites no concrete program language ("likely gated", "appears to be an expansion") — inference dressed as fact.
+2. Label↔rationale mismatch: a rationale describing pure TIMING under a conditional-on label, or a stated go-decision gate under sequential-after.
+3. Missed stated dependency: the development context explicitly states a gate or staggering that the expert labeled independent.
+4. Motivated structure: every call leaning the value-maximizing way (all independent) despite stated dependencies in the context.
+5. Mechanism honesty: the context indicates the same target/mechanism as the lead but the call's rationale is silent about it.
+
+Respond with STRICT JSON only:
+{"findings":[{"quantity":"relationship|mechanism|general","severity":"high|medium|info","message":"one or two sentences, name the indication id"}]}
+Empty findings array if everything is defensible.`,
+      });
+      checkerFlags = review.findings.map((f) => ({
+        code: f.severity === "high" ? "elicitation-checker-high" : "elicitation-checker",
+        severity: f.severity === "high" ? ("reject" as const) : ("info" as const),
+        message: f.message,
+      }));
+      if (review.flags.length) console.warn("[indication-structure] checker gate flags:", review.flags.join(" | "));
+    }
+
     // Return ONLY the validated relationships + flags + assumptions. No number. Cashflow computes downstream.
-    logEnd("indication-structure", __t0, "ok", { relationships: result.relationships.length });
+    logEnd("indication-structure", __t0, "ok", { relationships: result.relationships.length, checkerFindings: checkerFlags.length });
     return res.status(200).json({
       relationships: result.relationships,
-      flags: result.flags,
+      flags: [...result.flags, ...checkerFlags],
       assumptions: result.assumptions,
       rejected: result.rejected,
       explanation: rawText.replace(/<structure_json>[\s\S]*?<\/structure_json>/g, "").trim(),

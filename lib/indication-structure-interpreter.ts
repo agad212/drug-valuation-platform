@@ -31,11 +31,16 @@ export type RelationshipLabel = "independent" | "conditional-on" | "sequential-a
 
 // What the LLM emits per non-lead indication (whitelist target). NO numeric field — a number cannot be
 // represented here (tsc-enforced). `ref` is null for independent, a prerequisite indication id otherwise.
+// mechanismSharedWithLead (module 4) is an OBSERVABLE, not a dependency: sharing the lead's mechanism
+// never justifies conditional/sequential on its own — it only triggers the correlation DISCLOSURE flag
+// below (the aggregation treats independent Ps as uncorrelated; if the shared mechanism is the dominant
+// risk, that overstates diversification — surfaced, never adjusted).
 export type RawRelationship = {
   id: string;
   relationship: RelationshipLabel;
   ref: string | null;
   rationale: string;
+  mechanismSharedWithLead?: boolean | null;
 };
 
 // What the validator returns per indication it resolved. `indicationRelationship` is the packed string
@@ -128,6 +133,8 @@ export function validateIndicationStructure(raw: unknown, indicationIds: string[
   const leadId = indicationIds[0];
   const seen = new Set<string>();
   const candidates: CandidateEdge[] = [];
+  // Module 4: ids the LLM STATED share the lead's mechanism (literal true only — whitelist read).
+  const mechShared = new Set<string>();
 
   // ── STAGE 1: shape + reference resolution per entry (whitelist read of id/relationship/ref/rationale) ──
   for (const entryU of rawList) {
@@ -154,6 +161,7 @@ export function validateIndicationStructure(raw: unknown, indicationIds: string[
       continue;
     }
     seen.add(id);
+    if (e.mechanismSharedWithLead === true) mechShared.add(id);
 
     if (typeof relationship !== "string" || !LABELS.includes(relationship as RelationshipLabel)) {
       demotePair(flags, id, `relationship "${String(relationship)}"`, "bad-label", "unknown relationship label");
@@ -222,6 +230,22 @@ export function validateIndicationStructure(raw: unknown, indicationIds: string[
         code: "structure-chain-singlelevel",
         severity: "info",
         message: `${c.id}: ${c.relationship} ${c.ref}, which itself depends on another indication — conditioned at a SINGLE level (the prerequisite's own P/launch, not cumulative); transitive conditioning is a later refinement`,
+      });
+    }
+  }
+
+  // ── STAGE 4 (module 4): mechanism-correlation disclosure on indications aggregated as independent ──
+  // The aggregation treats independent Ps as UNCORRELATED. When the expert states an indication shares
+  // the lead's mechanism but no go-decision gate exists, that assumption deserves a face: if the shared
+  // mechanism is the dominant risk, the portfolio's diversification is overstated. §1.5 surfaced, value
+  // NOT adjusted (a correlation coefficient would be an invented constant; read-through is a planned
+  // refinement). A gated (conditional-on) same-mechanism indication needs no flag — the gate couples them.
+  for (const rel of relationships) {
+    if (rel.indicationRelationship === "independent" && mechShared.has(rel.id)) {
+      flags.push({
+        code: "structure-mechanism-correlation",
+        severity: "info",
+        message: `${rel.id}: stated to SHARE the lead's mechanism with no stated go-decision gate — aggregated as independent, so the portfolio treats their success probabilities as UNCORRELATED. If the shared mechanism is the dominant risk, diversification is overstated (mechanism read-through into the prior is a planned refinement; the value is NOT adjusted here).`,
       });
     }
   }

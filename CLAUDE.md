@@ -190,7 +190,17 @@ calibration historical outcome/trial-cost data; Evaluate Omnium access.
   supersession disclosed + digest-visible, IPF pin endpoint-family-gated (ipfEndpointFamilyMatch),
   bear=$0M honored end-to-end, NaN coercion, Apply-by-name, stale bear/bull cleared on re-run,
   eligiblePatients persisted + preferred over back-solve, IPF→rare_orphan CPP band.
-  REMAINING MODULES: dependency statements (module 4);
+  **MODULE 4 SHIPPED: dependency interview + checker — THE ELICITATION AXIS IS COMPLETE (all four
+  modules live).** indication-structure prompt gains `mechanismSharedWithLead` (an OBSERVABLE, never
+  a dependency signal — the stated-vs-inferred rule stands); the interpreter's stage 4 emits a
+  correlation DISCLOSURE flag when a same-mechanism indication aggregates as independent (Ps
+  treated as uncorrelated → diversification possibly overstated; value NOT adjusted — a
+  coefficient would be an invented constant, read-through stays a planned refinement). Checker via
+  shared transport audits the dependency RATIONALES (inferred-not-stated, label↔rationale mismatch,
+  missed stated gates, motivated all-independent structure, mechanism honesty); findings fold into
+  the EXISTING structure-flags rail (zero new UI, persisted by the autosave already; checker
+  "high" renders with reject styling).
+  REMAINING ON THE AXIS:
   checker external-facts grounding (the "ZEPHYRUS-2 positive" gap). Original placement:
   (1) **Interview protocol** replaces one-shot emissions — extremes first, then bounds, then center,
   then a consistency cross-check via a second framing; ONE batched call per module (API frugality).

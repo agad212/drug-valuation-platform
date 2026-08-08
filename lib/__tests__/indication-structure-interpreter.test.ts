@@ -151,3 +151,42 @@ describe("structure interpreter — CYCLES are rejected; acyclic CHAINS are allo
     expect(res.flags.some((f) => f.severity === "reject")).toBe(false);
   });
 });
+
+describe("structure interpreter - module 4 mechanism-correlation disclosure (observable, value-untouched)", () => {
+  it("mechanismSharedWithLead=true on an INDEPENDENT indication -> correlation disclosure flag", () => {
+    const res = validateIndicationStructure(
+      { relationships: [{ id: "b", relationship: "independent", ref: null, rationale: "no stated gate", mechanismSharedWithLead: true }] },
+      IDS,
+    );
+    expect(rel(res, "b")!.indicationRelationship).toBe("independent");
+    expect(hasFlag(res, "structure-mechanism-correlation")).toBe(true);
+    expect(res.flags.find((f) => f.code === "structure-mechanism-correlation")!.message).toMatch(/UNCORRELATED/);
+  });
+
+  it("mechanismSharedWithLead=true on a GATED (conditional-on) indication -> NO flag (the gate couples them)", () => {
+    const res = validateIndicationStructure(
+      { relationships: [{ id: "b", relationship: "conditional-on", ref: "lead", rationale: "program states go-decision gated on lead readout", mechanismSharedWithLead: true }] },
+      IDS,
+    );
+    expect(rel(res, "b")!.indicationRelationship).toBe("conditional-on:lead");
+    expect(hasFlag(res, "structure-mechanism-correlation")).toBe(false);
+  });
+
+  it("a DEMOTED same-mechanism call (dangling ref -> independent) still gets the disclosure", () => {
+    const res = validateIndicationStructure(
+      { relationships: [{ id: "b", relationship: "conditional-on", ref: "ghost", rationale: "gated on ghost", mechanismSharedWithLead: true }] },
+      IDS,
+    );
+    expect(rel(res, "b")!.indicationRelationship).toBe("independent");
+    expect(hasFlag(res, "structure-mechanism-correlation")).toBe(true);
+  });
+
+  it("whitelist: non-boolean mechanismSharedWithLead values are ignored; result shape unchanged", () => {
+    const res = validateIndicationStructure(
+      { relationships: [{ id: "b", relationship: "independent", ref: null, rationale: "disjoint", mechanismSharedWithLead: "yes" }] },
+      IDS,
+    );
+    expect(hasFlag(res, "structure-mechanism-correlation")).toBe(false);
+    res.relationships.forEach((r) => expect(Object.keys(r).sort()).toEqual(["id", "indicationRelationship", "rationale"]));
+  });
+});
