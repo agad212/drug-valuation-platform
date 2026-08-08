@@ -165,8 +165,18 @@ calibration historical outcome/trial-cost data; Evaluate Omnium access.
   checker gate); prompt RULE 14; comparator σ² now DERIVES from an elicited range and supersedes raw
   emissions; checker = one batched Sonnet call auditing rationales (arithmetic/anchoring/base-rate
   neglect/availability/motivated optimism), findings ride the stage riskFlags rail, fail-open.
-  REMAINING MODULES (design below): LOE pProtective interview (module 2); revenue WAC/share/count +
-  Pearson-Tukey scenario weights (module 3); dependency statements (module 4). Original placement:
+  **MODULE 3 SHIPPED (4440556 + ab428e7): revenue interview + checker.** Extremes-first p05/p95
+  bear/bull (the old ±40-80% template deleted — it mandated the anchoring failure); structured
+  `eligiblePatients` makes TAM arithmetic verifiable; deterministic `coherenceFlags` (TAM vs
+  patients×price, peak vs TAM×pen, ordering, narrow-spread rail); batched checker call
+  (anchoring/optimism/recency/base-rate-neglect/consistency) gated + fail-open with health marker;
+  all rendered in the revenue panel; applying an estimate persists bearPeakM/bullPeakM and the
+  scenario branches initialize from the TRUE elicited p05/p95 ratios. ALSO shipped same day
+  (dcbb411 + cc0eb16): registry-n pin (CT.gov enrollment is a FACT), row-vs-deep-dive >2×
+  divergence warning + TAM implied-patients line, IPF comparator pinned (event-free responder null
+  0.68, ASCEND-cited — kills the 0.15→0.45→0.16 null swings; library pin beats elicited range).
+  REMAINING MODULES: LOE pProtective interview (module 2); dependency statements (module 4);
+  checker external-facts grounding (the "ZEPHYRUS-2 positive" gap). Original placement:
   (1) **Interview protocol** replaces one-shot emissions — extremes first, then bounds, then center,
   then a consistency cross-check via a second framing; ONE batched call per module (API frugality).
   Dev-plan module first (replicationRisk, expectedResponseRate, comparatorSigma2, nullRR), then LOE
