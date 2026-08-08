@@ -147,9 +147,15 @@ describe("computeDevPlan — checker findings ride the stage riskFlags rail", ()
 import { revenueCoherenceFlags, rowDivergenceRatio } from "../elicitation";
 
 describe("revenueCoherenceFlags (module 3 rails, moved to lib per 8/8 review)", () => {
+  // "Fully coherent" now includes the 3c structures: an epi funnel that multiplies out to the
+  // stated count (100k × 50% × 40% × 100% = 20,000) and a non-crowded at-launch competitor set.
   const coherent = {
     peakSalesM: 600, bearM: 200, bullM: 1500,
-    marketContext: { tamM: 3000, penetrationPct: 20, pricingPerYear: 150000, eligiblePatients: 20000 },
+    competitorsAtLaunch: [{ name: "IncumbentX", status: "approved-incumbent" }],
+    marketContext: {
+      tamM: 3000, penetrationPct: 20, pricingPerYear: 150000, eligiblePatients: 20000,
+      epi: { prevalence: 100000, diagnosedPct: 50, treatedPct: 40, accessiblePct: 100, basis: "test funnel" },
+    },
   };
 
   it("a fully coherent emission produces zero flags", () => {
@@ -192,5 +198,53 @@ describe("revenueCoherenceFlags (module 3 rails, moved to lib per 8/8 review)", 
     expect(rowDivergenceRatio(800, 650)).toBeNull();
     expect(rowDivergenceRatio(0, 650)).toBeNull();          // no row peak -> no verdict
     expect(rowDivergenceRatio(NaN, 650)).toBeNull();
+  });
+});
+
+describe("revenueCoherenceFlags - module 3c rails (epi funnel, library anchor, at-launch field)", () => {
+  const base = {
+    peakSalesM: 600, bearM: 200, bullM: 1500,
+    competitorsAtLaunch: [{ name: "IncumbentX", status: "approved-incumbent" }],
+    marketContext: {
+      tamM: 3000, penetrationPct: 20, pricingPerYear: 150000, eligiblePatients: 20000,
+      epi: { prevalence: 100000, diagnosedPct: 50, treatedPct: 40, accessiblePct: 100, basis: "test" },
+    },
+  };
+  const IPF_PIN = { usDiagnosedLow: 80000, usDiagnosedHigh: 140000, treatedPctLow: 25, treatedPctHigh: 45, source: "cited bands" };
+
+  it("funnel that does not multiply to the stated count -> incoherence flag", () => {
+    const f = revenueCoherenceFlags({ ...base, marketContext: { ...base.marketContext, epi: { ...base.marketContext.epi, prevalence: 300000 } } });
+    expect(f.some((x) => x.includes("epi funnel incoherent"))).toBe(true);
+  });
+
+  it("count asserted without a funnel -> bare-assertion flag", () => {
+    const f = revenueCoherenceFlags({ ...base, marketContext: { ...base.marketContext, epi: null } });
+    expect(f.some((x) => x.includes("epi funnel not emitted"))).toBe(true);
+  });
+
+  it("library anchor: count below the US-treated floor or above the global cap -> flag; inside -> silent", () => {
+    const below = revenueCoherenceFlags({ ...base, marketContext: { ...base.marketContext, eligiblePatients: 10000, epi: { prevalence: 50000, diagnosedPct: 50, treatedPct: 40, accessiblePct: 100, basis: "t" } } }, IPF_PIN, 4);
+    expect(below.some((x) => x.includes("LIBRARY EPI ANCHOR"))).toBe(true);
+    const above = revenueCoherenceFlags({ ...base, marketContext: { ...base.marketContext, eligiblePatients: 400000, epi: { prevalence: 2000000, diagnosedPct: 50, treatedPct: 40, accessiblePct: 100, basis: "t" } } }, IPF_PIN, 4);
+    expect(above.some((x) => x.includes("LIBRARY EPI ANCHOR"))).toBe(true);
+    const inside = revenueCoherenceFlags({ ...base, marketContext: { ...base.marketContext, eligiblePatients: 90000, epi: { prevalence: 450000, diagnosedPct: 50, treatedPct: 40, accessiblePct: 100, basis: "t" } } }, IPF_PIN, 4);
+    expect(inside.some((x) => x.includes("LIBRARY EPI ANCHOR"))).toBe(false);
+  });
+
+  it("penetration undefended (no at-launch set) -> flag", () => {
+    const f = revenueCoherenceFlags({ ...base, competitorsAtLaunch: [] });
+    expect(f.some((x) => x.includes("at-launch competitor set not emitted"))).toBe(true);
+  });
+
+  it("high share against a crowded at-launch field -> flag; modest share -> silent", () => {
+    const crowded = [
+      { name: "A", status: "approved-incumbent" },
+      { name: "B", status: "approved-incumbent" },
+      { name: "C", status: "likely-approved-by-launch" },
+    ];
+    const hot = revenueCoherenceFlags({ ...base, competitorsAtLaunch: crowded, marketContext: { ...base.marketContext, penetrationPct: 30 } });
+    expect(hot.some((x) => x.includes("expected non-generic competitors at launch"))).toBe(true);
+    const ok = revenueCoherenceFlags({ ...base, competitorsAtLaunch: crowded });
+    expect(ok.some((x) => x.includes("expected non-generic competitors"))).toBe(false);
   });
 });

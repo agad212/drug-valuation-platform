@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { callClaudeWithSearch } from "../../lib/claudeSearch";
 import { revenueCoherenceFlags } from "../../lib/elicitation";
 import { runElicitationChecker } from "../../lib/elicitation-checker";
+import { pinEpi, EPI_GLOBAL_TO_US_MAX } from "../../lib/indication-benchmarks";
 
 // Module 3 coherence rails live in lib/elicitation.ts (revenueCoherenceFlags) — named, tested
 // tolerances shared with the client instead of magic literals duplicated per surface.
@@ -63,6 +64,32 @@ penetration, and motivated optimism — write reasoning that survives that audit
   FIX THE NUMBERS, not the prose.
 - Confidence = "high" if ≥2 named analyst estimates found; "medium" if 1 estimate or clear market-size data; "low" if pure model
 
+## EPI FUNNEL — BUILD the patient count, never assert it (verified deterministically)
+marketContext.epi is REQUIRED whenever eligiblePatients is given:
+  prevalence (worldwide patients with the disease) × diagnosedPct × treatedPct (on/eligible for drug
+  therapy under the expected label) × accessiblePct (in markets where the drug will actually be sold
+  and reimbursed) ≈ eligiblePatients.
+Each step needs a source in epi.basis. Search for PATIENT-denominated epidemiology (prevalence
+studies, registries, treated-population analyses), not revenue-denominated market reports — do not
+back-solve patients from a "$X billion market" figure. A funnel that doesn't multiply out to your
+stated count is flagged to the user. When LIBRARY EPI FACTS are provided below, reconcile with those
+cited bands or state explicitly why you deviate.
+
+## AT-LAUNCH COMPETITIVE SET — share is defended against the field AT LAUNCH, not today
+competitorsAtLaunch is REQUIRED whenever penetrationPct is given: the named competitors you expect
+ON THE MARKET IN THE LAUNCH YEAR stated for the indication. Statuses: "approved-incumbent" (on the
+market today and still relevant at launch), "likely-approved-by-launch" (positive Phase 3 / filed —
+include these; ignoring a drug with positive pivotal data is the classic blindspot),
+"generic" (loss of exclusivity by launch), "uncertain" (Phase 3 outcome unknown). Your
+penetrationPct rationale must name why this drug wins that share against THAT set.
+
+## CONDITIONAL ON APPROVAL — the #1 double-count to avoid
+ALL revenue numbers (peakSalesM, bearM, bullM, penetrationPct) are CONDITIONAL ON THE DRUG BEING
+APPROVED. The valuation engine multiplies by P(approval) separately. NEVER discount penetration or
+peak because the asset is early-phase, unproven, or "carries clinical and regulatory risk" — that
+double-counts risk the engine already prices. Legitimate discounts: competition at launch, label
+breadth, access/reimbursement, pricing pressure. A reviewer specifically audits for this violation.
+
 ## RULES
 - Express ALL monetary values in USD millions (M)
 - tamM = drug-specific addressable market in $M (eligible patients × annual price). MUST satisfy: tamM × penetrationPct / 100 ≈ peakSalesM. Do NOT use total disease category market.
@@ -75,7 +102,8 @@ async function analyzeRevenueWithClaude(
   drug: string,
   phase: string,
   sponsor: string | undefined,
-  indications: string[]
+  indications: string[],
+  launchYears: (number | null)[] = []
 ): Promise<any> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY not set");
@@ -90,18 +118,27 @@ async function analyzeRevenueWithClaude(
       "confidence": "high" | "medium" | "low",
       "reasoning": string,
       "analystEstimates": [{ "source": string, "url": string|null, "estimateM": number, "year": number|null, "quote": string }],
-      "marketContext": { "tamM": number|null, "penetrationPct": number|null, "eligiblePatients": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null, "competitive": string|null },
+      "marketContext": { "tamM": number|null, "penetrationPct": number|null, "eligiblePatients": number|null, "patientPopDesc": string|null, "pricingPerYear": number|null, "competitive": string|null, "epi": { "prevalence": number|null, "diagnosedPct": number|null, "treatedPct": number|null, "accessiblePct": number|null, "basis": string|null } },
+      "competitorsAtLaunch": [{ "name": string, "status": "approved-incumbent" | "likely-approved-by-launch" | "generic" | "uncertain", "note": string|null }],
       "comps": [{ "drug": string, "indication": string, "peakSalesM": number, "rationale": string }],
       "sources": [{ "label": string, "url": string|null }]
     }
   ]
 }`;
 
+  // Per-indication lines carry the expected launch year (the competitor set is judged AT LAUNCH,
+  // not today) and any LIBRARY EPI FACTS (cited bands the funnel must reconcile with).
+  const indLines = indications.map((ind, i) => {
+    const ly = launchYears[i];
+    const pin = pinEpi(ind);
+    return `- ${ind}${ly ? ` (assume launch ~${ly} — judge competitorsAtLaunch against THAT year)` : ""}${pin ? `\n  LIBRARY EPI FACTS (cited — reconcile your funnel with these bands or state why you deviate): ${pin.source}` : ""}`;
+  });
   const userContent = `Drug: ${drug}
 Development Phase: ${phase}${sponsor ? `\nSponsor: ${sponsor}` : ""}
-Indications to model (${indications.length}): ${indications.join(" | ")}
+Indications to model (${indications.length}):
+${indLines.join("\n")}
 
-Search the web for analyst estimates, epidemiology, pricing, and comparable drugs for each indication listed above. Then return JSON exactly matching this schema with ${indications.length} entries in the same order:
+Search the web for analyst estimates, PATIENT-denominated epidemiology, pricing, comparable drugs, and the launch-year competitive pipeline for each indication listed above. Then return JSON exactly matching this schema with ${indications.length} entries in the same order:
 ${schema}`;
 
   // Retry up to 5 times with aggressive backoff on 429 rate limits.
@@ -146,9 +183,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!drug || !Array.isArray(indications) || indications.length === 0) {
     return res.status(400).json({ error: "drug and indications[] required" });
   }
+  // Expected launch year per indication (aligned to indications[]) — the at-launch competitor set
+  // is judged against this year, not against today's market.
+  const launchYears: (number | null)[] = Array.isArray(req.body.launchYears)
+    ? (req.body.launchYears as unknown[]).map((y) => (typeof y === "number" && Number.isFinite(y) ? y : null))
+    : [];
 
   try {
-    const analysis = await analyzeRevenueWithClaude(drug, phase, sponsor, indications);
+    const analysis = await analyzeRevenueWithClaude(drug, phase, sponsor, indications, launchYears);
 
     // Realign by index, fill gaps if Claude returns wrong count
     const rawInds: any[] = analysis.indications || [];
@@ -167,24 +209,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         analystEstimates: [], marketContext: {}, comps: [], sources: [],
       };
       const mc = found.marketContext || {};
+      // Module 3c whitelist: competitor entries (name/status/note only, capped) + numeric epi funnel.
+      const VALID_STATUS = new Set(["approved-incumbent", "likely-approved-by-launch", "generic", "uncertain"]);
+      const competitorsAtLaunch = Array.isArray(found.competitorsAtLaunch)
+        ? found.competitorsAtLaunch.slice(0, 8).map((c: any) => ({
+            name: typeof c?.name === "string" ? c.name.trim().slice(0, 80) : "",
+            status: typeof c?.status === "string" && VALID_STATUS.has(c.status.trim()) ? c.status.trim() : "uncertain",
+            ...(typeof c?.note === "string" && c.note.trim() ? { note: c.note.trim().slice(0, 160) } : {}),
+          })).filter((c: any) => c.name)
+        : undefined;
+      const epiRaw = mc.epi;
+      const epi = epiRaw && typeof epiRaw === "object"
+        ? {
+            prevalence: fin(epiRaw.prevalence) ?? null,
+            diagnosedPct: fin(epiRaw.diagnosedPct) ?? null,
+            treatedPct: fin(epiRaw.treatedPct) ?? null,
+            accessiblePct: fin(epiRaw.accessiblePct) ?? null,
+            basis: typeof epiRaw.basis === "string" && epiRaw.basis.trim() ? epiRaw.basis.trim().slice(0, 500) : null,
+          }
+        : null;
       return {
         ...found,
         peakSalesM: fin(found.peakSalesM) ?? 0,
         bullM: fin(found.bullM) ?? 0,
         bearM: fin(found.bearM) ?? 0,
+        ...(competitorsAtLaunch && competitorsAtLaunch.length ? { competitorsAtLaunch } : {}),
         marketContext: {
           ...mc,
           tamM: fin(mc.tamM) ?? null,
           penetrationPct: fin(mc.penetrationPct) ?? null,
           pricingPerYear: fin(mc.pricingPerYear) ?? null,
           eligiblePatients: fin(mc.eligiblePatients) ?? null,
+          epi,
         },
       };
     });
 
-    // Module 3: deterministic coherence checks on each indication's elicited arithmetic
+    // Module 3/3c: deterministic coherence checks on each indication's elicited arithmetic,
+    // anchored by the library epi pin where one exists (facts before opinions).
     for (const a of aligned) {
-      const flags = revenueCoherenceFlags(a);
+      const flags = revenueCoherenceFlags(a, pinEpi(a.indication ?? ""), EPI_GLOBAL_TO_US_MAX);
       if (flags.length) a.coherenceFlags = flags;
     }
 
@@ -192,15 +256,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // (never proposing numbers). Transport, timeout, robust JSON parse, findings gate, and the
     // health markers (clean / gate-failure / fail-open / deadline-skip) live in
     // lib/elicitation-checker — shared with the dev-plan checker so the two cannot drift.
-    const digest = aligned.map((a: any) => {
+    const digest = aligned.map((a: any, i: number) => {
       const mc = a.marketContext || {};
-      return `"${a.indication}": peak $${a.peakSalesM}M (p05 $${a.bearM}M / p95 $${a.bullM}M, confidence ${a.confidence}); TAM $${mc.tamM ?? "?"}M = ${mc.eligiblePatients?.toLocaleString?.("en-US") ?? "?"} patients × $${mc.pricingPerYear ?? "?"}/yr; penetration ${mc.penetrationPct ?? "?"}%; comps: ${(a.comps || []).map((c: any) => `${c.drug} $${c.peakSalesM}M`).join(", ") || "none"}; reasoning: ${a.reasoning}`;
+      const epi = mc.epi;
+      const funnel = epi && epi.prevalence != null
+        ? `${epi.prevalence.toLocaleString?.("en-US") ?? epi.prevalence} prevalent × ${epi.diagnosedPct ?? "?"}% dx × ${epi.treatedPct ?? "?"}% treated${epi.accessiblePct != null ? ` × ${epi.accessiblePct}% accessible` : ""} (basis: ${epi.basis ?? "none"})`
+        : "NOT EMITTED";
+      const atLaunch = (a.competitorsAtLaunch || []).map((c: any) => `${c.name} [${c.status}]`).join(", ") || "NOT EMITTED";
+      return `"${a.indication}": peak $${a.peakSalesM}M (p05 $${a.bearM}M / p95 $${a.bullM}M, confidence ${a.confidence}); TAM $${mc.tamM ?? "?"}M = ${mc.eligiblePatients?.toLocaleString?.("en-US") ?? "?"} patients × $${mc.pricingPerYear ?? "?"}/yr; penetration ${mc.penetrationPct ?? "?"}%; epi funnel: ${funnel}; at launch (~${launchYears[i] ?? "?"}): ${atLaunch}; comps: ${(a.comps || []).map((c: any) => `${c.drug} $${c.peakSalesM}M`).join(", ") || "none"}; reasoning: ${a.reasoning}`;
     }).join("\n");
     const elicitationReview = await runElicitationChecker({
       apiKey: process.env.ANTHROPIC_API_KEY,
       handlerStartMs: __t0,
       subjectLabel: "the revenue rationales",
-      allowedQuantities: ["peakSales", "bearBull", "tam", "penetration", "wac", "eligibleCount", "comps", "general"],
+      allowedQuantities: ["peakSales", "bearBull", "tam", "penetration", "wac", "eligibleCount", "epi", "competition", "conditionality", "comps", "general"],
       prompt: `You are the FACILITATOR auditing a sell-side analyst's revenue elicitations for ${drug} (${phase}). Audit each RATIONALE — never propose a replacement number; any number you mention must be copied from the input.
 
 ${digest}
@@ -211,9 +280,12 @@ Report ONLY genuine issues (max 5):
 3. Availability/recency: rationale dominated by the newest headline (an approval, one readout) rather than the full competitive picture.
 4. Base-rate neglect: penetration or price out of line with what comparable launches ACTUALLY achieved (cite the input's own comps).
 5. Internal consistency: reasoning that contradicts the numbers, comps that contradict the price/share claims, bear/bull that ignore named risks.
+6. CONDITIONALITY VIOLATION (double-counting): penetration or peak discounted for the drug's OWN clinical/regulatory risk ("still Phase 2", "unproven asset") — revenue here is conditional on approval; only competitive/access/pricing discounts are legitimate.
+7. At-launch blindness: share defended against TODAY'S market while the stated at-launch set (or the public record) includes competitors likely approved by launch; or an at-launch set that omits a drug with positive pivotal data.
+8. Epi funnel honesty: funnel steps that contradict the cited LIBRARY EPI FACTS or the rationale's own prevalence claims; a count back-solved from a revenue-denominated market report.
 
 Respond STRICT JSON only:
-{"findings":[{"quantity":"peakSales|bearBull|tam|penetration|wac|eligibleCount|comps|general","severity":"high|medium|info","message":"one or two sentences, name the indication"}]}
+{"findings":[{"quantity":"peakSales|bearBull|tam|penetration|wac|eligibleCount|epi|competition|conditionality|comps|general","severity":"high|medium|info","message":"one or two sentences, name the indication"}]}
 Empty findings array if everything is defensible.`,
     });
 

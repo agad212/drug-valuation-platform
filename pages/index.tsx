@@ -1447,10 +1447,16 @@ export default function HomePage() {
     setRevenueAnalysis(null);
     setRevenueTab(0);
     try {
+      // Expected launch year per indication — the at-launch competitor set is judged against this
+      // year, not today's market (module 3c).
+      const launchYears = (inds as string[]).map((name) => {
+        const row = (v.indications || []).find((i) => i.name && i.name.trim().toLowerCase() === name.trim().toLowerCase());
+        return row?.launchYear ?? v.launchYear ?? null;
+      });
       const res = await fetch("/api/revenue-assumptions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ drug, phase: v.phase || "Phase 2", indications: inds, sponsor: v.sponsor }),
+        body: JSON.stringify({ drug, phase: v.phase || "Phase 2", indications: inds, sponsor: v.sponsor, launchYears }),
       });
       if (!res.ok) throw new Error("Revenue analysis failed");
       const data: RevenueAnalysisResult = await res.json();
@@ -3123,6 +3129,27 @@ export default function HomePage() {
                           {statedEligible != null && (
                             <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
                               Eligible patients (stated by the analysis): {statedEligible.toLocaleString("en-US")}{typeof wac === "number" && wac > 0 ? ` × ${fmtPrice(wac)}/yr ≈ ${fmtMoney(statedEligible * wac)} market` : ""} — the coherence checks below audit this against the TAM.
+                            </div>
+                          )}
+                          {/* Module 3c: the stated epi funnel, multiplied out (the count is BUILT, not asserted) */}
+                          {(() => {
+                            const epi = active.marketContext?.epi;
+                            const okNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x > 0;
+                            if (!epi || !okNum(epi.prevalence) || !okNum(epi.diagnosedPct) || !okNum(epi.treatedPct)) return null;
+                            const acc = okNum(epi.accessiblePct) ? epi.accessiblePct : null;
+                            const product = Math.round(epi.prevalence * (epi.diagnosedPct / 100) * (epi.treatedPct / 100) * ((acc ?? 100) / 100));
+                            return (
+                              <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
+                                Epi funnel (stated): {epi.prevalence.toLocaleString("en-US")} prevalent → {epi.diagnosedPct}% diagnosed → {epi.treatedPct}% treated{acc != null ? ` → ${acc}% accessible` : ""} ≈ {product.toLocaleString("en-US")} patients{epi.basis ? ` · basis: ${epi.basis}` : ""}
+                              </div>
+                            );
+                          })()}
+                          {/* Module 3c: the field the penetration % is defended against — at LAUNCH, not today */}
+                          {(active.competitorsAtLaunch?.length ?? 0) > 0 && (
+                            <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 14 }}>
+                              At launch: {active.competitorsAtLaunch!.map((c, i) => (
+                                <span key={i}>{i > 0 ? " · " : ""}{c.name} <span style={{ color: c.status === "likely-approved-by-launch" ? "#f59e0b" : "var(--text-muted)" }}>({c.status})</span></span>
+                              ))}
                             </div>
                           )}
                           {impliedEligible != null && (

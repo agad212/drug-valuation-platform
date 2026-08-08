@@ -49,6 +49,26 @@ export type RevenueAnalystEstimate = {
   quote: string;
 };
 
+// Module 3c: the structured epidemiology funnel — the patient count is BUILT, not asserted.
+// prevalence × diagnosedPct × treatedPct × accessiblePct ≈ eligiblePatients, each step sourced;
+// the identity is checked deterministically (the 8/8 v2 run's "90k pool vs 3M prevalence" gap was
+// uncheckable because the count was a single opaque number).
+export type EpiFunnel = {
+  prevalence?: number | null;     // worldwide patients with the disease
+  diagnosedPct?: number | null;   // % of prevalent who are diagnosed
+  treatedPct?: number | null;     // % of diagnosed on/eligible for drug therapy per expected label
+  accessiblePct?: number | null;  // % of treated in markets where the drug will be sold/reimbursed
+  basis?: string | null;          // sources for the steps
+};
+
+// Module 3c: a named competitor expected ON THE MARKET IN THE LAUNCH YEAR (not today) — the
+// penetration claim is defended against this set.
+export type CompetitorAtLaunch = {
+  name: string;
+  status: "approved-incumbent" | "likely-approved-by-launch" | "generic" | "uncertain";
+  note?: string;
+};
+
 export type RevenueMarketContext = {
   tamM?: number;
   penetrationPct?: number;
@@ -59,6 +79,8 @@ export type RevenueMarketContext = {
   // Makes the TAM arithmetic verifiable: tamM ≈ eligiblePatients × pricingPerYear. The 8/8 live
   // run's $3B-TAM-vs-$12B-patient-math contradiction was only catchable with this field.
   eligiblePatients?: number;
+  // Module 3c: the funnel the count must reconcile with.
+  epi?: EpiFunnel;
 };
 
 export type RevenueComp = {
@@ -79,8 +101,11 @@ export type IndicationRevenueAnalysis = {
   marketContext: RevenueMarketContext;
   comps: RevenueComp[];
   sources: Source[];
+  // Module 3c: the field expected at launch — penetration is argued against THIS, not today's market.
+  competitorsAtLaunch?: CompetitorAtLaunch[];
   // Module 3: deterministic coherence findings (TAM vs patients×price; peak vs TAM×penetration;
-  // bear<base<bull ordering; suspiciously narrow p05–p95 spread). Display-only, engine-untouched.
+  // bear<base<bull ordering; suspiciously narrow p05–p95 spread; epi-funnel and competitor rails).
+  // Display-only, engine-untouched.
   coherenceFlags?: string[];
 };
 

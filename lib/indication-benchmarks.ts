@@ -118,6 +118,37 @@ export function pinComparator(indication: string, endpointIsRate: boolean, endpo
   return null;
 }
 
+// ── Module 3c: epidemiology pin — CITED BANDS for the eligible-patient funnel ────────────────────
+// The revenue module's patient count was a single opaque number the AI asserted (8/8 v2 run: a 90k
+// "global treated pool" next to a 3M prevalence claim, unsupported either way). For indications with
+// well-characterized epidemiology, the library supplies cited BANDS (never points): deterministic
+// code checks the stated count against the plausibility window; the checker gets the anchor to audit
+// reconciliation. Facts before opinions — same doctrine as the ASCEND null and the registry-n pin.
+export type EpiPin = {
+  usDiagnosedLow: number;    // diagnosed patients, US
+  usDiagnosedHigh: number;
+  treatedPctLow: number;     // % of diagnosed on/eligible for drug therapy (real-world, not label)
+  treatedPctHigh: number;
+  source: string;
+};
+
+// Hand-set provisional rail: a GLOBAL accessible treated pool larger than this multiple of the US
+// treated band is implausible for a specialty drug (US is typically ~35–45% of accessible value).
+export const EPI_GLOBAL_TO_US_MAX = 4;
+
+export function pinEpi(indication: string): EpiPin | null {
+  if (isIPF(indication)) {
+    return {
+      usDiagnosedLow: 80_000,
+      usDiagnosedHigh: 140_000,
+      treatedPctLow: 25,
+      treatedPctHigh: 45,
+      source: "US IPF diagnosed prevalence ~80k–140k (claims-based estimates 42.7–63.0 per 100k adults, Raghu et al. AJRCCM claims analyses; \"~100,000 Americans\" widely cited); real-world antifibrotic uptake ~25–45% of diagnosed (US claims/registry analyses report roughly one-third treated). BANDS, not points; the ≤4× global-to-US multiple is a hand-set provisional rail.",
+    };
+  }
+  return null;
+}
+
 /**
  * Phase-3 registrable primary endpoint for MRD+ adjuvant CRC.
  *

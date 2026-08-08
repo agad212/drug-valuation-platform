@@ -55,10 +55,12 @@ export const pos = (x: unknown): x is number => typeof x === "number" && Number.
 /** Finite non-negative number guard — a legitimate elicited p05 of exactly 0 must NOT be dropped. */
 export const nonNeg = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x >= 0;
 
-// All three are HAND-SET provisional rails (labeled in the messages) pending calibration.
+// All HAND-SET provisional rails (labeled in the messages) pending calibration.
 export const TAM_RATIO_TOL = 0.33;          // TAM-vs-patients×price and peak-vs-TAM×pen: ratio outside [1-tol, 1+tol]
 export const NARROW_SPREAD_FLOOR = 0.4;     // (p95−p05)/base below this → overconfidence rail
 export const ROW_DIVERGENCE_RATIO = 2;      // row peak vs deep-dive peak ≥2× or ≤0.5× → two AI passes disagree
+export const CROWDED_FIELD_MIN = 3;         // ≥3 expected non-generic competitors at launch = crowded
+export const CROWDED_SHARE_MAX_PCT = 25;    // >25% share claimed against a crowded field → defend it
 
 const ratioIncoherent = (r: number) => r > 1 + TAM_RATIO_TOL || r < 1 - TAM_RATIO_TOL;
 
@@ -72,11 +74,51 @@ export function rowDivergenceRatio(rowPeakM: unknown, deepDivePeakM: unknown): n
 /** Deterministic coherence checks on one indication's elicited market arithmetic. §1.5: incoherence is NAMED, never silently fixed. */
 export function revenueCoherenceFlags(a: {
   peakSalesM?: number; bearM?: number; bullM?: number;
-  marketContext?: { tamM?: number | null; penetrationPct?: number | null; pricingPerYear?: number | null; eligiblePatients?: number | null };
-}): string[] {
+  competitorsAtLaunch?: { name: string; status: string; note?: string }[];
+  marketContext?: {
+    tamM?: number | null; penetrationPct?: number | null; pricingPerYear?: number | null; eligiblePatients?: number | null;
+    epi?: { prevalence?: number | null; diagnosedPct?: number | null; treatedPct?: number | null; accessiblePct?: number | null; basis?: string | null } | null;
+  };
+}, epiPin?: { usDiagnosedLow: number; usDiagnosedHigh: number; treatedPctLow: number; treatedPctHigh: number; source: string } | null, epiGlobalToUsMax = 4): string[] {
   const f: string[] = [];
   const mc = a.marketContext ?? {};
   const { tamM, penetrationPct, pricingPerYear, eligiblePatients } = mc;
+
+  // ── Module 3c: the epi FUNNEL must multiply out to the stated count (pure arithmetic) ──────────
+  const pct = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x > 0 && x <= 100;
+  const epi = mc.epi;
+  if (epi != null && pos(epi.prevalence) && pct(epi.diagnosedPct) && pct(epi.treatedPct)) {
+    const acc = pct(epi.accessiblePct) ? epi.accessiblePct : 100;
+    const funnelCount = epi.prevalence * (epi.diagnosedPct / 100) * (epi.treatedPct / 100) * (acc / 100);
+    if (pos(eligiblePatients)) {
+      const r = funnelCount / eligiblePatients;
+      if (r > 1 + TAM_RATIO_TOL || r < 1 - TAM_RATIO_TOL) {
+        f.push(`epi funnel incoherent: ${epi.prevalence.toLocaleString("en-US")} prevalent × ${epi.diagnosedPct}% diagnosed × ${epi.treatedPct}% treated${pct(epi.accessiblePct) ? ` × ${epi.accessiblePct}% accessible` : ""} ≈ ${Math.round(funnelCount).toLocaleString("en-US")}, but eligiblePatients says ${eligiblePatients.toLocaleString("en-US")} (${r.toFixed(1)}× apart) — the funnel and the count disagree (±${Math.round(TAM_RATIO_TOL * 100)}% provisional tolerance)`);
+      }
+    }
+  } else if (pos(eligiblePatients)) {
+    f.push("epi funnel not emitted — the eligible-patient count is a bare assertion (prevalence → % diagnosed → % treated → % accessible makes it checkable step by step)");
+  }
+  // Library anchor: the stated GLOBAL pool must sit inside the cited plausibility window
+  // [US-treated low, global-to-US-max × US-treated high]. Facts before opinions.
+  if (epiPin && pos(eligiblePatients)) {
+    const usTreatedLow = epiPin.usDiagnosedLow * (epiPin.treatedPctLow / 100);
+    const usTreatedHigh = epiPin.usDiagnosedHigh * (epiPin.treatedPctHigh / 100);
+    const windowHigh = usTreatedHigh * epiGlobalToUsMax;
+    if (eligiblePatients < usTreatedLow || eligiblePatients > windowHigh) {
+      f.push(`LIBRARY EPI ANCHOR: stated eligible pool ${eligiblePatients.toLocaleString("en-US")} is OUTSIDE the cited plausibility window ${Math.round(usTreatedLow).toLocaleString("en-US")}–${Math.round(windowHigh).toLocaleString("en-US")} (US treated ≈ ${Math.round(usTreatedLow).toLocaleString("en-US")}–${Math.round(usTreatedHigh).toLocaleString("en-US")} from cited bands; global ≤${epiGlobalToUsMax}× US, provisional rail) — reconcile with the cited epidemiology: ${epiPin.source}`);
+    }
+  }
+
+  // ── Module 3c: penetration must be defended against the AT-LAUNCH field ────────────────────────
+  const compSet = Array.isArray(a.competitorsAtLaunch) ? a.competitorsAtLaunch : [];
+  if (pos(tamM) && pct(penetrationPct) && compSet.length === 0) {
+    f.push("at-launch competitor set not emitted — the penetration % is undefended against the field expected in the launch year (today's market is the wrong benchmark; provisional rail)");
+  }
+  const nonGeneric = compSet.filter((c) => c.status === "approved-incumbent" || c.status === "likely-approved-by-launch").length;
+  if (pct(penetrationPct) && nonGeneric >= CROWDED_FIELD_MIN && penetrationPct > CROWDED_SHARE_MAX_PCT) {
+    f.push(`penetration ${penetrationPct}% claimed against ${nonGeneric} expected non-generic competitors at launch — a >${CROWDED_SHARE_MAX_PCT}% share in a crowded field needs a named differentiation argument (provisional rail)`);
+  }
   if (pos(eligiblePatients) && pos(pricingPerYear) && pos(tamM)) {
     const impliedTamM = (eligiblePatients * pricingPerYear) / 1e6;
     const r = impliedTamM / tamM;

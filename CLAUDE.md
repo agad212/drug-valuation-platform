@@ -200,8 +200,24 @@ calibration historical outcome/trial-cost data; Evaluate Omnium access.
   missed stated gates, motivated all-independent structure, mechanism honesty); findings fold into
   the EXISTING structure-flags rail (zero new UI, persisted by the autosave already; checker
   "high" renders with reject styling).
+  **MODULE 3c SHIPPED: epi funnel + at-launch competitor set + conditionality rule** (user question
+  8/8: "does either method model competition at launch / why can't it do simple epi?"). The patient
+  count is BUILT, never asserted: marketContext.epi (prevalence × diagnosedPct × treatedPct ×
+  accessiblePct, each sourced) must multiply to eligiblePatients (deterministic ±33% rail);
+  pinEpi() library bands (IPF: US diagnosed 80–140k, treated 25–45%, cited) give a plausibility
+  window [US-treated low, ≤4× US high] and are INJECTED into the prompt as LIBRARY EPI FACTS.
+  competitorsAtLaunch (statuses approved-incumbent / likely-approved-by-launch / generic /
+  uncertain, judged against the per-indication launch year sent from the client) — penetration is
+  defended against THAT set; crowded-field rail (≥3 non-generic + >25% share). CONDITIONAL ON
+  APPROVAL rule: peak/penetration must never discount the drug's own approval risk (the 8/8 v2 run
+  double-counted exactly this: "still-Phase 2b asset carrying substantial risk" inside the 6%
+  penetration rationale); checker criteria 6–8 audit conditionality, at-launch blindness, and
+  funnel honesty. NOTE: the comps-anchored ROW remains a crude historical anchor BY DESIGN — the
+  bottom-up deep-dive is the defended number; the divergence warning arbitrates.
   REMAINING ON THE AXIS:
-  checker external-facts grounding (the "ZEPHYRUS-2 positive" gap). Original placement:
+  checker external-facts grounding (the "ZEPHYRUS-2 positive" gap; includes the 8/8 v2
+  trial-identity finding — brief gated on the completed Phase 2a while WHISTLE-PF was absent from
+  the trial list; disclosure flag shipped in a1077e5, root fix pending). Original placement:
   (1) **Interview protocol** replaces one-shot emissions — extremes first, then bounds, then center,
   then a consistency cross-check via a second framing; ONE batched call per module (API frugality).
   Dev-plan module first (replicationRisk, expectedResponseRate, comparatorSigma2, nullRR), then LOE

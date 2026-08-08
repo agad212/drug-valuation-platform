@@ -59,7 +59,7 @@ describe("Part 3 — label-breadth difficulty multiplier", () => {
   });
 });
 
-import { ipfEndpointFamilyMatch } from "../indication-benchmarks";
+import { ipfEndpointFamilyMatch, pinEpi } from "../indication-benchmarks";
 import { inferTherapeuticArea } from "../financial-pins";
 
 describe("IPF comparator pin - endpoint-family gate (8/8 review)", () => {
@@ -94,5 +94,16 @@ describe("inferTherapeuticArea routes IPF to the orphan cost band (was general)"
   });
   it("oncology strings are untouched", () => {
     expect(inferTherapeuticArea("metastatic colorectal cancer")).toBe("oncology");
+  });
+});
+
+describe("pinEpi - cited epidemiology bands (module 3c)", () => {
+  it("IPF gets the cited US bands; unknown indications get null", () => {
+    const pin = pinEpi("Idiopathic Pulmonary Fibrosis (IPF)");
+    expect(pin).not.toBeNull();
+    expect(pin!.usDiagnosedLow).toBeLessThan(pin!.usDiagnosedHigh);
+    expect(pin!.treatedPctLow).toBeLessThan(pin!.treatedPctHigh);
+    expect(pin!.source).toMatch(/Raghu|claims/i);
+    expect(pinEpi("metastatic breast cancer")).toBeNull();
   });
 });
